@@ -1,0 +1,56 @@
+// Example 14: Sink Format and Batching
+//
+// Demonstrates output configuration:
+// - format: json | csv | raw — controls serialization
+// - batch: { size: N, timeout: Ts } — buffers outbound messages
+//   and flushes when either the count or timeout is reached
+//
+// Use case: high-throughput event processing that batches
+// output to reduce broker publish overhead, using JSON format
+// for structured downstream consumption.
+
+broker ingest
+    transport: mqtt
+    host: "localhost"
+    port: 1883
+end
+
+broker warehouse
+    transport: redis
+    host: "localhost"
+    port: 6379
+end
+
+const BATCH_THRESHOLD = 200
+
+pipeline event_batcher
+    source from ingest :: "events/raw"
+
+    |> deduplicate: msg.event_id within 60 s
+
+    |> filter: msg.event_type is not null
+
+    |> map: {
+        event = msg.event_type;
+        payload = msg.data ?? "empty";
+        ts = msg.timestamp
+    }
+
+    |> sink to warehouse :: "events.batched" format: json batch: { size: 100 timeout: 10 s }
+end
+
+// A second pipeline demonstrating CSV format without batching
+pipeline csv_exporter
+    source from ingest :: "metrics/raw"
+
+    |> filter: msg.value is not null
+
+    |> map: {
+        metric = msg.name;
+        value = msg.value;
+        unit = msg.unit ?? "unknown"
+    }
+
+    |> sink to warehouse :: "metrics.csv" format: csv
+end
+

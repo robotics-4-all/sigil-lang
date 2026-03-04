@@ -1,0 +1,48 @@
+/*
+ * Example 04 — Sliding Window
+ * =============================
+ * Overlapping windows that slide forward by a step interval.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - window: sliding(size, step = interval)
+ *   - stddev() — standard deviation aggregation
+ *   - Millisecond durations (ms)
+ *
+ * WHAT IT DOES:
+ *   Monitors machine vibration data. Uses a 10-second window that slides
+ *   every 2 seconds, producing an output every 2s with stats from the
+ *   last 10 seconds of data. This smooths out noise while detecting trends.
+ *
+ * VISUALIZATION:
+ *   Time:  0    2    4    6    8    10   12   14
+ *          |=========== window 1 ===========|
+ *               |=========== window 2 ===========|
+ *                    |=========== window 3 ===========|
+ *   Output:              ^         ^         ^
+ *                     (at t=10)  (at t=12)  (at t=14)
+ *
+ * NOTE: The step must be smaller than the window size.
+ *       step > size would create gaps (and is a validation error).
+ */
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline vibration_monitor
+    source from local :: "machines/+/vibration" qos: 2 format: json
+
+    // 10-second window, sliding every 2 seconds
+    |> window: sliding(10 s, step = 2 s)
+
+    |> aggregate: {
+        avg_rms    = avg(msg.rms)      // mean vibration level
+        peak_rms   = max(msg.rms)      // peak vibration
+        deviation  = stddev(msg.rms)   // variability (spikes vs steady)
+        samples    = count()           // data points in this window
+    }
+
+    |> sink to local :: "analytics/vibration" qos: 1
+end
+

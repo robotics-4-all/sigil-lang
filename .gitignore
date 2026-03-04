@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing / Linting
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Generated output
+generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary dot files (textX debug output)
+*.dot
+
+# Temporary utility scripts
+restore.py
+rewrite.py
+transform.py
+update_dsl.py
+update_tests_script.py
+update_tests.py
+update_tests2.py
+update_tests3.py

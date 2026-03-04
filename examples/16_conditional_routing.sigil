@@ -1,0 +1,38 @@
+// Example 16 — Conditional Routing
+//
+// Demonstrates fan-out routing based on message content.
+// Instead of a single sink, messages are routed to different
+// topics/brokers based on conditions.
+//
+// Data flow:
+//   sensors/all → [classify] → priority/high (if value > 90)
+//                             → priority/medium (if value > 50)
+//                             → priority/low (default)
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+broker alerts
+    transport: redis
+    host: "redis.local"
+    port: 6379
+end
+
+pipeline classify
+    @initially { publish { status: "router_online" } }
+
+    source from local :: "sensors/all"
+
+    |> filter: msg.value is not null
+
+    |> route
+        when msg.value > 90 => sink to alerts :: "priority.high"
+        when msg.value > 50 => sink to local :: "priority/medium"
+        default => sink to local :: "priority/low"
+    end
+
+    @finally { publish { status: "router_offline" } }
+end
+

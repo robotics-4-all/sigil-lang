@@ -1,0 +1,57 @@
+// Example 13: Lifecycle Hooks (@initially / @finally)
+//
+// Demonstrates pipeline lifecycle management:
+// - @initially publishes a message when the pipeline starts
+// - @finally publishes a message when the pipeline shuts down
+//
+// Use case: a temperature monitoring pipeline that announces
+// its presence on the network when starting and sends a
+// goodbye message on shutdown. Useful for health monitoring,
+// service discovery, and graceful shutdown signaling.
+
+broker edge
+    transport: mqtt
+    host: "localhost"
+    port: 1883
+end
+
+pipeline monitored_temps
+    // Published to sink topic when pipeline starts
+    @initially {
+        publish {
+            status: "online",
+            hostname: env("HOSTNAME", "unknown"),
+            version: "2.1.0",
+            started: true
+        }
+    }
+
+    source from edge :: "sensors/temperature"
+
+    |> filter: msg.value is not null
+
+    |> window: tumbling(30 s)
+
+    |> aggregate: {
+        avg_temp = avg(msg.value)
+        max_temp = max(msg.value)
+        n = count()
+    }
+
+    |> map: {
+        average = avg_temp;
+        peak = max_temp;
+        samples = n
+    }
+
+    |> sink to edge :: "analytics/temp_summary"
+
+    // Published to sink topic when pipeline stops
+    @finally {
+        publish {
+            status: "offline",
+            hostname: env("HOSTNAME", "unknown")
+        }
+    }
+end
+

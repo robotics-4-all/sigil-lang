@@ -1,0 +1,39 @@
+/*
+ * Example 02 — Filtering Messages
+ * =================================
+ * Drop messages that don't match a condition.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - filter    : boolean expression that gates messages
+ *   - msg.*     : field references into the message payload
+ *   - and / or  : logical operators in expressions
+ *   - qos       : MQTT quality-of-service level (0, 1, or 2)
+ *   - format    : payload format hint (json, csv, raw)
+ *
+ * WHAT IT DOES:
+ *   Receives temperature readings as JSON: {"sensor_id": "s1", "value": 22.5}
+ *   Only forwards messages where -40 < value < 85 (physical sensor range).
+ *   Out-of-range readings (sensor glitches, disconnects) are silently dropped.
+ *
+ * EXPRESSION SYNTAX:
+ *   msg.field       — access a top-level field
+ *   msg.nested.key  — access nested fields
+ *   Operators: ==, !=, >, <, >=, <=, and, or, not
+ *   Arithmetic: +, -, *, /, %
+ */
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline valid_readings
+    source from local :: "sensors/temperature" qos: 1 format: json
+
+    // Only pass messages where the value is within physical range.
+    // Messages that fail this test are silently dropped.
+    |> filter: msg.value > -40 and msg.value < 85
+
+    |> sink to local :: "validated/temperature" qos: 1
+end
+

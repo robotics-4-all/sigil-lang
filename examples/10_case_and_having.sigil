@@ -1,0 +1,77 @@
+/*
+ * Example 10 — Case Expressions and Having Stage
+ * =================================================
+ * Introduces `case { when => }` for conditional mapping and
+ * `having:` for post-aggregate filtering.
+ *
+ * NEW FEATURES:
+ *   case { when cond => val  else => fallback }
+ *       — SQL-style conditional expression (any nesting depth)
+ *   having: condition
+ *       — filter AFTER aggregation (like SQL HAVING)
+ *       — references aggregation names directly
+ *
+ * STAGE ORDER (with having):
+ *   source → filter → group_by → window → aggregate → having → map → sink
+ *
+ * SCENARIO:
+ *   A server monitoring pipeline that computes per-host error rates
+ *   over 5-minute windows. The `having` stage filters out hosts
+ *   with too few requests (unreliable stats). The `case` expression
+ *   classifies the severity of the error rate.
+ *
+ * INPUT:  {"host": "web-01", "status": 200, "latency_ms": 45}
+ *         {"host": "web-01", "status": 500, "latency_ms": 2300}
+ * OUTPUT: {"error_rate": 0.12, "severity": "warning",
+ *          "avg_latency": 340.5, "total_requests": 85, ...}
+ */
+
+const MIN_REQUESTS = 10
+const ERROR_CRITICAL = 0.5
+const ERROR_WARNING = 0.1
+
+broker monitoring
+    host: "monitor.example.com"
+    port: 1883
+end
+
+pipeline error_rate_monitor
+    source from monitoring :: "servers/+/access_log" qos: 1 format: json
+
+    // Only process actual HTTP responses (status >= 100)
+    |> filter: msg.status >= 100
+
+    |> group_by: msg.host
+
+    |> window: tumbling(5 m)
+
+    |> aggregate: {
+        total      = count()
+        avg_status = avg(msg.status)
+        max_status = max(msg.status)
+        avg_lat    = avg(msg.latency_ms)
+        err_count  = sum(msg.status)
+    }
+
+    // Having: only report hosts with enough data points
+    |> having: total >= MIN_REQUESTS
+
+    |> map: {
+        // Compute error rate (approximate: avg_status > 400 means errors)
+        let error_rate = (avg_status - 200) / 300;
+
+        // Case expression: classify severity
+        severity = case {
+            when error_rate > ERROR_CRITICAL => "critical"
+            when error_rate > ERROR_WARNING  => "warning"
+            when error_rate > 0              => "info"
+            else                             => "healthy"
+        };
+        rate = error_rate;
+        avg_latency = avg_lat;
+        total_requests = total
+    }
+
+    |> sink to monitoring :: "alerts/error_rates" qos: 1
+end
+

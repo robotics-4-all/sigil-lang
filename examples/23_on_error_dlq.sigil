@@ -1,0 +1,76 @@
+// ─── Example 23: Error Handling & Dead Letter Queue ─────────────────
+//
+// on_error routes failed messages to a Dead Letter Queue (DLQ)
+// instead of silently logging them. This enables:
+//   - Post-mortem debugging of processing failures
+//   - Automated retry systems consuming from the DLQ
+//   - Error rate monitoring via the DLQ topic
+//
+// Difficulty: Intermediate
+// Features:  on_error sink, on_error drop, DLQ routing
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+broker redis_broker
+    transport: redis
+    host: "localhost"
+    port: 6379
+end
+
+// ─── Basic DLQ routing ──────────────────────────────────────────────
+// If any stage throws an exception, the original message plus error
+// details are published to the DLQ topic as an envelope:
+//   {
+//     "_error": "division by zero",
+//     "_error_type": "ZeroDivisionError",
+//     "_pipeline": "sensor_pipeline",
+//     "_timestamp": 1709123456.789,
+//     "_original": { ... the original message ... }
+//   }
+pipeline sensor_pipeline
+    source from local :: "sensors/raw"
+    |> filter: msg.value > 0
+    |> window: tumbling(1 m)
+    |> aggregate: {
+        avg_value: float = avg(msg.value)
+        count = count()
+    }
+    |> map: {
+        average = avg_value;
+        samples = count
+    }
+    |> sink to local :: "sensors/processed"
+    on_error: sink to local :: "errors/sensors"
+end
+
+// ─── Cross-transport DLQ ────────────────────────────────────────────
+// DLQ can use a different broker/transport than the main pipeline.
+// Here: source from MQTT, DLQ to Redis for persistent error storage.
+pipeline payment_processor
+    source from local :: "payments/incoming"
+    |> filter: msg.amount > 0 and msg.currency != ""
+    |> sink to local :: "payments/validated"
+    on_error: sink to redis_broker :: "dlq:payments"
+end
+
+// ─── Explicit drop ──────────────────────────────────────────────────
+// on_error: drop silently discards failed messages (logs at DEBUG).
+// Use when you explicitly don't care about failures (e.g., best-effort
+// telemetry that can tolerate data loss).
+pipeline telemetry_best_effort
+    source from local :: "telemetry/raw"
+    |> filter: msg.signal_strength > -90
+    |> sink to local :: "telemetry/filtered"
+    on_error: drop
+end
+
+// ─── No on_error (default behavior) ────────────────────────────────
+// Without on_error, failures are logged at ERROR level but the message
+// is lost. This is the original behavior — shown here for comparison.
+pipeline legacy_pipeline
+    source from local :: "legacy/input"
+    |> sink to local :: "legacy/output"
+end

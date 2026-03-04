@@ -1,0 +1,45 @@
+// Example 17 — Stage Annotations & Explain
+//
+// Demonstrates compile-time @warn/@error annotations on stages.
+// These annotations are emitted during `sigil check` — they
+// have no runtime effect on generated code.
+//
+// Try: sigil explain examples/17_annotations_and_explain.sigil
+// Try: sigil check examples/17_annotations_and_explain.sigil
+
+const TEMP_LIMIT = 120
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline monitored
+    source from local :: "sensors/temperature"
+
+    // @warn annotations emit warnings during validation
+    |> @warn("large window may cause memory pressure") window: tumbling(1 h)
+
+    |> aggregate: {
+        avg_temp = avg(msg.value)
+        max_temp = max(msg.value)
+        n = count()
+    }
+
+    |> @warn("having with > 100 threshold may filter most windows") having: n > 100
+
+    |> map: {
+        let severity = case {
+            when max_temp > TEMP_LIMIT => "critical"
+            when max_temp > 80 => "warning"
+            else => "normal"
+        };
+        average = avg_temp;
+        peak = max_temp;
+        level = severity;
+        samples = n
+    }
+
+    |> sink to local :: "analytics/temperature"
+end
+

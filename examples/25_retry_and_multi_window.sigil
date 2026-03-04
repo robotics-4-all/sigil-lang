@@ -1,0 +1,85 @@
+/*
+ * Example 25 — Retry Policy and Multi-Window
+ * =========================================
+ * Demonstrates the Batch 3 features:
+ * 1. Pipeline-level retry policy for reliable publishing.
+ * 2. Named multi-window support for multi-timeframe aggregation.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - retry: configures publish retry behavior with exponential backoff.
+ *   - named windows: allows defining multiple windows in a single pipeline.
+ *   - over: specifies which window an aggregation function should use.
+ */
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+// Pipeline 1: sensor_reliable — Simple pipeline with custom retry policy
+// This pipeline ensures that messages published to the sink are retried
+// up to 5 times with an initial backoff of 500ms if the broker is temporarily
+// unavailable or rejects the message.
+pipeline sensor_reliable
+    source from local :: "sensors/raw"
+    |> filter: msg.value > 0
+    |> sink to local :: "sensors/validated"
+
+    // Retry policy: 5 attempts with 500ms base backoff
+    retry: 5 with backoff 500 ms
+end
+
+// Pipeline 2: multi_timeframe — Pipeline with 2 named windows
+// Demonstrates how to perform aggregations over different time horizons
+// simultaneously. Each window flushes independently.
+pipeline multi_timeframe
+    source from local :: "metrics/cpu"
+
+    // Define two named windows: one for short-term and one for long-term metrics
+    |> window short: tumbling(1 m)
+    |> window long: tumbling(5 m)
+
+    // Perform aggregations referencing specific windows using the 'over' keyword
+    |> aggregate: {
+        avg_1m = avg(msg.cpu_percent) over short
+        max_1m = max(msg.cpu_percent) over short
+        avg_5m = avg(msg.cpu_percent) over long
+        max_5m = max(msg.cpu_percent) over long
+    }
+
+    // Map the results to a structured output
+    |> map: {
+        short_avg = avg_1m;
+        short_max = max_1m;
+        long_avg = avg_5m;
+        long_max = max_5m
+    }
+
+    |> sink to local :: "metrics/aggregated"
+end
+
+// Pipeline 3: market_analysis — Combined retry and multi-window
+// A more complex example combining both features. It analyzes market ticks
+// over minute and hourly windows, with a retry policy for the final output.
+pipeline market_analysis
+    source from local :: "market/ticks"
+
+    // Define windows for different analysis granularities
+    |> window minute: tumbling(1 m)
+    |> window hourly: tumbling(1 h)
+
+    |> aggregate: {
+        avg_price_1m = avg(msg.price) over minute
+        vol_1m = sum(msg.volume) over minute
+        avg_price_1h = avg(msg.price) over hourly
+        vol_1h = sum(msg.volume) over hourly
+    }
+
+    // Filter out low-volume windows before sinking
+    |> having: vol_1m > 100 or vol_1h > 1000
+
+    |> sink to local :: "market/analysis"
+
+    // Reliable delivery for market analysis results
+    retry: 3 with backoff 100 ms
+end

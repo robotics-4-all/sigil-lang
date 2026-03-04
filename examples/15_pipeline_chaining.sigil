@@ -1,0 +1,51 @@
+// Example 15 — Pipeline Chaining
+//
+// Demonstrates DAG-style pipeline composition using `pipe:` source.
+// The "enrich" pipeline receives messages from "clean" pipeline
+// via in-memory handoff (no broker round-trip).
+//
+// Data flow: MQTT → clean → enrich → MQTT
+//
+//   sensors/raw → [clean] → [enrich] → analytics/enriched
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+// Stage 1: Clean raw sensor data
+pipeline clean
+    source from local :: "sensors/raw"
+
+    // Dedup by sensor + timestamp
+    |> deduplicate: msg.event_id within 10 s
+
+    // Drop invalid readings
+    |> filter: msg.value is not null and msg.value > -100 and msg.value < 200
+
+    |> sink to local :: "sensors/clean"
+end
+
+// Stage 2: Enrich clean data with aggregation
+// Source is the "clean" pipeline — receives messages directly
+pipeline enrich
+    source from pipe clean
+
+    |> window: tumbling(1 m)
+
+    |> aggregate: {
+        avg_temp = avg(msg.value)
+        max_temp = max(msg.value)
+        min_temp = min(msg.value)
+        n = count()
+    }
+
+    |> map: {
+        average = avg_temp;
+        range = max_temp - min_temp;
+        samples = n
+    }
+
+    |> sink to local :: "analytics/enriched"
+end
+
