@@ -1,0 +1,1048 @@
+{% if p.sink_format == "csv" %}
+import csv
+import io
+{% endif %}
+import json
+import math
+{% if p.has_env_ref %}
+import os
+{% endif %}
+import time
+import threading
+import logging
+import statistics
+import random
+from collections import defaultdict
+
+{% if not p.has_pipe_source %}
+from commlib.transports.{{ p.source_broker.transport }} import (
+    ConnectionParameters as SourceConnParams,
+    Subscriber,
+)
+{% endif %}
+{% if p.has_join %}
+from commlib.transports.{{ p.join.broker.transport }} import (
+    ConnectionParameters as JoinConnParams,
+    Subscriber as JoinSubscriber,
+)
+{% endif %}
+{% if not p.has_route %}
+from commlib.transports.{{ p.sink_broker.transport }} import (
+    ConnectionParameters as SinkConnParams,
+    Publisher,
+)
+{% else %}
+{% for arm in p.route_arms %}
+from commlib.transports.{{ arm.broker.transport }} import (
+    ConnectionParameters as Route{{ loop.index }}ConnParams,
+    Publisher as Route{{ loop.index }}Publisher,
+)
+{% endfor %}
+{% if p.route_default %}
+from commlib.transports.{{ p.route_default.broker.transport }} import (
+    ConnectionParameters as RouteDefaultConnParams,
+    Publisher as RouteDefaultPublisher,
+)
+{% endif %}
+{% endif %}
+{% if p.has_on_error and not p.on_error_drop %}
+from commlib.transports.{{ p.on_error_broker.transport }} import (
+    ConnectionParameters as DlqConnParams,
+    Publisher as DlqPublisher,
+)
+{% endif %}
+
+logger = logging.getLogger("sigil.pipeline.{{ p.name }}")
+
+_MAX_PUBLISH_RETRIES = {{ p.retry_max }}
+_PUBLISH_RETRY_BASE = {{ p.retry_backoff_seconds }}
+
+
+def _get_nested(d, *keys):
+    for k in keys:
+        if isinstance(d, dict):
+            d = d.get(k)
+        else:
+            return None
+    return d
+
+
+def _coalesce(value, default):
+    return value if value is not None else default
+
+
+class {{ p.class_name }}Pipeline:
+
+    def __init__(self):
+        self.name = "{{ p.name }}"
+        self._running = False
+        self._lock = threading.Lock()
+        self._downstream_listeners = []
+{% if p.has_dedup %}
+        self._dedup_seen = {}
+        self._dedup_ttl = {{ p.dedup_ttl_seconds }}
+{% endif %}
+{% if p.has_old_ref %}
+        self._prev_msg = {}
+{% endif %}
+{% if p.has_rate %}
+        self._rate_limit = {{ p.rate_limit }}
+        self._rate_period = {{ p.rate_period_seconds }}
+        self._rate_tokens = float({{ p.rate_limit }})
+        self._rate_last_refill = time.time()
+        self._rate_lock = threading.Lock()
+{% endif %}
+{% if p.has_accumulate %}
+        self._accum_state = {}
+{% endif %}
+{% if p.has_distinct %}
+        self._distinct_seen = {}
+        self._distinct_ttl = {{ p.distinct_ttl_seconds }}
+{% endif %}
+{% if p.has_throttle %}
+        self._throttle_limit = {{ p.throttle_limit }}
+        self._throttle_period = {{ p.throttle_period_seconds }}
+        self._throttle_tokens = float({{ p.throttle_limit }})
+        self._throttle_last_refill = time.time()
+        self._throttle_lock = threading.Lock()
+{% if p.throttle_overflow == "buffer" %}
+        self._throttle_buffer = []
+        self._throttle_buffer_size = {{ p.throttle_buffer_size }}
+        self._throttle_drain_event = threading.Event()
+        self._throttle_drain_thread = None
+{% endif %}
+{% endif %}
+{% if p.has_join %}
+        self._join_buffer = []
+        self._join_window = {{ p.join.window_seconds }}
+        self._join_type = "{{ p.join.join_type }}"
+        self._join_lock = threading.Lock()
+        self._join_pending = []
+{% endif %}
+{% if p.has_window and not p.has_multi_window %}
+        self._window_data = defaultdict(list)
+        self._window_stop_event = threading.Event()
+        self._window_thread = None
+        self._window_size = {{ p.window_size_seconds }}
+        self._MAX_WINDOW_BUFFER = 10000
+{% if p.window_step_seconds is not none %}
+        self._window_step = {{ p.window_step_seconds }}
+{% endif %}
+{% endif %}
+{% if p.has_multi_window %}
+        self._MAX_WINDOW_BUFFER = 10000
+{% for w in p.windows %}
+        self._window_data_{{ w.name }} = defaultdict(list)
+        self._window_stop_{{ w.name }} = threading.Event()
+        self._window_thread_{{ w.name }} = None
+        self._window_size_{{ w.name }} = {{ w.size_seconds }}
+{% if w.step_seconds is not none %}
+        self._window_step_{{ w.name }} = {{ w.step_seconds }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if p.has_batch %}
+        self._batch_buffer = []
+        self._batch_lock = threading.Lock()
+{% if p.batch_size is not none %}
+        self._batch_size = {{ p.batch_size }}
+{% endif %}
+{% if p.batch_timeout_seconds is not none %}
+        self._batch_timeout = {{ p.batch_timeout_seconds }}
+        self._batch_stop_event = threading.Event()
+        self._batch_thread = None
+{% endif %}
+{% endif %}
+
+{% if not p.has_pipe_source %}
+        source_conn = SourceConnParams(
+            host="{{ p.source_broker.host }}",
+            port={{ p.source_broker.port }},
+{% if p.source_broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if p.source_broker.username %}
+            username="{{ p.source_broker.username }}",
+            password="{{ p.source_broker.password }}",
+{% endif %}
+        )
+
+        self._subscriber = Subscriber(
+            topic="{{ p.source_topic }}",
+            on_message=self._on_message,
+            conn_params=source_conn,
+        )
+{% endif %}
+
+{% if p.has_join %}
+        join_conn = JoinConnParams(
+            host="{{ p.join.broker.host }}",
+            port={{ p.join.broker.port }},
+{% if p.join.broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if p.join.broker.username %}
+            username="{{ p.join.broker.username }}",
+            password="{{ p.join.broker.password }}",
+{% endif %}
+        )
+
+        self._join_subscriber = JoinSubscriber(
+            topic="{{ p.join.topic }}",
+            on_message=self._on_join_message,
+            conn_params=join_conn,
+        )
+{% endif %}
+
+{% if not p.has_route %}
+        sink_conn = SinkConnParams(
+            host="{{ p.sink_broker.host }}",
+            port={{ p.sink_broker.port }},
+{% if p.sink_broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if p.sink_broker.username %}
+            username="{{ p.sink_broker.username }}",
+            password="{{ p.sink_broker.password }}",
+{% endif %}
+        )
+
+        self._publisher = Publisher(
+            topic="{{ p.sink_topic }}",
+            conn_params=sink_conn,
+        )
+{% else %}
+{% for arm in p.route_arms %}
+        self._route_pub_{{ loop.index }} = Route{{ loop.index }}Publisher(
+            topic="{{ arm.topic }}",
+            conn_params=Route{{ loop.index }}ConnParams(
+                host="{{ arm.broker.host }}", port={{ arm.broker.port }},
+{% if arm.broker.ssl %}
+                ssl=True,
+{% endif %}
+{% if arm.broker.username %}
+                username="{{ arm.broker.username }}", password="{{ arm.broker.password }}",
+{% endif %}
+            ),
+        )
+{% endfor %}
+{% if p.route_default %}
+        self._route_pub_default = RouteDefaultPublisher(
+            topic="{{ p.route_default.topic }}",
+            conn_params=RouteDefaultConnParams(
+                host="{{ p.route_default.broker.host }}", port={{ p.route_default.broker.port }},
+{% if p.route_default.broker.ssl %}
+                ssl=True,
+{% endif %}
+{% if p.route_default.broker.username %}
+                username="{{ p.route_default.broker.username }}", password="{{ p.route_default.broker.password }}",
+{% endif %}
+            ),
+        )
+{% endif %}
+{% endif %}
+{% if p.has_on_error and not p.on_error_drop %}
+        dlq_conn = DlqConnParams(
+            host="{{ p.on_error_broker.host }}",
+            port={{ p.on_error_broker.port }},
+{% if p.on_error_broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if p.on_error_broker.username %}
+            username="{{ p.on_error_broker.username }}",
+            password="{{ p.on_error_broker.password }}",
+{% endif %}
+        )
+        self._dlq_publisher = DlqPublisher(
+            topic="{{ p.on_error_topic }}",
+            conn_params=dlq_conn,
+        )
+{% endif %}
+
+    def start(self):
+        self._running = True
+{% if not p.has_pipe_source %}
+        self._subscriber.run()
+{% endif %}
+{% if p.has_join %}
+        self._join_subscriber.run()
+{% endif %}
+{% if not p.has_route %}
+        self._publisher.run()
+{% else %}
+{% for arm in p.route_arms %}
+        self._route_pub_{{ loop.index }}.run()
+{% endfor %}
+{% if p.route_default %}
+        self._route_pub_default.run()
+{% endif %}
+{% endif %}
+{% if p.has_on_error and not p.on_error_drop %}
+        self._dlq_publisher.run()
+{% endif %}
+        time.sleep(0.3)
+{% if p.has_window and not p.has_multi_window %}
+        self._schedule_window_flush()
+{% endif %}
+{% if p.has_multi_window %}
+{% for w in p.windows %}
+        self._schedule_window_flush_{{ w.name }}()
+{% endfor %}
+{% endif %}
+{% if p.has_batch and p.batch_timeout_seconds is not none %}
+        self._schedule_batch_flush()
+{% endif %}
+{% if p.has_throttle and p.throttle_overflow == "buffer" %}
+        self._schedule_throttle_drain()
+{% endif %}
+{% if p.has_initially %}
+        self._publish_message({
+{% for f in p.initially_fields %}
+            "{{ f.name }}": {{ f.value_code }},
+{% endfor %}
+        })
+{% endif %}
+        logger.info("Pipeline '%s' started", self.name)
+
+    def stop(self, timeout=5):
+        self._running = False
+{% if p.has_window and not p.has_multi_window %}
+        self._window_stop_event.set()
+        if self._window_thread:
+            self._window_thread.join(timeout=timeout)
+{% endif %}
+{% if p.has_multi_window %}
+{% for w in p.windows %}
+        self._window_stop_{{ w.name }}.set()
+        if self._window_thread_{{ w.name }}:
+            self._window_thread_{{ w.name }}.join(timeout=timeout)
+{% endfor %}
+{% endif %}
+{% if p.has_batch and p.batch_timeout_seconds is not none %}
+        self._batch_stop_event.set()
+        if self._batch_thread:
+            self._batch_thread.join(timeout=timeout)
+{% endif %}
+{% if p.has_throttle and p.throttle_overflow == "buffer" %}
+        self._throttle_drain_event.set()
+        if self._throttle_drain_thread:
+            self._throttle_drain_thread.join(timeout=timeout)
+{% endif %}
+{% if p.has_batch %}
+        self._flush_batch()
+{% endif %}
+{% if p.has_finally %}
+        self._publish_message({
+{% for f in p.finally_fields %}
+            "{{ f.name }}": {{ f.value_code }},
+{% endfor %}
+        })
+{% endif %}
+        _endpoints = []
+{% if not p.has_pipe_source %}
+        _endpoints.append(self._subscriber)
+{% endif %}
+{% if p.has_join %}
+        _endpoints.append(self._join_subscriber)
+{% endif %}
+{% if not p.has_route %}
+        _endpoints.append(self._publisher)
+{% else %}
+{% for arm in p.route_arms %}
+        _endpoints.append(self._route_pub_{{ loop.index }})
+{% endfor %}
+{% if p.route_default %}
+        _endpoints.append(self._route_pub_default)
+{% endif %}
+{% endif %}
+{% if p.has_on_error and not p.on_error_drop %}
+        _endpoints.append(self._dlq_publisher)
+{% endif %}
+        for ep in _endpoints:
+            t = threading.Thread(target=ep.stop, daemon=True)
+            t.start()
+            t.join(timeout=timeout)
+        logger.info("Pipeline '%s' stopped", self.name)
+
+    def drain(self):
+{% if p.has_window or p.has_batch %}
+{% if p.has_window and not p.has_multi_window %}
+        self._flush_window()
+        logger.debug("Window buffer drained")
+{% endif %}
+{% if p.has_multi_window %}
+{% for w in p.windows %}
+        self._flush_window_{{ w.name }}()
+{% endfor %}
+        logger.debug("All window buffers drained")
+{% endif %}
+{% if p.has_batch %}
+        self._flush_batch()
+        logger.debug("Batch buffer drained")
+{% endif %}
+{% else %}
+        pass
+{% endif %}
+
+    def _on_message(self, msg):
+        if not isinstance(msg, dict):
+            try:
+                msg = json.loads(msg) if isinstance(msg, (str, bytes)) else msg
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("Invalid message (not JSON dict): %s", exc)
+                return
+            if not isinstance(msg, dict):
+                logger.warning("Invalid message type: %s", type(msg).__name__)
+                return
+{% if p.has_dedup %}
+        _dedup_key = str(_get_nested(msg, {{ p.dedup_key_code }}))
+        _now = time.time()
+        if _dedup_key in self._dedup_seen:
+            if _now - self._dedup_seen[_dedup_key] < self._dedup_ttl:
+                return
+        self._dedup_seen[_dedup_key] = _now
+        self._dedup_seen = {
+            k: v for k, v in self._dedup_seen.items()
+            if _now - v < self._dedup_ttl
+        }
+{% endif %}
+
+{% if p.has_rate %}
+        with self._rate_lock:
+            _now_rate = time.time()
+            _elapsed = _now_rate - self._rate_last_refill
+            self._rate_tokens = min(
+                float(self._rate_limit),
+                self._rate_tokens + _elapsed * (self._rate_limit / self._rate_period),
+            )
+            self._rate_last_refill = _now_rate
+            if self._rate_tokens < 1.0:
+{% if p.rate_on_excess == "warn" %}
+                logger.warning("Rate limit exceeded, message dropped")
+{% elif p.rate_on_excess == "error" %}
+                logger.error("Rate limit exceeded, message dropped")
+{% endif %}
+                return
+            self._rate_tokens -= 1.0
+{% endif %}
+
+{% if p.has_sample %}
+        if random.randint(1, 100) > {{ p.sample_percentage }}:
+            return
+{% endif %}
+
+{% if p.has_throttle %}
+        with self._throttle_lock:
+            _now_throttle = time.time()
+            _elapsed = _now_throttle - self._throttle_last_refill
+            self._throttle_tokens = min(
+                float(self._throttle_limit),
+                self._throttle_tokens + _elapsed * (self._throttle_limit / self._throttle_period),
+            )
+            self._throttle_last_refill = _now_throttle
+            if self._throttle_tokens < 1.0:
+{% if p.throttle_overflow == "buffer" %}
+                if len(self._throttle_buffer) < self._throttle_buffer_size:
+                    self._throttle_buffer.append(msg)
+                else:
+                    logger.warning("Throttle buffer full, message dropped")
+{% else %}
+                logger.debug("Throttle limit exceeded, message dropped")
+{% endif %}
+                return
+            self._throttle_tokens -= 1.0
+{% endif %}
+
+{% if p.has_flatten %}
+        _items = _get_nested(msg, {{ p.flatten_key_code }})
+        if isinstance(_items, list):
+            for _item in _items:
+                self._process_flattened(_item)
+        else:
+            self._process_flattened(msg)
+        return
+
+    def _process_flattened(self, msg):
+{% endif %}
+
+{% if p.has_distinct %}
+        _distinct_key = str(_get_nested(msg, {{ p.distinct_key_code }}))
+        _now = time.time()
+        if _distinct_key in self._distinct_seen:
+            if _now - self._distinct_seen[_distinct_key] < self._distinct_ttl:
+                return
+        self._distinct_seen[_distinct_key] = _now
+        self._distinct_seen = {
+            k: v for k, v in self._distinct_seen.items()
+            if _now - v < self._distinct_ttl
+        }
+{% endif %}
+
+{% if p.has_join %}
+        _left_key = _get_nested(msg, {{ p.join.left_key_code }})
+        _now = time.time()
+        _matched = False
+        other = None
+
+        with self._join_lock:
+            self._join_buffer = [
+                (t, m) for t, m in self._join_buffer
+                if _now - t < self._join_window
+            ]
+
+            for _jt, _jmsg in self._join_buffer:
+                _right_key = _get_nested(_jmsg, {{ p.join.right_key_code }})
+                if _left_key == _right_key:
+                    other = _jmsg
+                    _matched = True
+                    break
+
+            if not _matched:
+{% if p.join.join_type == "left" %}
+                other = None
+{% else %}
+                self._join_pending.append((_now, msg))
+                return
+{% endif %}
+{% endif %}
+
+{% if p.has_filter %}
+        if not ({{ p.filter_code }}):
+{% if p.has_old_ref %}
+            self._prev_msg = dict(msg) if isinstance(msg, dict) else {}
+{% endif %}
+            return
+{% endif %}
+
+{% if p.has_old_ref %}
+        self._prev_msg = dict(msg) if isinstance(msg, dict) else {}
+{% endif %}
+
+{% if p.has_window %}
+{% if p.has_group_by %}
+        group_key = "|".join([
+{% for gks in p.group_by_keys_strs %}
+            str(_get_nested(msg, {{ gks }})),
+{% endfor %}
+        ])
+{% else %}
+        group_key = "__all__"
+{% endif %}
+{% if not p.has_multi_window %}
+        with self._lock:
+            self._window_data[group_key].append(msg)
+            _buf = self._window_data[group_key]
+            if len(_buf) > self._MAX_WINDOW_BUFFER:
+                _dropped = len(_buf) - self._MAX_WINDOW_BUFFER
+                del _buf[:_dropped]
+                logger.warning(
+                    "Backpressure: dropped %d oldest messages for group '%s'",
+                    _dropped, group_key,
+                )
+{% else %}
+        with self._lock:
+{% for w in p.windows %}
+            self._window_data_{{ w.name }}[group_key].append(msg)
+            _buf_{{ w.name }} = self._window_data_{{ w.name }}[group_key]
+            if len(_buf_{{ w.name }}) > self._MAX_WINDOW_BUFFER:
+                _dropped = len(_buf_{{ w.name }}) - self._MAX_WINDOW_BUFFER
+                del _buf_{{ w.name }}[:_dropped]
+                logger.warning(
+                    "Backpressure: dropped %d oldest messages for window '{{ w.name }}' group '%s'",
+                    _dropped, group_key,
+                )
+{% endfor %}
+{% endif %}
+{% else %}
+        self._process_immediate(msg{% if p.has_join %}, other{% endif %})
+{% endif %}
+
+{% if p.has_window and not p.has_multi_window %}
+    def _schedule_window_flush(self):
+        if self._window_thread and self._window_thread.is_alive():
+            return
+{% if p.window_step_seconds is not none %}
+        interval = self._window_step
+{% else %}
+        interval = self._window_size
+{% endif %}
+        self._window_stop_event.clear()
+        self._window_thread = threading.Thread(
+            target=self._window_flush_loop, args=(interval,), daemon=True
+        )
+        self._window_thread.start()
+
+    def _window_flush_loop(self, interval):
+        while not self._window_stop_event.wait(timeout=interval):
+            if not self._running:
+                break
+            self._flush_window()
+
+    def _flush_window(self):
+        with self._lock:
+            snapshot = dict(self._window_data)
+            self._window_data.clear()
+
+        for group_key, messages in snapshot.items():
+            if not messages:
+                continue
+            self._process_window(group_key, messages)
+
+    def _process_window(self, group_key, messages):
+        try:
+            aggregated = {}
+{% for agg in p.aggregations %}
+{% if agg.func == "count" %}
+            aggregated["{{ agg.name }}"] = len(messages)
+{% elif agg.func == "avg" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                statistics.mean(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "sum" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = sum(_vals_{{ agg.name }})
+{% elif agg.func == "min" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                min(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "max" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                max(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "stddev" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                statistics.stdev(_vals_{{ agg.name }})
+                if len(_vals_{{ agg.name }}) > 1 else 0.0
+            )
+{% elif agg.func == "first" %}
+            aggregated["{{ agg.name }}"] = _get_nested(
+                messages[0], {{ agg.field_keys_str }}
+            )
+{% elif agg.func == "last" %}
+            aggregated["{{ agg.name }}"] = _get_nested(
+                messages[-1], {{ agg.field_keys_str }}
+            )
+{% endif %}
+{% if agg.type_annotation %}
+            aggregated["{{ agg.name }}"] = {{ agg.type_annotation }}(aggregated["{{ agg.name }}"])
+{% endif %}
+{% endfor %}
+
+{% if p.has_accumulate %}
+{% for acc in p.accumulations %}
+{% if acc.func == "ema" %}
+            _prev_{{ acc.name }} = self._accum_state.get("{{ acc.name }}", aggregated.get("{{ acc.field_name }}", 0.0))
+            _alpha_{{ acc.name }} = {{ acc.param_code }}
+            aggregated["{{ acc.name }}"] = _alpha_{{ acc.name }} * aggregated.get("{{ acc.field_name }}", 0.0) + (1 - _alpha_{{ acc.name }}) * _prev_{{ acc.name }}
+            self._accum_state["{{ acc.name }}"] = aggregated["{{ acc.name }}"]
+{% elif acc.func == "cumsum" %}
+            _prev_{{ acc.name }} = self._accum_state.get("{{ acc.name }}", 0.0)
+            aggregated["{{ acc.name }}"] = _prev_{{ acc.name }} + aggregated.get("{{ acc.field_name }}", 0.0)
+            self._accum_state["{{ acc.name }}"] = aggregated["{{ acc.name }}"]
+{% elif acc.func == "delta" %}
+            _prev_{{ acc.name }} = self._accum_state.get("{{ acc.name }}_prev", None)
+            _cur_{{ acc.name }} = aggregated.get("{{ acc.field_name }}", 0.0)
+            aggregated["{{ acc.name }}"] = (_cur_{{ acc.name }} - _prev_{{ acc.name }}) if _prev_{{ acc.name }} is not None else 0.0
+            self._accum_state["{{ acc.name }}_prev"] = _cur_{{ acc.name }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if p.has_having %}
+            if not ({{ p.having_code }}):
+                return
+{% endif %}
+
+{% if p.has_map %}
+{% for lb in p.let_bindings %}
+            {{ lb.name }} = {{ lb.value_code }}
+{% endfor %}
+            result = {}
+{% for m in p.mappings %}
+            result["{{ m.target }}"] = {{ m.value_code }}
+{% endfor %}
+{% else %}
+            result = aggregated
+{% endif %}
+
+            result["_group"] = group_key
+            result["_timestamp"] = time.time()
+            result["_pipeline"] = self.name
+
+            self._publish_message(result)
+            logger.debug("Published aggregate for group '%s'", group_key)
+
+        except Exception as exc:
+{% if p.has_on_error and not p.on_error_drop %}
+            self._publish_to_dlq(exc, messages)
+{% elif p.has_on_error and p.on_error_drop %}
+            logger.debug("Message dropped (on_error: drop): %s", exc)
+{% else %}
+            logger.error(
+                "DLQ: failed to process message: %s — %s", exc, messages,
+            )
+{% endif %}
+{% endif %}
+{% if p.has_multi_window %}
+{% for w in p.windows %}
+    def _schedule_window_flush_{{ w.name }}(self):
+        if self._window_thread_{{ w.name }} and self._window_thread_{{ w.name }}.is_alive():
+            return
+{% if w.step_seconds is not none %}
+        interval = self._window_step_{{ w.name }}
+{% else %}
+        interval = self._window_size_{{ w.name }}
+{% endif %}
+        self._window_stop_{{ w.name }}.clear()
+        self._window_thread_{{ w.name }} = threading.Thread(
+            target=self._window_flush_loop_{{ w.name }}, args=(interval,), daemon=True
+        )
+        self._window_thread_{{ w.name }}.start()
+
+    def _window_flush_loop_{{ w.name }}(self, interval):
+        while not self._window_stop_{{ w.name }}.wait(timeout=interval):
+            if not self._running:
+                break
+            self._flush_window_{{ w.name }}()
+
+    def _flush_window_{{ w.name }}(self):
+        with self._lock:
+            snapshot = dict(self._window_data_{{ w.name }})
+            self._window_data_{{ w.name }}.clear()
+
+        for group_key, messages in snapshot.items():
+            if not messages:
+                continue
+            self._process_window_{{ w.name }}(group_key, messages)
+
+    def _process_window_{{ w.name }}(self, group_key, messages):
+        try:
+            aggregated = {}
+{% for agg in p.aggregations %}
+{% if agg.window_ref == w.name %}
+{% if agg.func == "count" %}
+            aggregated["{{ agg.name }}"] = len(messages)
+{% elif agg.func == "avg" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                statistics.mean(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "sum" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = sum(_vals_{{ agg.name }})
+{% elif agg.func == "min" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                min(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "max" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                max(_vals_{{ agg.name }})
+                if _vals_{{ agg.name }} else 0.0
+            )
+{% elif agg.func == "stddev" %}
+            _vals_{{ agg.name }} = [
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            ]
+            aggregated["{{ agg.name }}"] = (
+                statistics.stdev(_vals_{{ agg.name }})
+                if len(_vals_{{ agg.name }}) > 1 else 0.0
+            )
+{% elif agg.func == "first" %}
+            aggregated["{{ agg.name }}"] = _get_nested(
+                messages[0], {{ agg.field_keys_str }}
+            )
+{% elif agg.func == "last" %}
+            aggregated["{{ agg.name }}"] = _get_nested(
+                messages[-1], {{ agg.field_keys_str }}
+            )
+{% endif %}
+{% if agg.type_annotation %}
+            aggregated["{{ agg.name }}"] = {{ agg.type_annotation }}(aggregated["{{ agg.name }}"])
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% if p.has_having %}
+            if not ({{ p.having_code }}):
+                return
+{% endif %}
+
+{% if p.has_map %}
+{% for lb in p.let_bindings %}
+            {{ lb.name }} = {{ lb.value_code }}
+{% endfor %}
+            result = {}
+{% for m in p.mappings %}
+            result["{{ m.target }}"] = {{ m.value_code }}
+{% endfor %}
+{% else %}
+            result = aggregated
+{% endif %}
+
+            result["_window"] = "{{ w.name }}"
+            result["_group"] = group_key
+            result["_timestamp"] = time.time()
+            result["_pipeline"] = self.name
+
+            self._publish_message(result)
+            logger.debug("Published aggregate for window '{{ w.name }}' group '%s'", group_key)
+
+        except Exception as exc:
+{% if p.has_on_error and not p.on_error_drop %}
+            self._publish_to_dlq(exc, messages)
+{% elif p.has_on_error and p.on_error_drop %}
+            logger.debug("Message dropped (on_error: drop): %s", exc)
+{% else %}
+            logger.error(
+                "DLQ: failed to process message: %s — %s", exc, messages,
+            )
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if p.has_join %}
+    def _on_join_message(self, msg):
+        _now = time.time()
+        with self._join_lock:
+            self._join_buffer.append((_now, msg))
+            self._join_buffer = [
+                (t, m) for t, m in self._join_buffer
+                if _now - t < self._join_window
+            ]
+
+            pending_retry = list(self._join_pending)
+            self._join_pending.clear()
+
+        for _pt, _pmsg in pending_retry:
+            if _now - _pt < self._join_window:
+                self._on_message(_pmsg)
+{% endif %}
+
+{% if not p.has_window %}
+    def _process_immediate(self, msg{% if p.has_join %}, other=None{% endif %}):
+        try:
+{% if p.has_map %}
+            aggregated = {}
+{% for lb in p.let_bindings %}
+            {{ lb.name }} = {{ lb.value_code }}
+{% endfor %}
+            result = {}
+{% for m in p.mappings %}
+            result["{{ m.target }}"] = {{ m.value_code }}
+{% endfor %}
+{% else %}
+            result = msg
+{% endif %}
+
+            result["_timestamp"] = time.time()
+            result["_pipeline"] = self.name
+
+            self._publish_message(result)
+
+        except Exception as exc:
+{% if p.has_on_error and not p.on_error_drop %}
+            self._publish_to_dlq(exc, msg)
+{% elif p.has_on_error and p.on_error_drop %}
+            logger.debug("Message dropped (on_error: drop): %s", exc)
+{% else %}
+            logger.error(
+                "DLQ: failed to process message: %s — %s", exc, msg,
+            )
+{% endif %}
+{% endif %}
+
+{% if p.sink_format == "csv" %}
+    def _format_message(self, msg):
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=sorted(msg.keys()))
+        writer.writerow(msg)
+        return output.getvalue().strip()
+
+{% elif p.sink_format == "raw" %}
+    def _format_message(self, msg):
+        return str(msg)
+
+{% endif %}
+{% if p.has_throttle and p.throttle_overflow == "buffer" %}
+    def _schedule_throttle_drain(self):
+        if self._throttle_drain_thread and self._throttle_drain_thread.is_alive():
+            return
+        self._throttle_drain_event.clear()
+        self._throttle_drain_thread = threading.Thread(
+            target=self._throttle_drain_loop, daemon=True
+        )
+        self._throttle_drain_thread.start()
+
+    def _throttle_drain_loop(self):
+        interval = self._throttle_period / max(self._throttle_limit, 1)
+        while not self._throttle_drain_event.wait(timeout=interval):
+            if not self._running:
+                break
+            _buffered_msg = None
+            with self._throttle_lock:
+                if not self._throttle_buffer:
+                    continue
+                _now = time.time()
+                _elapsed = _now - self._throttle_last_refill
+                self._throttle_tokens = min(
+                    float(self._throttle_limit),
+                    self._throttle_tokens + _elapsed * (self._throttle_limit / self._throttle_period),
+                )
+                self._throttle_last_refill = _now
+                if self._throttle_tokens >= 1.0:
+                    _buffered_msg = self._throttle_buffer.pop(0)
+                    self._throttle_tokens -= 1.0
+            if _buffered_msg is not None:
+                self._on_message(_buffered_msg)
+{% endif %}
+
+    def _publish_with_retry(self, publisher, payload):
+        """Publish with exponential backoff retry."""
+        for attempt in range(_MAX_PUBLISH_RETRIES):
+            try:
+                publisher.publish(payload)
+                return
+            except Exception as exc:
+                if attempt < _MAX_PUBLISH_RETRIES - 1:
+                    delay = _PUBLISH_RETRY_BASE * (2 ** attempt) + random.uniform(0, 0.05)
+                    logger.warning(
+                        "Publish failed (attempt %d/%d): %s — retrying in %.2fs",
+                        attempt + 1, _MAX_PUBLISH_RETRIES, exc, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "Publish failed after %d attempts: %s", _MAX_PUBLISH_RETRIES, exc,
+                    )
+
+    def _notify_downstream(self, msg):
+        for listener in self._downstream_listeners:
+            listener(msg)
+
+{% if p.has_on_error and not p.on_error_drop %}
+    def _publish_to_dlq(self, error, original_data):
+        """Route failed messages to the dead-letter queue."""
+        try:
+            envelope = {
+                "_error": str(error),
+                "_error_type": type(error).__name__,
+                "_pipeline": self.name,
+                "_timestamp": time.time(),
+                "_original": original_data,
+            }
+            self._publish_with_retry(self._dlq_publisher, envelope)
+            logger.warning("Message sent to DLQ: %s", error)
+        except Exception as dlq_exc:
+            logger.error("Failed to publish to DLQ: %s (original error: %s)", dlq_exc, error)
+{% endif %}
+
+{% if p.has_batch %}
+    def _publish_message(self, msg):
+{% if p.sink_format == "csv" %}
+        formatted = self._format_message(msg)
+{% elif p.sink_format == "raw" %}
+        formatted = self._format_message(msg)
+{% else %}
+        formatted = msg
+{% endif %}
+        with self._batch_lock:
+            self._batch_buffer.append(formatted)
+{% if p.batch_size is not none %}
+            if len(self._batch_buffer) >= self._batch_size:
+                self._flush_batch()
+{% endif %}
+        self._notify_downstream(msg)
+
+    def _flush_batch(self):
+        with self._batch_lock:
+            if not self._batch_buffer:
+                return
+            batch = list(self._batch_buffer)
+            self._batch_buffer.clear()
+        self._publish_with_retry(self._publisher, {"_batch": batch, "_count": len(batch), "_timestamp": time.time(), "_pipeline": self.name})
+        logger.debug("Flushed batch of %d messages", len(batch))
+
+{% if p.batch_timeout_seconds is not none %}
+    def _schedule_batch_flush(self):
+        if self._batch_thread and self._batch_thread.is_alive():
+            return
+        self._batch_stop_event.clear()
+        self._batch_thread = threading.Thread(
+            target=self._batch_flush_loop, daemon=True
+        )
+        self._batch_thread.start()
+
+    def _batch_flush_loop(self):
+        while not self._batch_stop_event.wait(timeout=self._batch_timeout):
+            if not self._running:
+                break
+            self._flush_batch()
+{% endif %}
+{% else %}
+{% if p.has_route %}
+    def _publish_message(self, msg):
+{% for arm in p.route_arms %}
+{% if loop.first %}
+        if {{ arm.condition_code }}:
+{% else %}
+        elif {{ arm.condition_code }}:
+{% endif %}
+            self._publish_with_retry(self._route_pub_{{ loop.index }}, msg)
+{% endfor %}
+{% if p.route_default %}
+        else:
+            self._publish_with_retry(self._route_pub_default, msg)
+{% endif %}
+        self._notify_downstream(msg)
+{% else %}
+    def _publish_message(self, msg):
+{% if p.sink_format == "csv" %}
+        self._publish_with_retry(self._publisher, self._format_message(msg))
+{% elif p.sink_format == "raw" %}
+        self._publish_with_retry(self._publisher, self._format_message(msg))
+{% else %}
+        self._publish_with_retry(self._publisher, msg)
+{% endif %}
+        self._notify_downstream(msg)
+{% endif %}
+{% endif %}

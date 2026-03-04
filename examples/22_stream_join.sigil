@@ -1,0 +1,38 @@
+// Example 22: Stream Join — Enrich orders with customer data
+//
+// Demonstrates the join stage which merges messages from two
+// different topics based on a matching key within a time window.
+// After joining, both `msg` (primary) and `other` (joined) fields
+// are available in downstream stages.
+//
+// Join syntax:
+//   |> join BROKER :: "topic"
+//       on msg.key == other.key
+//       within DURATION
+//       type: inner | left
+//   end
+//
+// The `??` (null-coalesce) operator provides defaults for
+// potentially missing fields from the joined stream.
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline enrich_orders
+    source from local :: "orders/new"
+    |> join local :: "customers/profiles"
+        on msg.customer_id == other.id
+        within 30 s
+        type: inner
+    end
+    |> filter: other.active == true
+    |> map: {
+        order_id = msg.order_id;
+        customer_name = other.name ?? "unknown";
+        customer_email = other.email;
+        amount = msg.amount
+    }
+    |> sink to local :: "orders/enriched"
+end

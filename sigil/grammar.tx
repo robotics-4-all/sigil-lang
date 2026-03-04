@@ -1,0 +1,467 @@
+/*
+ * Sigil — Stream Processing Pipeline DSL
+ *
+ * EBNF-style grammar (textX notation).
+ * Grammar IS the metamodel — each rule defines both syntax and the AST class.
+ *
+ * Syntax highlights:
+ *   - Structural blocks (broker, pipeline, route) use `end` keyword
+ *   - Stages are chained with `|>` pipe operator
+ *   - Source: `source from <broker> :: "<topic>"` or `source from pipe <name>`
+ *   - Sink: `sink to <broker> :: "<topic>"`
+ *   - Data blocks (aggregate, map, accumulate, auth, batch, ObjectLiteral) keep `{}`
+ *
+ * Precedence (low → high):
+ *   or  →  and  →  comparison  →  +,-  →  *,/,%  →  ??  →  unary(-,not)  →  atom
+ *
+ * Reserved keywords (cannot be used as identifiers):
+ *   if, then, else, let, in, is, null, const, env, case, when,
+ *   having, deduplicate, within, old, changed, forall, exists,
+ *   initially, finally, publish, batch, import, route, default,
+ *   warn, error, accumulate, rate, per, on_excess, on_error, drop,
+ *   ema, cumsum, delta,
+ *   abs, round, len, lower, upper, floor, ceil, fmt,
+ *   from, to, end, pipe, source, sink, pipeline, broker,
+ *   join, on, other, inner, left, type,
+ *   schema, strict, lenient,
+ *   flatten, distinct, throttle, sample, overflow, buffer,
+ *   retry, backoff, with, over,
+ *   int, float, str, bool
+ */
+
+Model:
+    (imports+=ImportDecl | brokers+=Broker | pipelines+=Pipeline | constants+=ConstDef | schemas+=SchemaDef)*
+;
+
+// ─── Imports ────────────────────────────────────────────────────────
+ImportDecl:
+    'import' path=STRING
+;
+
+// ─── Constants ──────────────────────────────────────────────────────
+ConstDef:
+    'const' name=ID '=' value=ConstValue
+;
+
+ConstValue:
+    FloatLiteral | IntLiteral | StringLiteral | BoolLiteral
+;
+
+// ─── Broker connection ──────────────────────────────────────────────
+Broker:
+    'broker' name=ID
+        ('transport' ':' transport=Transport)?
+        'host'  ':' host=STRING
+        'port'  ':' port=INT
+        ('ssl'  ':' ssl=BOOL)?
+        ('auth' ':' '{'
+            'username' ':' username=STRING
+            'password' ':' password=STRING
+        '}')?
+    'end'
+;
+
+Transport:
+    'mqtt' | 'redis' | 'amqp' | 'kafka'
+;
+
+// ─── Pipeline ───────────────────────────────────────────────────────
+Pipeline:
+    'pipeline' name=ID
+        (initially=InitiallyHook)?
+        source=Source
+        ('|>' join=JoinStage)?
+        ('|>' stages+=AnnotatedStage)*
+        ('|>' (sink=Sink | route=RouteBlock))?
+        (on_error=OnErrorClause)?
+        (retry=RetryPolicy)?
+        (finally_=FinallyHook)?
+    'end'
+;
+
+// ─── Stage annotations ─────────────────────────────────────────────
+AnnotatedStage:
+    (annotations+=StageAnnotation)* stage=Stage
+;
+
+StageAnnotation:
+    '@' severity=AnnotationSeverity '(' message=STRING ')'
+;
+
+AnnotationSeverity:
+    'warn' | 'error'
+;
+
+// ─── Conditional routing ────────────────────────────────────────────
+RouteBlock:
+    'route'
+        arms+=RouteArm
+        ('default' '=>' default=RouteSink)?
+    'end'
+;
+
+RouteArm:
+    'when' condition=Expression '=>' sink=RouteSink
+;
+
+RouteSink:
+    'sink' 'to' broker=[Broker] '::' topic=STRING
+    ('qos' ':' qos=INT)?
+;
+
+// ─── Join (second stream) ───────────────────────────────────────────
+JoinStage:
+    'join' broker=[Broker] '::' topic=STRING
+        'on' left_key=FieldRef '==' right_key=FieldRef
+        'within' window=Duration
+        ('type' ':' type=JoinType)?
+    'end'
+;
+
+JoinType:
+    'inner' | 'left'
+;
+
+// ─── Lifecycle hooks ────────────────────────────────────────────────
+InitiallyHook:
+    '@initially' '{' 'publish' body=ObjectLiteral '}'
+;
+
+FinallyHook:
+    '@finally' '{' 'publish' body=ObjectLiteral '}'
+;
+
+ObjectLiteral:
+    '{' fields+=ObjectField[','] '}'
+;
+
+ObjectField:
+    name=ID ':' value=Expression
+;
+
+
+// ─── On-error / DLQ routing ─────────────────────────────────────────
+OnErrorClause:
+    'on_error' ':' (
+        'drop'
+    |
+        'sink' 'to' broker=[Broker] '::' topic=STRING
+    )
+;
+
+// ─── Retry policy ───────────────────────────────────────────────────
+RetryPolicy:
+    'retry' ':' max_retries=INT 'with' 'backoff' base=Duration
+;
+
+// ─── Source / Sink ──────────────────────────────────────────────────
+Source:
+    'source' 'from'
+    (
+        'pipe' pipe=ID
+    |
+        broker=[Broker] '::' topic=STRING
+        ('qos' ':' qos=INT)?
+        ('format' ':' format=Format)?
+        ('schema' ':' schema=[SchemaDef])?
+    )
+;
+
+Format:
+    'json' | 'csv' | 'raw'
+;
+
+Sink:
+    'sink' 'to' broker=[Broker] '::' topic=STRING
+    ('qos' ':' qos=INT)?
+    ('format' ':' format=Format)?
+    ('batch' ':' '{' batch=BatchConfig '}')?
+;
+
+BatchConfig:
+    ('size' ':' size=INT)?
+    ('timeout' ':' timeout=Duration)?
+;
+
+// ─── Pipeline stages (abstract) ────────────────────────────────────
+Stage:
+    DeduplicateStage | FilterStage | RateStage | FlattenStage | DistinctStage
+    | ThrottleStage | SampleStage | GroupByStage | WindowStage
+    | AggregateStage | AccumulateStage | HavingStage | MapStage
+;
+
+DeduplicateStage:
+    'deduplicate' ':' key=FieldRef 'within' ttl=Duration
+;
+
+FilterStage:
+    'filter' ':' condition=Expression
+;
+
+GroupByStage:
+    'group_by' ':' fields+=FieldRef[',']
+;
+
+WindowStage:
+    'window' (wname=ID)? ':' type=WindowType
+        '(' size=Duration (',' 'step' '=' step=Duration)? ')'
+;
+
+WindowType:
+    'tumbling' | 'sliding'
+;
+
+Duration:
+    value=INT unit=/ms|[smhd]/
+;
+
+AggregateStage:
+    'aggregate' ':' '{'
+        assignments+=AggAssignment
+    '}'
+;
+
+AggAssignment:
+    name=ID (':' type=TypeAnnotation)? '=' func=AggFunc '(' (field=FieldRef)? ')' ('over' window_ref=ID)?
+;
+
+TypeAnnotation:
+    'int' | 'float' | 'str' | 'bool'
+;
+
+AggFunc:
+    'avg' | 'sum' | 'min' | 'max' | 'count'
+    | 'stddev' | 'first' | 'last'
+;
+
+AccumulateStage:
+    'accumulate' ':' '{'
+        assignments+=AccumAssignment
+    '}'
+;
+
+AccumAssignment:
+    name=ID '=' func=AccumFunc '(' field=FieldRef (',' param=Expression)? ')'
+;
+
+AccumFunc:
+    'ema' | 'cumsum' | 'delta'
+;
+
+RateStage:
+    'rate' ':' limit=INT 'per' period=Duration
+    ('on_excess' ':' on_excess=ExcessBehavior)?
+;
+
+ExcessBehavior:
+    'drop' | 'warn' | 'error'
+;
+
+FlattenStage:
+    'flatten' ':' field=FieldRef
+;
+
+DistinctStage:
+    'distinct' ':' field=FieldRef 'within' ttl=Duration
+;
+
+ThrottleStage:
+    'throttle' ':' limit=INT 'per' period=Duration
+    ('overflow' ':' overflow=OverflowBehavior)?
+    ('buffer' ':' buffer_size=INT)?
+;
+
+OverflowBehavior:
+    'drop' | 'buffer'
+;
+
+SampleStage:
+    'sample' ':' percentage=INT '%'
+;
+
+HavingStage:
+    'having' ':' condition=Expression
+;
+
+MapStage:
+    'map' ':' '{'
+        (bindings+=LetBinding[';'] ';')?
+        mappings+=MapAssignment[';']
+    '}'
+;
+
+LetBinding:
+    'let' name=ID '=' value=Expression
+;
+
+MapAssignment:
+    target=ID '=' value=Expression
+;
+
+// ─── Expression grammar (precedence climbing) ──────────────────────
+Expression:
+    operands+=AndExpr['or']
+;
+
+AndExpr:
+    operands+=Comparison['and']
+;
+
+Comparison:
+    left=Addition
+    (op=CompOp right=Addition | nullCheck=NullCheck | inCheck=InCheck)?
+;
+
+CompOp:
+    '>=' | '<=' | '==' | '!=' | '>' | '<'
+;
+
+NullCheck:
+    'is' negated?='not' 'null'
+;
+
+InCheck:
+    negated?='not' 'in' list=ListLiteral
+;
+
+ListLiteral:
+    '[' items+=Expression[','] ']'
+;
+
+Addition:
+    left=Multiplication op=AddOp right=Addition | left=Multiplication
+;
+
+AddOp:
+    '+' | '-'
+;
+
+Multiplication:
+    left=Coalesce op=MulOp right=Multiplication | left=Coalesce
+;
+
+MulOp:
+    '*' | '/' | '%'
+;
+
+Coalesce:
+    left=Unary ('??' right=Coalesce)?
+;
+
+Unary:
+    op=UnaryOp operand=Unary | atom=Atom
+;
+
+UnaryOp:
+    '-' | 'not'
+;
+
+Atom:
+    ParenExpr | CaseExpr | IfExpr | ForallExpr | ExistsExpr
+    | EnvRef | FuncCall | OldRef | ChangedRef
+    | FloatLiteral | IntLiteral | StringLiteral | BoolLiteral | FieldRef
+;
+
+ParenExpr:
+    '(' expr=Expression ')'
+;
+
+IfExpr:
+    'if' condition=Expression 'then' thenExpr=Expression 'else' elseExpr=Expression
+;
+
+CaseExpr:
+    'case' '{' arms+=WhenArm ('else' '=>' elseExpr=Expression)? '}'
+;
+
+WhenArm:
+    'when' condition=Expression '=>' result=Expression
+;
+
+EnvRef:
+    'env' '(' key=STRING (',' default=Expression)? ')'
+;
+
+OldRef:
+    'old' '(' field=FieldRef ')'
+;
+
+ChangedRef:
+    'changed' '(' field=FieldRef ')'
+;
+
+ForallExpr:
+    'forall' '(' var=ID ('in' collection=FieldRef)? '=>' predicate=Expression ')'
+;
+
+ExistsExpr:
+    'exists' '(' var=ID ('in' collection=FieldRef)? '=>' predicate=Expression ')'
+;
+
+FuncCall:
+    name=ScalarFunc '(' args+=Expression[','] ')'
+;
+
+ScalarFunc:
+    'abs' | 'round' | 'len' | 'lower' | 'upper' | 'floor' | 'ceil' | 'fmt'
+;
+
+BoolLiteral:
+    val=BOOL
+;
+
+FloatLiteral:
+    val=FLOAT
+;
+
+IntLiteral:
+    val=INT
+;
+
+StringLiteral:
+    val=STRING
+;
+
+FieldRef:
+    segments+=ID['.']
+;
+
+// ─── Schema declarations ───────────────────────────────────────────
+SchemaDef:
+    'schema' name=ID (strictness=SchemaStrictness)?
+        fields+=SchemaField
+    'end'
+;
+
+SchemaStrictness:
+    'strict' | 'lenient'
+;
+
+SchemaField:
+    name=ID ':' type=SchemaFieldType optional?='?'
+;
+
+SchemaFieldType:
+    SchemaObjectType | SchemaListType | SchemaScalarType
+;
+
+SchemaScalarType:
+    name=ScalarTypeName
+;
+
+ScalarTypeName:
+    'int' | 'float' | 'str' | 'bool'
+;
+
+SchemaObjectType:
+    '{' fields+=SchemaField[','] '}'
+;
+
+SchemaListType:
+    '[' element=SchemaFieldType ']'
+;
+
+// ─── Comments in DSL source files ──────────────────────────────────
+Comment:
+    /\/\/.*$/ | /\/\*[\s\S]*?\*\//
+;

@@ -1,0 +1,53 @@
+/*
+ * Example 05 — Group By
+ * =======================
+ * Aggregate messages separately for each group key.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - group_by: msg.field   — partition messages by a field value
+ *   - Per-group aggregation — each group gets its own window and stats
+ *
+ * WHAT IT DOES:
+ *   A factory has temperature sensors in multiple zones (A, B, C).
+ *   All sensors publish to the same topic. group_by splits the stream
+ *   so each zone gets independent statistics.
+ *
+ * INPUT MESSAGES:
+ *   {"zone": "A", "value": 22.5}
+ *   {"zone": "B", "value": 31.0}
+ *   {"zone": "A", "value": 23.1}
+ *   {"zone": "C", "value": 19.8}
+ *
+ * OUTPUT (one per zone per window):
+ *   {"avg_temp": 22.8, "readings": 2, "_group": "A", ...}
+ *   {"avg_temp": 31.0, "readings": 1, "_group": "B", ...}
+ *   {"avg_temp": 19.8, "readings": 1, "_group": "C", ...}
+ *
+ * STAGE ORDER (enforced by Sigil):
+ *   source → filter → group_by → window → aggregate → map → sink
+ *   All stages except source and sink are optional,
+ *   but they must appear in this order when present.
+ */
+
+broker factory
+    host: "localhost"
+    port: 1883
+end
+
+pipeline zone_temperature
+    source from factory :: "factory/sensors/temperature" format: json
+
+    // Partition the stream: each zone is aggregated independently
+    |> group_by: msg.zone
+
+    |> window: tumbling(1 m)
+
+    |> aggregate: {
+        avg_temp = avg(msg.value)
+        max_temp = max(msg.value)
+        readings = count()
+    }
+
+    |> sink to factory :: "analytics/zone_temperature"
+end
+

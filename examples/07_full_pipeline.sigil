@@ -1,0 +1,73 @@
+/*
+ * Example 07 — Full Pipeline (All Stages)
+ * =========================================
+ * Combines every stage type in a single pipeline.
+ *
+ * STAGE ORDER (all stages shown):
+ *   source → filter → group_by → window → aggregate → map → sink
+ *
+ * SCENARIO:
+ *   A fleet of delivery trucks sends GPS + engine telemetry.
+ *   We want per-region driving statistics, excluding idling trucks,
+ *   summarized every 5 minutes with human-friendly field names.
+ *
+ * INPUT:  {"truck_id": "T-42", "region": "north", "speed_kmh": 65, "fuel_rate": 12.3}
+ * OUTPUT: {"avg_speed": 58.2, "top_speed": 112.0, "fuel_used": 4.1,
+ *          "active_trucks": 23, "_group": "north", ...}
+ *
+ * AGGREGATION FUNCTIONS REFERENCE:
+ *   avg(msg.field)    — arithmetic mean
+ *   sum(msg.field)    — total
+ *   min(msg.field)    — minimum value
+ *   max(msg.field)    — maximum value
+ *   count()           — number of messages (no field argument)
+ *   stddev(msg.field) — standard deviation
+ *   first(msg.field)  — first value in the window
+ *   last(msg.field)   — last value in the window
+ */
+
+broker fleet
+    host: "fleet.example.com"
+    port: 1883
+    ssl: true
+    auth: {
+        username: "analytics"
+        password: "s3cur3-t0k3n"
+    }
+end
+
+pipeline fleet_summary
+    source from fleet :: "trucks/+/telemetry" qos: 1 format: json
+
+    // Stage 1: Filter — drop idling trucks (speed < 5 km/h)
+    |> filter: msg.speed_kmh >= 5
+
+    // Stage 2: Group — separate stats per geographic region
+    |> group_by: msg.region
+
+    // Stage 3: Window — 5-minute non-overlapping windows
+    |> window: tumbling(5 m)
+
+    // Stage 4: Aggregate — compute fleet statistics per region
+    |> aggregate: {
+        avg_speed     = avg(msg.speed_kmh)
+        top_speed     = max(msg.speed_kmh)
+        total_fuel    = sum(msg.fuel_rate)
+        active_trucks = count()
+        speed_stddev  = stddev(msg.speed_kmh)
+        first_report  = first(msg.speed_kmh)
+        last_report   = last(msg.speed_kmh)
+    }
+
+    // Stage 5: Map -- rename and compute derived fields
+    |> map: {
+        avg_speed     = avg_speed;
+        top_speed     = top_speed;
+        fuel_used     = total_fuel / 60 * 5;
+        active_trucks = active_trucks;
+        speed_spread  = speed_stddev
+    }
+
+    |> sink to fleet :: "analytics/fleet/regional" qos: 1
+end
+

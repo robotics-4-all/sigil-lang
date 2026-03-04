@@ -1,0 +1,27 @@
+broker edge
+    host: "localhost"
+    port: 1883
+end
+
+pipeline temperature_avg
+    source from edge :: "sensors/+/temperature" qos: 1 format: json
+
+    |> filter: msg.value > -40 and msg.value < 85
+
+    |> window: tumbling(5 m)
+
+    |> aggregate: {
+        avg_temp = avg(msg.value)
+        max_temp = max(msg.value)
+        readings = count()
+    }
+
+    |> map: {
+        average   = avg_temp;
+        peak      = max_temp;
+        samples   = readings
+    }
+
+    |> sink to edge :: "analytics/temperature" qos: 1
+end
+

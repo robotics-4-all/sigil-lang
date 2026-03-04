@@ -1,0 +1,124 @@
+/*
+ * Example 24 — New Pipeline Stages
+ * ================================
+ * Demonstrates the 4 new pipeline stages:
+ * flatten, distinct, throttle, and sample.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - flatten  : expands an array field into individual messages
+ *   - distinct : deduplicates messages by a field value within a time window
+ *   - throttle : limits message throughput with optional buffering
+ *   - sample   : probabilistic sampling of messages (percentage-based)
+ *
+ * STAGE ORDER:
+ *   source → deduplicate → filter → rate → flatten → distinct → throttle →
+ *   sample → group_by → window → aggregate → accumulate → having → map → sink
+ */
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+// Pipeline 1: flatten_orders — Flatten nested order items
+// Expands an array of items into individual messages for downstream processing.
+pipeline flatten_orders
+    source from local :: "orders/raw"
+
+    // Expand the 'items' array field into individual messages
+    |> flatten: msg.items
+
+    // Extract fields from the now-flattened message
+    |> map: {
+        item_name = msg.item_name;
+        quantity = msg.quantity;
+        price = msg.price
+    }
+
+    |> sink to local :: "orders/items"
+end
+
+// Pipeline 2: distinct_events — Deduplicate events by ID
+// Ensures that only unique event IDs are processed within a 10-minute window.
+pipeline distinct_events
+    source from local :: "events/raw"
+
+    // Filter out test events before deduplication
+    |> filter: msg.status != "test"
+
+    // Only allow one message per event_id every 10 minutes
+    |> distinct: msg.event_id within 10m
+
+    |> sink to local :: "events/unique"
+end
+
+// Pipeline 3: throttled_alerts — Throttle alert messages with buffering
+// Limits the rate of high-severity alerts to prevent downstream flooding.
+pipeline throttled_alerts
+    source from local :: "alerts/raw"
+
+    // Only process high-severity alerts
+    |> filter: msg.severity > 3
+
+    // Limit to 5 alerts per second. If exceeded, buffer up to 200 messages.
+    |> throttle: 5 per 1s overflow: buffer buffer: 200
+
+    |> sink to local :: "alerts/throttled"
+end
+
+// Pipeline 4: sampled_telemetry — Sample high-volume telemetry
+// Reduces data volume by only processing a random 10% of incoming messages.
+pipeline sampled_telemetry
+    source from local :: "telemetry/raw"
+
+    // Probabilistically keep only 10% of messages
+    |> sample: 10%
+
+    // Aggregate the sampled data over 1-minute windows
+    |> window: tumbling(1m)
+    |> aggregate: {
+        avg_value = avg(msg.value)
+        sample_count = count()
+    }
+
+    |> map: {
+        avg_value = avg_value;
+        sample_count = sample_count
+    }
+
+    |> sink to local :: "telemetry/sampled"
+end
+
+// Pipeline 5: combined_pipeline — Demonstrate multiple new stages together
+// A complex pipeline showing how the new stages interact in the required order.
+pipeline combined_pipeline
+    source from local :: "data/raw"
+
+    // 1. Expand nested readings
+    |> flatten: msg.readings
+
+    // 2. Deduplicate by sensor_id within 5 minutes
+    |> distinct: msg.sensor_id within 5m
+
+    // 3. Sample 50% of the unique readings
+    |> sample: 50%
+
+    // 4. Aggregate over 30-second windows
+    |> window: tumbling(30s)
+    |> aggregate: {
+        avg_val = avg(msg.value)
+        min_val = min(msg.value)
+        max_val = max(msg.value)
+        total = count()
+    }
+
+    // 5. Format the output
+    |> map: {
+        avg_val = avg_val;
+        min_val = min_val;
+        max_val = max_val;
+        total = total
+    }
+
+    |> sink to local :: "data/processed"
+end

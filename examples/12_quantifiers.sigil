@@ -1,0 +1,53 @@
+// Example 12: Quantifiers (forall / exists)
+//
+// Demonstrates two forms of quantifiers:
+// 1. Collection-based: exists(x in msg.field => predicate)
+//    Iterates over an array field in the current message.
+// 2. Window-implicit: forall(m => predicate)
+//    Iterates over all messages in the current window buffer.
+//    Only valid in having: stage (requires window + aggregate).
+//
+// Use case: IoT sensor monitoring pipeline that:
+// - Filters messages to only those with at least one "alarm" tag
+// - Groups by sensor, aggregates over 1-minute windows
+// - Only emits if ALL readings in the window were positive
+
+broker iot
+    transport: mqtt
+    host: "localhost"
+    port: 1883
+end
+
+const MIN_SAMPLES = 5
+
+pipeline sensor_quality_check
+    source from iot :: "sensors/+/readings"
+
+    // Collection quantifier: only pass messages that have
+    // at least one tag equal to "alarm"
+    |> filter: exists(t in msg.tags => t == "alarm")
+
+    |> group_by: msg.sensor_id
+
+    |> window: tumbling(1 m)
+
+    |> aggregate: {
+        n = count()
+        avg_reading = avg(msg.value)
+        min_reading = min(msg.value)
+    }
+
+    // Window quantifier: only emit if ALL messages in the
+    // window had a positive value AND there were enough samples
+    |> having: forall(m => m > 0) and n >= MIN_SAMPLES
+
+    |> map: {
+        sensor = msg.sensor_id;
+        samples = n;
+        average = avg_reading;
+        minimum = min_reading
+    }
+
+    |> sink to iot :: "analytics/quality_reports"
+end
+

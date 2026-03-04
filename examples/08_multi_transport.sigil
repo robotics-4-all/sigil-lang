@@ -1,0 +1,87 @@
+/*
+ * Example 08 — Multi-Transport & Multi-Pipeline
+ * ================================================
+ * Bridge data across different broker transports.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - Multiple brokers with different transports (mqtt, redis, amqp, kafka)
+ *   - Multiple pipelines in a single .sigil file
+ *   - Cross-transport bridging (MQTT source → Redis sink)
+ *   - Broker reuse across pipelines
+ *
+ * SUPPORTED TRANSPORTS:
+ *   mqtt   — MQTT protocol (Mosquitto, EMQX, HiveMQ, ...)
+ *   redis  — Redis Pub/Sub
+ *   amqp   — AMQP 0.9.1 (RabbitMQ, ...)
+ *   kafka  — Apache Kafka
+ *
+ * SCENARIO:
+ *   Edge sensors publish via MQTT. Two pipelines process the data:
+ *   1. Raw bridge     — forward all readings from MQTT to Redis (for caching)
+ *   2. Smart summary  — filter + aggregate, then publish to Redis (for dashboards)
+ *
+ * ARCHITECTURE:
+ *
+ *   [MQTT Sensors] ──→ pipeline: bridge ──────────→ [Redis Cache]
+ *                  └──→ pipeline: smart_summary ──→ [Redis Dashboard]
+ */
+
+// Edge broker — MQTT for IoT sensors
+broker edge
+    transport: mqtt
+    host: "10.0.1.1"
+    port: 1883
+end
+
+// Cloud broker — Redis for application layer
+broker cloud
+    transport: redis
+    host: "redis.internal"
+    port: 6379
+    auth: {
+        username: "app"
+        password: "r3dis-tok3n"
+    }
+end
+
+// Pipeline 1: Raw bridge — relay everything from MQTT to Redis
+// No processing, just transport bridging.
+pipeline bridge
+    source from edge :: "sensors/+/data" qos: 1 format: json
+
+    |> sink to cloud :: "cache.sensors.raw"
+end
+
+// Pipeline 2: Smart summary — filter, aggregate, and publish
+// Both pipelines run concurrently in the generated application.
+pipeline smart_summary
+    source from edge :: "sensors/+/data" qos: 1 format: json
+
+    // Drop sensor noise (readings below threshold)
+    |> filter: msg.value > 0 and msg.quality != 0
+
+    // Per-sensor aggregation
+    |> group_by: msg.sensor_id
+
+    // 2-minute sliding window, updated every 30 seconds
+    |> window: sliding(2 m, step = 30 s)
+
+    |> aggregate: {
+        avg_val  = avg(msg.value)
+        max_val  = max(msg.value)
+        min_val  = min(msg.value)
+        spread   = stddev(msg.value)
+        samples  = count()
+    }
+
+    |> map: {
+        average   = avg_val;
+        peak      = max_val;
+        low       = min_val;
+        stability = spread;
+        points    = samples
+    }
+
+    |> sink to cloud :: "dashboard.sensors.summary"
+end
+

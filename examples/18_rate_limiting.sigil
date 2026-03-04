@@ -1,0 +1,47 @@
+// Example 18: Rate Limiting
+//
+// The `rate:` stage limits message throughput using a token bucket algorithm.
+// Syntax:  rate: <limit> per <duration> [on_excess: drop|warn|error]
+//
+// - Placed AFTER filter, BEFORE group_by in the pipeline order
+// - Token bucket refills at (limit / period) tokens per second
+// - Default on_excess is "drop" (silently discard)
+// - "warn" logs a warning before dropping
+// - "error" logs an error before dropping
+
+broker sensors
+    host: "localhost"
+    port: 1883
+end
+
+// Basic rate limiting: allow 100 messages per second
+pipeline rate_basic
+    source from sensors :: "sensors/temperature"
+    |> rate: 100 per 1s
+    |> sink to sensors :: "sensors/throttled"
+end
+
+// Rate limiting with warning: 50 messages per 10 seconds
+pipeline rate_with_warning
+    source from sensors :: "sensors/pressure"
+    |> filter: msg.value > 0
+    |> rate: 50 per 10s on_excess: warn
+    |> window: tumbling(30s)
+    |> aggregate: {
+        avg_pressure = avg(msg.value)
+        sample_count = count()
+    }
+    |> map: {
+        pressure = avg_pressure;
+        samples = sample_count
+    }
+    |> sink to sensors :: "sensors/pressure_agg"
+end
+
+// Strict rate limiting with error logging
+pipeline rate_strict
+    source from sensors :: "sensors/critical"
+    |> rate: 10 per 1s on_excess: error
+    |> sink to sensors :: "alerts/critical"
+end
+

@@ -1,0 +1,46 @@
+/*
+ * Example 03 — Tumbling Window Aggregation
+ * ==========================================
+ * Collect messages over a fixed time window, then compute aggregates.
+ *
+ * CONCEPTS INTRODUCED:
+ *   - window: tumbling(duration)  — fixed, non-overlapping time windows
+ *   - aggregate                   — reduce a batch of messages to summary values
+ *   - Aggregation functions: avg, sum, min, max, count, stddev, first, last
+ *   - Duration units: ms, s, m, h, d
+ *
+ * WHAT IT DOES:
+ *   Every 30 seconds, collects all temperature messages received,
+ *   computes average/min/max/count, and publishes a single summary.
+ *
+ * TUMBLING vs SLIDING:
+ *   Tumbling: |---30s---|---30s---|---30s---|  (no overlap)
+ *   Sliding:  |---30s---|                      (overlapping, see example 04)
+ *                  |---30s---|
+ *
+ * INPUT:  {"sensor_id": "s1", "value": 22.5}  (many per window)
+ * OUTPUT: {"avg_temp": 23.1, "min_temp": 20.0, "max_temp": 26.5, "readings": 15, ...}
+ */
+
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline temperature_summary
+    source from local :: "sensors/+/temperature" qos: 1 format: json
+
+    // Collect messages for 30 seconds, then flush
+    |> window: tumbling(30 s)
+
+    // Compute summary statistics over the window
+    |> aggregate: {
+        avg_temp = avg(msg.value)       // arithmetic mean
+        min_temp = min(msg.value)       // lowest reading
+        max_temp = max(msg.value)       // highest reading
+        readings = count()              // number of messages (no field needed)
+    }
+
+    |> sink to local :: "analytics/temperature" qos: 1
+end
+
