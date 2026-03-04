@@ -1566,3 +1566,431 @@ time.sleep(5)
         assert 99 in values
         assert 30 not in values
         assert 10 not in values
+
+
+# ---------------------------------------------------------------------------
+# New stage integration tests (flatten, distinct, throttle, sample, retry,
+# multi-window) — all MQTT-based.
+# ---------------------------------------------------------------------------
+
+
+@mqtt_available
+class TestMQTTFlatten:
+    """Flatten stage: expand array field into individual messages."""
+
+    def test_flatten_expands_array(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline flat
+            source from b :: "{src_topic}"
+            |> flatten: msg.items
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "flat")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            # Each array element becomes a separate message
+            pub.publish({"sensor": "s1", "items": [{"x": 1}, {"x": 2}, {"x": 3}]})
+
+            deadline = time.time() + 5
+            while len(received) < 3 and time.time() < deadline:
+                time.sleep(0.1)
+
+            assert len(received) == 3, (
+                f"Expected 3 flattened messages, got {len(received)}: {received}"
+            )
+
+            x_values = sorted([m["x"] for m in received])
+            assert x_values == [1, 2, 3]
+
+            for m in received:
+                assert "_pipeline" in m
+                assert m["_pipeline"] == "flat"
+                assert "_timestamp" in m
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+    def test_flatten_non_array_passes_through(self):
+        """When field is not an array, message passes through unchanged."""
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline flat_pass
+            source from b :: "{src_topic}"
+            |> flatten: msg.items
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "flat_pass")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            # items is not an array — original message passes through
+            pub.publish({"sensor": "s1", "items": "not_an_array", "value": 42})
+
+            deadline = time.time() + 5
+            while len(received) < 1 and time.time() < deadline:
+                time.sleep(0.1)
+
+            assert len(received) == 1, (
+                f"Expected 1 passthrough message, got {len(received)}: {received}"
+            )
+            assert received[0]["value"] == 42
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+
+@mqtt_available
+class TestMQTTDistinct:
+    """Distinct stage: drop duplicate values by field within TTL."""
+
+    def test_distinct_drops_duplicates_within_ttl(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline dist
+            source from b :: "{src_topic}"
+            |> distinct: msg.sensor_id within 3 s
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "dist")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            pub.publish({"sensor_id": "A", "value": 1})  # passes (first A)
+            time.sleep(0.1)
+            pub.publish({"sensor_id": "A", "value": 2})  # dropped (duplicate A)
+            time.sleep(0.1)
+            pub.publish({"sensor_id": "B", "value": 3})  # passes (first B)
+            time.sleep(0.1)
+            pub.publish({"sensor_id": "C", "value": 4})  # passes (first C)
+
+            deadline = time.time() + 5
+            while len(received) < 3 and time.time() < deadline:
+                time.sleep(0.1)
+
+            time.sleep(1.0)  # extra wait to confirm no false positives
+
+            assert len(received) == 3, (
+                f"Expected 3 messages (distinct drops 1 duplicate), got {len(received)}: {received}"
+            )
+
+            ids = sorted([m["sensor_id"] for m in received])
+            assert ids == ["A", "B", "C"]
+
+            # The A message should have value 1 (the first one)
+            a_msg = [m for m in received if m["sensor_id"] == "A"][0]
+            assert a_msg["value"] == 1
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+
+@mqtt_available
+class TestMQTTThrottle:
+    """Throttle stage: token-bucket rate limiting."""
+
+    def test_throttle_limits_throughput(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline throttled
+            source from b :: "{src_topic}"
+            |> throttle: 2 per 1 s
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "throttled")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            # Send 10 messages rapidly — only ~2 should pass per second
+            for i in range(10):
+                pub.publish({"value": i})
+                time.sleep(0.02)
+
+            # Wait for messages to arrive
+            time.sleep(2.0)
+
+            # Token bucket starts with `limit` tokens, so first burst allows
+            # ~2 messages, then refills at 2/s. Over 2s total we'd expect ~4-6.
+            # Use wide tolerance for timing variability.
+            assert len(received) <= 8, (
+                f"Expected throttle to limit output, but got {len(received)} messages"
+            )
+            assert len(received) >= 1, (
+                f"Expected at least 1 message to pass throttle, got {len(received)}"
+            )
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+
+@mqtt_available
+class TestMQTTSample:
+    """Sample stage: probabilistic message filtering."""
+
+    def test_sample_filters_probabilistically(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline sampled
+            source from b :: "{src_topic}"
+            |> sample: 50%
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "sampled")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            # Send 200 messages to get statistically meaningful results
+            for i in range(200):
+                pub.publish({"value": i})
+                time.sleep(0.01)
+
+            # Wait for all messages to be processed
+            time.sleep(3.0)
+
+            # 50% sample with wide tolerance for randomness (20%-80% of 200)
+            assert len(received) >= 40, (
+                f"Sample 50%: expected at least 40/200 messages, got {len(received)}"
+            )
+            assert len(received) <= 160, (
+                f"Sample 50%: expected at most 160/200 messages, got {len(received)}"
+            )
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+
+@mqtt_available
+class TestMQTTRetryPolicy:
+    """Retry policy: verify config doesn't break normal operation."""
+
+    def test_retry_policy_normal_operation(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline retry_test
+            source from b :: "{src_topic}"
+            |> filter: msg.value > 10
+            |> sink to b :: "{snk_topic}"
+            retry: 3 with backoff 200 ms
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "retry_test")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            pub.publish({"value": 5})  # filtered out
+            pub.publish({"value": 25})  # passes
+            pub.publish({"value": 50})  # passes
+
+            deadline = time.time() + 5
+            while len(received) < 2 and time.time() < deadline:
+                time.sleep(0.1)
+
+            time.sleep(1.0)
+
+            assert len(received) == 2, (
+                f"Expected 2 messages with retry policy active, got {len(received)}: {received}"
+            )
+
+            values = sorted([m["value"] for m in received])
+            assert values == [25, 50]
+
+            for m in received:
+                assert m["_pipeline"] == "retry_test"
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
+
+
+@mqtt_available
+class TestMQTTMultiWindow:
+    """Named multi-window: two windows with different sizes produce separate outputs."""
+
+    def test_multi_window_produces_tagged_results(self):
+        uid = _uid()
+        src_topic = f"test/{uid}/in"
+        snk_topic = f"test/{uid}/out"
+
+        dsl = f"""
+        broker b
+            transport: mqtt
+            host: "{MQTT_HOST}"
+            port: 1883
+        end
+        pipeline multi_win
+            source from b :: "{src_topic}"
+            |> window fast: tumbling(1 s)
+            |> window slow: tumbling(3 s)
+            |> aggregate: {{
+                fast_n = count() over fast
+                slow_n = count() over slow
+            }}
+            |> sink to b :: "{snk_topic}"
+        end
+        """
+
+        pipeline, tmpdir = _generate_and_import(dsl, "multi_win")
+        pub, sub, received = _make_mqtt_pub_sub(src_topic, snk_topic)
+
+        try:
+            sub.run()
+            time.sleep(0.3)
+            pipeline.start()
+            time.sleep(0.3)
+            pub.run()
+            time.sleep(0.3)
+
+            # Send messages over ~2 seconds so fast window flushes at least once
+            for i in range(8):
+                pub.publish({"value": i})
+                time.sleep(0.2)
+
+            # Wait for both windows to flush (slow=3s + margin)
+            deadline = time.time() + 6
+            while len(received) < 2 and time.time() < deadline:
+                time.sleep(0.2)
+
+            assert len(received) >= 2, (
+                f"Expected at least 2 window results (fast + slow), got {len(received)}: {received}"
+            )
+
+            # Verify _window field is present and has expected values
+            window_names = set(m["_window"] for m in received)
+            assert "fast" in window_names, (
+                f"Expected 'fast' window results, got windows: {window_names}"
+            )
+
+            # Fast window results should have fast_n (count from fast window)
+            fast_results = [m for m in received if m["_window"] == "fast"]
+            assert len(fast_results) >= 1, "Expected at least 1 fast window result"
+            for r in fast_results:
+                assert "fast_n" in r, f"fast window result missing fast_n: {r}"
+                assert r["fast_n"] > 0
+
+            for m in received:
+                assert m["_pipeline"] == "multi_win"
+
+        finally:
+            pipeline.stop()
+            sub.stop()
+            pub.stop()
+            _cleanup_import(tmpdir)
