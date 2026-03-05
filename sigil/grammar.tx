@@ -26,11 +26,12 @@
  *   schema, strict, lenient,
  *   flatten, distinct, throttle, sample, overflow, buffer,
  *   retry, backoff, with, over,
- *   int, float, str, bool
+ *   int, float, str, bool,
+ *   func, match
  */
 
 Model:
-    (imports+=ImportDecl | brokers+=Broker | pipelines+=Pipeline | constants+=ConstDef | schemas+=SchemaDef)*
+    (imports+=ImportDecl | brokers+=Broker | pipelines+=Pipeline | constants+=ConstDef | schemas+=SchemaDef | functions+=FuncDef)*
 ;
 
 // ─── Imports ────────────────────────────────────────────────────────
@@ -45,6 +46,11 @@ ConstDef:
 
 ConstValue:
     FloatLiteral | IntLiteral | StringLiteral | BoolLiteral
+;
+
+// ─── User-defined functions ────────────────────────────────────────
+FuncDef:
+    'func' name=ID '(' (params+=ID[','])? ')' '=' body=Expression
 ;
 
 // ─── Broker connection ──────────────────────────────────────────────
@@ -71,12 +77,17 @@ Pipeline:
         (initially=InitiallyHook)?
         source=Source
         ('|>' join=JoinStage)?
+        (pipeline_lets+=PipelineLetBinding)*
         ('|>' stages+=AnnotatedStage)*
         ('|>' (sink=Sink | route=RouteBlock))?
         (on_error=OnErrorClause)?
         (retry=RetryPolicy)?
         (finally_=FinallyHook)?
     'end'
+;
+
+PipelineLetBinding:
+    'let' name=ID '=' value=Expression
 ;
 
 // ─── Stage annotations ─────────────────────────────────────────────
@@ -357,8 +368,8 @@ UnaryOp:
 ;
 
 Atom:
-    ParenExpr | CaseExpr | IfExpr | ForallExpr | ExistsExpr
-    | EnvRef | FuncCall | OldRef | ChangedRef
+    ParenExpr | CaseExpr | MatchExpr | IfExpr | ForallExpr | ExistsExpr
+    | EnvRef | FuncCall | OldRef | ChangedRef | UserFuncCall
     | FloatLiteral | IntLiteral | StringLiteral | BoolLiteral | FieldRef
 ;
 
@@ -372,6 +383,17 @@ IfExpr:
 
 CaseExpr:
     'case' '{' arms+=WhenArm ('else' '=>' elseExpr=Expression)? '}'
+;
+
+MatchExpr:
+    'match' subject=Expression '{'
+        arms+=MatchArm
+        ('else' '=>' elseExpr=Expression)?
+    '}'
+;
+
+MatchArm:
+    'case' pattern=Expression '=>' result=Expression
 ;
 
 WhenArm:
@@ -396,6 +418,10 @@ ForallExpr:
 
 ExistsExpr:
     'exists' '(' var=ID ('in' collection=FieldRef)? '=>' predicate=Expression ')'
+;
+
+UserFuncCall:
+    name=ID '(' args+=Expression[','] ')'
 ;
 
 FuncCall:

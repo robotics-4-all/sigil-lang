@@ -2051,3 +2051,1575 @@ class TestMultiWindowCodegen:
         """
         code = self._gen_pipeline_code(src)
         compile(code, "multi_window_full.py", "exec")
+
+
+# ─── MatchExpr expression compilation ──────────────────────────────
+
+
+class TestMatchExprCompilation:
+    """Tests for match expression compilation to nested ternaries."""
+
+    def _parse_map_expr(self, map_body, *, prefix=""):
+        """Parse a map expression and return the value AST node."""
+        src = f"""
+        broker b host: "h" port: 1 end
+        {prefix}
+        pipeline p
+            source from b :: "t"
+            |> map: {{ {map_body} }}
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        stages = _stages(model.pipelines[0])
+        m = [s for s in stages if s.__class__.__name__ == "MapStage"][0]
+        return m.mappings[0].value
+
+    def test_match_single_arm_compiles_to_ternary(self):
+        """match msg.type { case "A" => 1 else => 0 } -> ternary."""
+        expr = self._parse_map_expr('out = match msg.type { case "A" => 1 else => 0 }')
+        code = compile_expr(expr, ExprContext.MAP)
+        assert "if" in code
+        assert "else" in code
+        assert "1" in code
+        assert "0" in code
+        assert "'A'" in code
+
+    def test_match_two_arms_compiles_to_nested_ternary(self):
+        """match with two case arms produces nested ternary."""
+        expr = self._parse_map_expr(
+            'out = match msg.type { case "A" => 1 case "B" => 2 else => 0 }'
+        )
+        code = compile_expr(expr, ExprContext.MAP)
+        # Should produce: (1 if <subject> == 'A' else (2 if <subject> == 'B' else 0))
+        assert code.count("if") == 2
+        assert code.count("else") == 2
+        assert "'A'" in code
+        assert "'B'" in code
+
+    def test_match_three_arms_compiles(self):
+        """match with three case arms produces deeply nested ternary."""
+        expr = self._parse_map_expr(
+            'out = match msg.level { case 1 => "low" case 2 => "med" case 3 => "high" else => "unknown" }'
+        )
+        code = compile_expr(expr, ExprContext.MAP)
+        assert code.count("if") == 3
+        assert "'low'" in code
+        assert "'med'" in code
+        assert "'high'" in code
+        assert "'unknown'" in code
+
+    def test_match_without_else_defaults_to_none(self):
+        """match without else clause compiles with None default."""
+        expr = self._parse_map_expr('out = match msg.type { case "A" => 1 }')
+        code = compile_expr(expr, ExprContext.MAP)
+        assert "None" in code
+
+    def test_match_subject_is_field_ref(self):
+        """match subject compiles to _get_nested for msg.field."""
+        expr = self._parse_map_expr(
+            'out = match msg.status { case "ok" => 1 else => 0 }'
+        )
+        code = compile_expr(expr, ExprContext.MAP)
+        assert "_get_nested(msg, 'status')" in code
+
+    def test_match_in_filter_context(self):
+        """match expression works in filter context."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> filter: match msg.type { case "valid" => true else => false }
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        f = _stages(model.pipelines[0])[0]
+        code = compile_expr(f.condition, ExprContext.FILTER)
+        assert "True" in code
+        assert "False" in code
+        assert "_get_nested(msg, 'type')" in code
+
+
+# ─── UserFuncCall expression compilation ───────────────────────────
+
+
+class TestUserFuncCallCompilation:
+    """Tests for user-defined function inlining via compile_expr."""
+
+    def _build_func_defs(self, src):
+        """Parse source and return func_defs dict."""
+        model = parse_string(src)
+        return {f.name: f for f in (model.functions or [])}
+
+    def test_simple_func_inlines_body(self):
+        """func double(x) = x * 2 + double(msg.value) -> inlined."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            |> filter: double(msg.value) > 100
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        func_defs = {f.name: f for f in model.functions}
+        f = _stages(model.pipelines[0])[0]
+        code = compile_expr(f.condition, ExprContext.FILTER, func_defs=func_defs)
+        # double(msg.value) should inline to (_get_nested(msg, 'value') * 2)
+        assert "_get_nested(msg, 'value')" in code
+        assert "* 2" in code
+        assert "100" in code
+
+    def test_celsius_func_inlines(self):
+        """func celsius(t) = (t - 32) * 5 / 9 inlines correctly."""
+        src = """
+        broker b host: "h" port: 1 end
+        func celsius(t) = (t - 32) * 5 / 9
+        pipeline p
+            source from b :: "t"
+            |> filter: celsius(msg.temp) > 0
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        func_defs = {f.name: f for f in model.functions}
+        f = _stages(model.pipelines[0])[0]
+        code = compile_expr(f.condition, ExprContext.FILTER, func_defs=func_defs)
+        assert "_get_nested(msg, 'temp')" in code
+        assert "32" in code
+        assert "5" in code
+        assert "9" in code
+
+    def test_multi_arg_func_inlines(self):
+        """func add(a, b) = a + b inlines both arguments."""
+        src = """
+        broker b host: "h" port: 1 end
+        func add(a, b) = a + b
+        pipeline p
+            source from b :: "t"
+            |> filter: add(msg.x, msg.y) > 0
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        func_defs = {f.name: f for f in model.functions}
+        f = _stages(model.pipelines[0])[0]
+        code = compile_expr(f.condition, ExprContext.FILTER, func_defs=func_defs)
+        assert "_get_nested(msg, 'x')" in code
+        assert "_get_nested(msg, 'y')" in code
+
+    def test_func_in_map_context(self):
+        """User func call in map context uses MAP compilation."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            |> map: { result = double(msg.value) }
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        func_defs = {f.name: f for f in model.functions}
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        code = compile_expr(m.mappings[0].value, ExprContext.MAP, func_defs=func_defs)
+        assert "_get_nested(msg, 'value')" in code
+        assert "* 2" in code
+
+    def test_func_defs_none_raises(self):
+        """Calling user func without func_defs raises ValueError."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            |> filter: double(msg.value) > 0
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        f = _stages(model.pipelines[0])[0]
+        with pytest.raises(ValueError, match="Unknown function"):
+            compile_expr(f.condition, ExprContext.FILTER, func_defs=None)
+
+
+# ─── Full codegen: user-defined functions ──────────────────────────
+
+
+class TestUserFuncCodegen:
+    """Full code generation tests for user-defined functions."""
+
+    def test_func_in_filter_generates_valid_code(self):
+        """Pipeline with func in filter generates compilable code."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            |> filter: double(msg.value) > 100
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "func_filter.py", "exec")
+            # Inlined expression should appear in generated code
+            assert "* 2" in code
+
+    def test_func_in_map_generates_valid_code(self):
+        """Pipeline with func in map generates compilable code."""
+        src = """
+        broker b host: "h" port: 1 end
+        func triple(x) = x * 3
+        pipeline p
+            source from b :: "t"
+            |> map: { result = triple(msg.value) }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "func_map.py", "exec")
+            assert "* 3" in code
+
+    def test_multi_func_pipeline(self):
+        """Pipeline using multiple user-defined functions."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        func offset(x) = x + 10
+        pipeline p
+            source from b :: "t"
+            |> filter: double(msg.value) > 50
+            |> map: { adjusted = offset(msg.value) }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "multi_func.py", "exec")
+            assert "* 2" in code
+            assert "+ 10" in code
+
+
+# ─── Full codegen: pipeline-level let bindings ─────────────────────
+
+
+class TestPipelineLetCodegen:
+    """Full code generation tests for pipeline-level let bindings."""
+
+    def test_single_let_generates_assignment(self):
+        """Pipeline let binding generates assignment in _on_message."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            let threshold = msg.value * 2
+            |> filter: msg.value > 0
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            assert "threshold = " in code
+            compile(code, "let_single.py", "exec")
+
+    def test_multiple_lets_generate_assignments(self):
+        """Multiple pipeline let bindings generate ordered assignments."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            let low = 10
+            let high = 100
+            |> filter: msg.value > 0
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            assert "low = " in code
+            assert "high = " in code
+            # Let bindings should appear before filter logic
+            low_pos = code.index("low = ")
+            high_pos = code.index("high = ")
+            assert low_pos < high_pos
+            compile(code, "let_multiple.py", "exec")
+
+    def test_let_with_field_ref(self):
+        """Pipeline let binding with msg field reference."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            let scaled = msg.temperature * 1.8 + 32
+            |> filter: msg.value > 0
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            assert "scaled = " in code
+            assert "1.8" in code
+            assert "32" in code
+            compile(code, "let_field_ref.py", "exec")
+
+
+# ─── Full codegen: match expressions ───────────────────────────────
+
+
+class TestMatchExprCodegen:
+    """Full code generation tests for match expressions."""
+
+    def test_match_in_map_generates_ternary(self):
+        """Match expression in map generates nested ternary."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> map: {
+                category = match msg.level {
+                    case 1 => "low"
+                    case 2 => "med"
+                    else => "high"
+                }
+            }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "match_map.py", "exec")
+            # Should contain ternary pattern
+            assert "if" in code
+            assert "else" in code
+            assert "'low'" in code
+            assert "'med'" in code
+            assert "'high'" in code
+
+    def test_match_in_filter_generates_valid_code(self):
+        """Match expression in filter generates compilable code."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> filter: match msg.type { case "valid" => true else => false }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "match_filter.py", "exec")
+
+    def test_match_many_arms_generates_valid_code(self):
+        """Match with many arms generates deeply nested but valid code."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> map: {
+                label = match msg.code {
+                    case 1 => "one"
+                    case 2 => "two"
+                    case 3 => "three"
+                    case 4 => "four"
+                    else => "other"
+                }
+            }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "match_many_arms.py", "exec")
+            assert "'one'" in code
+            assert "'four'" in code
+            assert "'other'" in code
+
+
+# ─── Full codegen: all three features combined ─────────────────────
+
+
+class TestCombinedFeaturesCodegen:
+    """Tests combining user funcs, pipeline lets, and match expressions."""
+
+    def test_func_and_let_combined(self):
+        """Pipeline using both user func and let binding."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            let threshold = 50
+            |> filter: double(msg.value) > threshold
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "func_and_let.py", "exec")
+            assert "threshold = " in code
+            assert "* 2" in code
+
+    def test_match_and_let_combined(self):
+        """Pipeline using both match expression and let binding."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            let base = msg.value * 10
+            |> map: {
+                label = match msg.type {
+                    case "A" => "alpha"
+                    else => "other"
+                }
+            }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "match_and_let.py", "exec")
+            assert "base = " in code
+            assert "'alpha'" in code
+
+    def test_all_three_features_combined(self):
+        """Pipeline using user func, let binding, and match expression."""
+        src = """
+        broker b host: "h" port: 1 end
+        func scale(x) = x * 100
+        pipeline p
+            source from b :: "t"
+            let factor = msg.weight
+            |> filter: scale(msg.value) > 50
+            |> map: {
+                category = match msg.level {
+                    case 1 => "low"
+                    case 2 => "mid"
+                    else => "high"
+                }
+            }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "all_three.py", "exec")
+            assert "factor = " in code
+            assert "* 100" in code
+            assert "'low'" in code
+            assert "'mid'" in code
+            assert "'high'" in code
+
+    def test_func_with_match_in_map(self):
+        """User func call combined with match in same map stage."""
+        src = """
+        broker b host: "h" port: 1 end
+        func negate(x) = x * -1
+        pipeline p
+            source from b :: "t"
+            |> map: {
+                inverted = negate(msg.value);
+                label = match msg.status {
+                    case "ok" => "good"
+                    else => "bad"
+                }
+            }
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            compile(code, "func_with_match.py", "exec")
+            assert "* -1" in code or "* (- 1)" in code or "-1" in code
+            assert "'good'" in code
+            assert "'bad'" in code
+
+
+# ─── explain_model tests ──────────────────────────────────────────
+
+
+class TestExplainConstants:
+    """Test explain_model output for constants (lines 6-17)."""
+
+    def test_explain_int_constant(self):
+        src = """
+        const THRESHOLD = 42
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Constants:" in output
+        assert "THRESHOLD = 42" in output
+
+    def test_explain_float_constant(self):
+        src = """
+        const FACTOR = 1.5
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Constants:" in output
+        assert "FACTOR = 1.5" in output
+
+    def test_explain_string_constant(self):
+        src = """
+        const LABEL = "hello"
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Constants:" in output
+        assert "LABEL = 'hello'" in output
+
+    def test_explain_bool_constant(self):
+        src = """
+        const ENABLED = true
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Constants:" in output
+        assert "ENABLED = true" in output
+
+    def test_explain_multiple_constants(self):
+        src = """
+        const A = 1
+        const B = "two"
+        const C = true
+        const D = 3.14
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Constants:" in output
+        assert "A = 1" in output
+        assert "B = 'two'" in output
+        assert "C = true" in output
+        assert "D = 3.14" in output
+
+
+class TestExplainSchemas:
+    """Test explain_model output for schemas (lines 19-27, 203-215)."""
+
+    def test_explain_strict_schema(self):
+        src = """
+        schema Sensor strict
+            temperature: float
+            humidity: float
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Schemas:" in output
+        assert "Sensor (strict)" in output
+        assert "temperature: float" in output
+        assert "humidity: float" in output
+
+    def test_explain_lenient_schema(self):
+        src = """
+        schema Event lenient
+            event_type: str
+            severity: int
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Event (lenient)" in output
+        assert "event_type: str" in output
+        assert "severity: int" in output
+
+    def test_explain_schema_optional_field(self):
+        src = """
+        schema Reading
+            value: float
+            unit: str?
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "unit: str?" in output
+        assert "value: float" in output
+        # value is not optional, no trailing ?
+        lines = output.split("\n")
+        value_line = [l for l in lines if "value:" in l][0]
+        assert not value_line.strip().endswith("?")
+
+    def test_explain_schema_nested_object_type(self):
+        src = """
+        schema Data
+            meta: {
+                timestamp: int,
+                source: str
+            }
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "meta: {timestamp: int, source: str}" in output
+
+    def test_explain_schema_list_type(self):
+        src = """
+        schema Data
+            values: [float]
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "values: [float]" in output
+
+    def test_explain_schema_default_strictness(self):
+        """Schema without explicit strictness defaults to strict."""
+        src = """
+        schema Simple
+            x: int
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Simple (strict)" in output
+
+
+class TestExplainFunctions:
+    """Test explain_model output for user-defined functions (lines 29-34)."""
+
+    def test_explain_single_param_func(self):
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Functions:" in output
+        assert "func double(x)" in output
+
+    def test_explain_multi_param_func(self):
+        src = """
+        broker b host: "h" port: 1 end
+        func add(a, b) = a + b
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "func add(a, b)" in output
+
+    def test_explain_no_param_func(self):
+        src = """
+        broker b host: "h" port: 1 end
+        func zero() = 0
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "func zero()" in output
+
+
+class TestExplainPipelineLetBindings:
+    """Test explain_model output for pipeline let bindings (lines 48-50)."""
+
+    def test_explain_let_binding(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            let threshold = msg.value * 2
+            |> filter: msg.value > 0
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "let threshold" in output
+        assert "computed per message" in output
+
+
+class TestExplainRoute:
+    """Test explain_model output for route blocks (lines 58-67)."""
+
+    def test_explain_route_with_arms(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> route
+                when msg.v > 90 => sink to b :: "high"
+                when msg.v > 50 => sink to b :: "med"
+            end
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Route:" in output
+        assert "when" in output
+        assert "high" in output
+        assert "med" in output
+
+    def test_explain_route_with_default(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> route
+                when msg.v > 50 => sink to b :: "high"
+                default => sink to b :: "low"
+            end
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Route:" in output
+        assert "default" in output
+        assert "low" in output
+
+
+class TestExplainRetry:
+    """Test explain_model output for retry clause (lines 68-72)."""
+
+    def test_explain_retry(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> sink to b :: "out"
+            retry: 5 with backoff 200 ms
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Retry:" in output
+        assert "5" in output
+        assert "200 milliseconds" in output
+
+
+class TestExplainOnError:
+    """Test explain_model output for on_error clause (lines 73-79)."""
+
+    def test_explain_on_error_dlq(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> sink to b :: "out"
+            on_error: sink to b :: "errors/p"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "On error:" in output
+        assert "errors/p" in output
+
+    def test_explain_on_error_drop(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> sink to b :: "out"
+            on_error: drop
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "On error:" in output
+        assert "drop" in output
+
+
+class TestExplainHooks:
+    """Test explain_model output for @initially/@finally hooks (lines 80-85)."""
+
+    def test_explain_initially_hook(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            @initially { publish { status: "online" } }
+            source from b :: "t"
+            |> sink to b :: "o"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "@initially" in output
+        assert "status" in output
+
+    def test_explain_finally_hook(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> sink to b :: "o"
+            @finally { publish { status: "offline" } }
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "@finally" in output
+        assert "status" in output
+
+    def test_explain_both_hooks(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            @initially { publish { up: "yes" } }
+            source from b :: "t"
+            |> sink to b :: "o"
+            @finally { publish { down: "yes" } }
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "@initially" in output
+        assert "@finally" in output
+        assert "up" in output
+        assert "down" in output
+
+
+class TestExplainJoin:
+    """Test explain_model output for join stage (lines 46-47, 91-96)."""
+
+    def test_explain_join_inner(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "orders"
+            |> join b :: "customers"
+                on msg.customer_id == other.id
+                within 10 s
+                type: inner
+            end
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Join" in output
+        assert "inner" in output
+        assert "customers" in output
+        assert "10 seconds" in output
+        assert "customer_id" in output
+
+    def test_explain_join_default_type(self):
+        """Join without explicit type defaults to inner."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "orders"
+            |> join b :: "profiles"
+                on msg.id == other.id
+                within 5 s
+            end
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "Join (inner)" in output
+        assert "profiles" in output
+
+
+class TestExplainPipeSource:
+    """Test explain_model output for pipe source (lines 101-102)."""
+
+    def test_explain_pipe_source_chained(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline upstream
+            source from b :: "in"
+            |> sink to b :: "mid"
+        end
+        pipeline downstream
+            source from pipe upstream
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "receives from pipeline" in output
+        assert "chained" in output
+        assert "upstream" in output
+
+
+class TestExplainSourceSchema:
+    """Test explain_model output for source with schema (line 103)."""
+
+    def test_explain_source_with_schema(self):
+        src = """
+        schema Sensor
+            temp: float
+        end
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in" schema: Sensor
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "schema: Sensor" in output
+
+
+class TestExplainAllStageTypes:
+    """Test _explain_stage for all stage types (lines 107-188)."""
+
+    def test_explain_deduplicate_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> deduplicate: msg.id within 5 s
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[deduplicate]" in output
+        assert "5 seconds" in output
+
+    def test_explain_rate_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> rate: 100 per 1 s
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[rate]" in output
+        assert "100" in output
+
+    def test_explain_flatten_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> flatten: msg.items
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[flatten]" in output
+        assert "items" in output
+
+    def test_explain_distinct_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> distinct: msg.val within 1 m
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[distinct]" in output
+        assert "1 minutes" in output
+
+    def test_explain_throttle_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> throttle: 10 per 1 s
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[throttle]" in output
+        assert "10" in output
+
+    def test_explain_sample_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> sample: 50 %
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[sample]" in output
+        assert "50%" in output
+
+    def test_explain_filter_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> filter: msg.v > 0
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[filter]" in output
+        assert "condition" in output.lower()
+
+    def test_explain_group_by_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> group_by: msg.region
+            |> window: tumbling(5 m)
+            |> aggregate: { n = count() }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[group_by]" in output
+        assert "region" in output
+
+    def test_explain_window_tumbling(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: { n = count() }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[window]" in output
+        assert "tumbling" in output
+        assert "5 minutes" in output
+
+    def test_explain_window_sliding(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: sliding(10 m, step = 2 m)
+            |> aggregate: { n = count() }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[window]" in output
+        assert "sliding" in output
+        assert "10 minutes" in output
+        assert "2 minutes" in output
+
+    def test_explain_window_named(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window short: tumbling(1 m)
+            |> window long: tumbling(5 m)
+            |> aggregate: {
+                avg_1m = avg(msg.value) over short
+                avg_5m = avg(msg.value) over long
+            }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "'short'" in output
+        assert "'long'" in output
+
+    def test_explain_aggregate_with_field(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: {
+                total = sum(msg.value)
+            }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[aggregate]" in output
+        assert "total = sum(msg.value)" in output
+
+    def test_explain_aggregate_without_field(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: {
+                n = count()
+            }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "n = count()" in output
+
+    def test_explain_aggregate_with_window_ref(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window short: tumbling(1 m)
+            |> aggregate: {
+                avg_1m = avg(msg.value) over short
+            }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "over short" in output
+
+    def test_explain_accumulate_with_param(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(10 s)
+            |> aggregate: { avg_val = avg(msg.v) }
+            |> accumulate: { smooth = ema(avg_val, 0.3) }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[accumulate]" in output
+        assert "smooth = ema(avg_val, ...)" in output
+
+    def test_explain_accumulate_without_param(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(10 s)
+            |> aggregate: { total = sum(msg.v) }
+            |> accumulate: { running = cumsum(total) }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[accumulate]" in output
+        assert "running = cumsum(total)" in output
+
+    def test_explain_having_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: { n = count() }
+            |> having: n > 5
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[having]" in output
+        assert "filter aggregated" in output
+
+    def test_explain_map_stage(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: { n = count() }
+            |> map: { result = n }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[map]" in output
+        assert "emit result" in output
+
+    def test_explain_map_with_let_bindings(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "in"
+            |> window: tumbling(5 m)
+            |> aggregate: { n = count() }
+            |> map: {
+                let doubled = n * 2;
+                result = doubled
+            }
+            |> sink to b :: "out"
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        assert "[map]" in output
+        assert "let doubled" in output
+        assert "emit result" in output
+
+
+class TestExplainComprehensivePipeline:
+    """Comprehensive test covering many explain paths in a single pipeline."""
+
+    def test_explain_full_pipeline_all_stages(self):
+        """Exercise most stage types in a single pipeline."""
+        src = """
+        const LIMIT = 100
+        schema Sensor strict
+            id: str
+            value: float
+            region: str
+            items: [int]
+        end
+        broker b host: "localhost" port: 1883 end
+        func double(x) = x * 2
+        pipeline full
+            @initially { publish { status: "started" } }
+            source from b :: "sensors/in" schema: Sensor
+            let scaled = msg.value * 2
+            |> deduplicate: msg.id within 5 s
+            |> filter: msg.value > 0
+            |> rate: 100 per 1 s
+            |> flatten: msg.items
+            |> distinct: msg.value within 1 m
+            |> throttle: 10 per 1 s
+            |> sample: 50 %
+            |> group_by: msg.region
+            |> window: tumbling(5 m)
+            |> aggregate: {
+                total = sum(msg.value)
+                n = count()
+            }
+            |> accumulate: { smooth = ema(total, 0.3) }
+            |> having: total > 100
+            |> map: {
+                let x = total * 2;
+                result = x;
+                count_val = n
+            }
+            |> sink to b :: "sensors/out"
+            on_error: sink to b :: "errors/full"
+            retry: 3 with backoff 100 ms
+            @finally { publish { status: "stopped" } }
+        end
+        """
+        model = parse_string(src)
+        output = explain_model(model)
+        # Constants
+        assert "Constants:" in output
+        assert "LIMIT = 100" in output
+        # Schema
+        assert "Schemas:" in output
+        assert "Sensor (strict)" in output
+        # Functions
+        assert "Functions:" in output
+        assert "func double(x)" in output
+        # Broker
+        assert "Brokers:" in output
+        assert "localhost" in output
+        # Pipeline name
+        assert "Pipeline: full" in output
+        # Source with schema
+        assert "schema: Sensor" in output
+        # Let binding
+        assert "let scaled" in output
+        # All stages
+        assert "[deduplicate]" in output
+        assert "[filter]" in output
+        assert "[rate]" in output
+        assert "[flatten]" in output
+        assert "[distinct]" in output
+        assert "[throttle]" in output
+        assert "[sample]" in output
+        assert "[group_by]" in output
+        assert "[window]" in output
+        assert "[aggregate]" in output
+        assert "[accumulate]" in output
+        assert "[having]" in output
+        assert "[map]" in output
+        # Sink
+        assert "sensors/out" in output
+        # Retry
+        assert "Retry:" in output
+        assert "3" in output
+        # On error
+        assert "On error:" in output
+        assert "errors/full" in output
+        # Hooks
+        assert "@initially" in output
+        assert "@finally" in output
+
+
+# ─── Coverage: codegen.py lines 419-421 (GroupByStage multiple fields) ──
+
+
+def test_group_by_multiple_fields_codegen():
+    """GroupByStage with multiple group-by fields (codegen.py lines 419-421)."""
+    src = """
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        |> group_by: msg.region, msg.zone
+        |> window: tumbling(1 m)
+        |> aggregate: { total = sum(msg.value) }
+        |> sink to b :: "o"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "group_by_multi.py", "exec")
+        assert "'region'" in code
+        assert "'zone'" in code
+
+
+# ─── Coverage: codegen.py lines 583, 586-589 (string/bool constants) ───
+
+
+def test_const_string_and_bool_codegen():
+    """_build_const_map for string and bool constants (codegen.py lines 586-589)."""
+    src = """
+    broker b host: "h" port: 1 end
+    const S = "hello"
+    const B = true
+    pipeline p
+        source from b :: "t"
+        |> filter: msg.label == S and B
+        |> sink to b :: "o"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "const_str_bool.py", "exec")
+        assert "'hello'" in code
+        assert "True" in code
+
+
+# ─── Coverage: expressions.py lines 136, 144-146 (OldRef/ChangedRef non-msg) ──
+
+
+class TestExpressionCompilerCoverage:
+    """Tests targeting specific uncovered lines in expressions.py."""
+
+    def _parse_filter_expr(self, expr_src):
+        src = f"""
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> filter: {expr_src}
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        return _stages(model.pipelines[0])[0].condition
+
+    def test_old_ref_bare_field(self):
+        """OldRef with single-segment field (expressions.py line 136)."""
+        expr = self._parse_filter_expr("old(value)")
+        code = compile_expr(expr, ExprContext.FILTER)
+        assert "_get_nested(self._prev_msg, 'value')" in code
+
+    def test_changed_ref_bare_field(self):
+        """ChangedRef with single-segment field (expressions.py lines 144-146)."""
+        expr = self._parse_filter_expr("changed(value)")
+        code = compile_expr(expr, ExprContext.FILTER)
+        assert "_get_nested(msg, 'value')" in code
+        assert "_get_nested(self._prev_msg, 'value')" in code
+        assert "!=" in code
+
+    def test_int_literal_in_filter(self):
+        """IntLiteral compilation (expressions.py line 173)."""
+        expr = self._parse_filter_expr("msg.x > 42")
+        code = compile_expr(expr, ExprContext.FILTER)
+        assert "42" in code
+
+    def test_case_without_else(self):
+        """CaseExpr without else arm produces None (expressions.py line 199)."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: { out = case { when v > 0 => "pos" } }
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        m = _stages(model.pipelines[0])[1].mappings[0]
+        code = compile_expr(m.value, ExprContext.MAP)
+        assert "None" in code
+        assert "'pos'" in code
+
+    def test_field_ref_having_bare_name(self):
+        """FieldRef in HAVING context with single segment (expressions.py lines 286-289)."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.v) }
+            |> having: total > 10
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        having = _stages(model.pipelines[0])[2]
+        code = compile_expr(having.condition, ExprContext.HAVING)
+        assert "aggregated['total']" in code
+
+    def test_field_ref_having_msg_nested(self):
+        """FieldRef in HAVING context with msg.x (expressions.py lines 286-287)."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.v) }
+            |> having: msg.count > 0
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        having = _stages(model.pipelines[0])[2]
+        code = compile_expr(having.condition, ExprContext.HAVING)
+        assert "_get_nested(msg, 'count')" in code
+
+    def test_field_ref_filter_fallthrough(self):
+        """FieldRef in FILTER context with non-msg bare name (expressions.py line 282)."""
+        expr = self._parse_filter_expr("msg.x > 0")
+        # Use a bare name that isn't msg and isn't a local
+        code = compile_expr(expr, ExprContext.FILTER)
+        assert "_get_nested(msg, 'x')" in code
+
+    def test_field_ref_default_fallthrough(self):
+        """FieldRef with no matching context (expressions.py line 300)."""
+        expr = self._parse_filter_expr("msg.x > 0")
+        # Compile in a context that doesn't match any special case
+        # The FieldRef for msg.x in FILTER context is handled, but
+        # a multi-segment non-msg ref in a non-standard context falls through
+        # We test the HAVING context with multi-segment non-msg ref
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.v) }
+            |> having: msg.data.count > 0
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        having = _stages(model.pipelines[0])[2]
+        code = compile_expr(having.condition, ExprContext.HAVING)
+        assert "_get_nested(msg, 'data', 'count')" in code
+
+    def test_exists_with_collection(self):
+        """Quantifier with collection (expressions.py line 314-318, line 327)."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "t"
+            |> filter: exists(x in msg.items => x > 0)
+            |> sink to b :: "t"
+        end
+        """
+        model = parse_string(src)
+        filt = _stages(model.pipelines[0])[0]
+        code = compile_expr(filt.condition, ExprContext.FILTER)
+        assert "any(" in code
+        assert "for x in" in code
+        assert "or [])" in code

@@ -2400,3 +2400,657 @@ class TestMultiWindowSemantics:
         """
         errs = _errors(src)
         assert any("undefined window" in str(e) for e in errs)
+
+
+# ─── User-defined function validation (_check_func_defs) ────────────
+
+
+class TestFuncDefsSemantics:
+    def test_valid_func_def_no_errors(self):
+        src = """
+        func double(x) = x * 2
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: double(msg.value) > 10
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_valid_func_def_multiple_params_no_errors(self):
+        src = """
+        func add(a, b) = a + b
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: add(msg.x, msg.y) > 0
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_duplicate_func_name_error(self):
+        src = """
+        func double(x) = x * 2
+        func double(y) = y * 3
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("Duplicate function name" in str(e) for e in errs)
+
+    def test_func_shadows_builtin_abs_error(self):
+        src = """
+        func abs(x) = x
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("shadows a built-in" in str(e) for e in errs)
+
+    def test_func_shadows_builtin_round_error(self):
+        src = """
+        func round(x) = x
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("shadows a built-in" in str(e) for e in errs)
+
+    def test_func_shadows_builtin_len_error(self):
+        src = """
+        func len(x) = x
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("shadows a built-in" in str(e) for e in errs)
+
+    def test_func_shadows_builtin_fmt_error(self):
+        src = """
+        func fmt(x) = x
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("shadows a built-in" in str(e) for e in errs)
+
+    def test_func_duplicate_parameter_error(self):
+        src = """
+        func bad(a, a) = a * 2
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("duplicate parameter" in str(e) for e in errs)
+
+    def test_func_duplicate_parameter_three_params_error(self):
+        src = """
+        func bad(x, y, x) = x + y
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("duplicate parameter" in str(e) for e in errs)
+
+    def test_func_single_param_no_errors(self):
+        src = """
+        func negate(x) = 0 - x
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: negate(msg.value) > 0
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+
+# ─── Pipeline-level let binding validation (_check_pipeline_let_bindings) ────
+
+
+class TestPipelineLetBindingsSemantics:
+    def test_valid_pipeline_let_no_errors(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let threshold = 42
+            |> filter: msg.value > threshold
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_valid_pipeline_let_multiple_no_errors(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let low = 10
+            let high = 100
+            |> filter: msg.value > low and msg.value < high
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_duplicate_pipeline_let_error(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let threshold = 42
+            let threshold = 99
+            |> filter: msg.value > threshold
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("duplicate pipeline let-binding" in str(e) for e in errs)
+
+    def test_pipeline_let_shadows_constant_error(self):
+        src = """
+        const LIMIT = 50
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let LIMIT = 99
+            |> filter: msg.value > LIMIT
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("shadows a constant" in str(e) for e in errs)
+
+    def test_pipeline_let_does_not_shadow_different_constant(self):
+        src = """
+        const LIMIT = 50
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let threshold = 42
+            |> filter: msg.value > threshold
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+
+# ─── Match expression validation (_check_match_exprs) ────────────────
+
+
+class TestMatchExprsSemantics:
+    def test_valid_match_with_else_no_errors(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: {
+                label = match total {
+                    case 0 => "zero"
+                    case 1 => "one"
+                    else => "many"
+                }
+            }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        hard = [e for e in errs if e.severity == "error"]
+        assert hard == []
+
+    def test_match_without_else_warning(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: {
+                label = match total {
+                    case 0 => "zero"
+                    case 1 => "one"
+                }
+            }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        warnings = [e for e in errs if e.severity == "warning"]
+        assert any("without 'else' arm" in str(w) for w in warnings)
+
+    def test_match_in_filter_without_else_warning(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: match msg.status {
+                case "active" => true
+                case "pending" => true
+            } == true
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        warnings = [e for e in errs if e.severity == "warning"]
+        assert any("without 'else' arm" in str(w) for w in warnings)
+
+    def test_match_with_else_no_warning(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: match msg.status {
+                case "active" => true
+                else => false
+            } == true
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        warnings = [e for e in errs if e.severity == "warning"]
+        match_warnings = [w for w in warnings if "match" in str(w).lower()]
+        assert match_warnings == []
+
+
+# ─── User function call validation (_check_user_func_calls) ─────────
+
+
+class TestUserFuncCallsSemantics:
+    def test_valid_call_to_defined_func_no_errors(self):
+        src = """
+        func double(x) = x * 2
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: double(msg.value) > 10
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_call_to_undefined_func_error(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> filter: unknown(msg.value) > 10
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("undefined function" in str(e) for e in errs)
+
+    def test_call_to_undefined_func_in_map_error(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: { result = transform(total) }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("undefined function" in str(e) for e in errs)
+
+    def test_call_defined_func_in_map_no_errors(self):
+        src = """
+        func scale(x) = x * 100
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: { result = scale(total) }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+    def test_call_to_undefined_func_in_pipeline_let_error(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let val = missing_fn(42)
+            |> filter: msg.value > val
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any("undefined function" in str(e) for e in errs)
+
+    def test_call_defined_func_in_pipeline_let_no_errors(self):
+        src = """
+        func double(x) = x * 2
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let val = double(21)
+            |> filter: msg.value > val
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert errs == []
+
+
+# ─── Pipeline lets visible in map/having references ─────────────────
+
+
+class TestPipelineLetsInReferences:
+    def test_pipeline_let_visible_in_map(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let factor = 10
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: { result = total * factor }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        hard = [e for e in errs if e.severity == "error"]
+        assert hard == []
+
+    def test_pipeline_let_visible_in_having(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let min_total = 100
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> having: total > min_total
+            |> map: { result = total }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        hard = [e for e in errs if e.severity == "error"]
+        assert hard == []
+
+    def test_pipeline_let_not_confused_with_undefined_in_map(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let ratio = 0
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: { result = ratio }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        # ratio is a pipeline let, should NOT produce "undefined aggregation"
+        assert not any(
+            "undefined aggregation" in str(e) and "ratio" in str(e) for e in errs
+        )
+
+    def test_pipeline_let_not_confused_with_undefined_in_having(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let limit = 50
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> having: total > limit
+            |> map: { result = total }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        # limit is a pipeline let, should NOT produce "undefined aggregation"
+        assert not any(
+            "undefined aggregation" in str(e) and "limit" in str(e) for e in errs
+        )
+
+    def test_undefined_ref_in_map_still_caught(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let factor = 10
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> map: { result = nonexistent }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any(
+            "undefined aggregation" in str(e) and "nonexistent" in str(e) for e in errs
+        )
+
+    def test_undefined_ref_in_having_still_caught(self):
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "x"
+            let factor = 10
+            |> window: tumbling(1 m)
+            |> aggregate: { total = sum(msg.value) }
+            |> having: nonexistent > 0
+            |> map: { result = total }
+            |> sink to b :: "y"
+        end
+        """
+        errs = _errors(src)
+        assert any(
+            "undefined aggregation" in str(e) and "nonexistent" in str(e) for e in errs
+        )
+
+
+# ─── Coverage: semantics.py lines 334-339 (ForallExpr/ExistsExpr in map) ──
+
+
+def test_map_with_forall_expr():
+    """_check_map_expr_refs with ForallExpr in map (semantics.py lines 333-339)."""
+    src = """
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        |> window: tumbling(1 m)
+        |> aggregate: { total = sum(msg.v) }
+        |> map: { all_positive = forall(x => x > 0) }
+        |> sink to b :: "o"
+    end
+    """
+    errs = _errors(src)
+    # forall with quantifier var should not produce false-positive errors
+    # about undefined aggregation for the quantifier variable
+    undef_errs = [
+        e for e in errs if "undefined aggregation" in str(e) and "'x'" in str(e)
+    ]
+    assert undef_errs == []
+
+
+def test_map_with_exists_collection():
+    """_check_map_expr_refs with ExistsExpr + collection in map (semantics.py line 338)."""
+    src = """
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        |> map: { has_big = exists(x in msg.items => x > 100) }
+        |> sink to b :: "o"
+    end
+    """
+    errs = _errors(src)
+    undef_errs = [
+        e for e in errs if "undefined aggregation" in str(e) and "'x'" in str(e)
+    ]
+    assert undef_errs == []
+
+
+# ─── Coverage: semantics.py lines 836-841 (ForallExpr/ExistsExpr in having) ──
+
+
+def test_having_with_exists_collection():
+    """_check_having_expr_refs with ExistsExpr + collection (semantics.py lines 836-841)."""
+    src = """
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        |> window: tumbling(1 m)
+        |> aggregate: { total = sum(msg.v) }
+        |> having: exists(x in msg.tags => x > 0)
+        |> map: { result = total }
+        |> sink to b :: "o"
+    end
+    """
+    errs = _errors(src)
+    undef_errs = [
+        e for e in errs if "undefined aggregation" in str(e) and "'x'" in str(e)
+    ]
+    assert undef_errs == []
+
+
+def test_having_with_pipeline_let():
+    """_check_having_references with pipeline lets available (semantics.py line 808-810)."""
+    src = """
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        let threshold = 50
+        |> window: tumbling(1 m)
+        |> aggregate: { total = sum(msg.v) }
+        |> having: total > threshold
+        |> map: { result = total }
+        |> sink to b :: "o"
+    end
+    """
+    errs = _errors(src)
+    undef_errs = [e for e in errs if "undefined aggregation" in str(e)]
+    assert undef_errs == []
+
+
+# ─── Coverage: semantics.py lines 1776-1780 (_schema_type_name object/list) ──
+
+
+def test_schema_object_field_type_name():
+    """_schema_type_name for SchemaObjectType (semantics.py lines 1776-1777)."""
+    src = """
+    schema Reading
+        value: float
+        meta: {
+            source: str,
+            quality: int
+        }
+    end
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "in" schema: Reading
+        |> filter: msg.meta.source == "sensor"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    schema_errs = [e for e in errs if "not found in schema" in str(e)]
+    assert schema_errs == []
+
+
+def test_schema_list_field_traversal():
+    """_schema_type_name for SchemaListType returns 'list' (semantics.py lines 1778-1779).
+    Traversing into a list field should stop resolution (not an object)."""
+    src = """
+    schema Reading
+        value: float
+        tags: [str]
+    end
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "in" schema: Reading
+        |> filter: msg.tags.first > 0
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    # tags is a list, so tags.first can't be resolved -> not found
+    schema_errs = [e for e in errs if "not found in schema" in str(e)]
+    assert len(schema_errs) >= 1
+
+
+# ─── Coverage: semantics.py lines 1819-1840 (_walk_expr_for_schema FuncCall) ──
+
+
+def test_schema_agg_numeric_func_on_string_field():
+    """_walk_expr_for_schema: aggregate numeric func (avg) on string field
+    (semantics.py lines 1801-1813)."""
+    src = """
+    schema Sensor
+        temp: float
+        label: str
+    end
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "in" schema: Sensor
+        |> window: tumbling(5 m)
+        |> aggregate: { total = avg(msg.label) }
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    warnings = [e for e in errs if e.severity == "warning"]
+    assert any("avg()" in str(w) and "numeric" in str(w) for w in warnings)
+
+
+def test_schema_object_field_not_traversable_as_scalar():
+    """_schema_type_name returns 'object' for SchemaObjectType, and traversal
+    into non-object field returns not-found (semantics.py lines 1765-1768)."""
+    src = """
+    schema Reading strict
+        value: float
+        meta: {
+            source: str,
+            quality: int
+        }
+    end
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "in" schema: Reading
+        |> filter: msg.value.nested > 0
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    schema_errs = [e for e in errs if "not found in schema" in str(e)]
+    assert len(schema_errs) >= 1

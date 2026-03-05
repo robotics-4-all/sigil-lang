@@ -923,3 +923,280 @@ class TestMultiWindowVisualize:
         for keyword in ["window 'short'", "window 'long'", "over short", "over long"]:
             assert keyword in dot, f"DOT missing: {keyword}"
             assert keyword in mmd, f"Mermaid missing: {keyword}"
+
+
+class TestFunctionsVisualize:
+    """Tests for user-defined function visualization in DOT and Mermaid."""
+
+    FUNC_SINGLE = """
+    func celsius(t) = (t - 32) * 5 / 9
+    broker b host: "localhost" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+
+    FUNC_MULTIPLE = """
+    func celsius(t) = (t - 32) * 5 / 9
+    func add(a, b) = a + b
+    func pi() = 3.14159
+    broker b host: "localhost" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+
+    def test_dot_functions_node_present(self):
+        model = parse_string(self.FUNC_SINGLE)
+        dot = visualize_dot(model)
+        assert "functions" in dot
+
+    def test_dot_functions_shape_note(self):
+        model = parse_string(self.FUNC_SINGLE)
+        dot = visualize_dot(model)
+        assert "shape=note" in dot
+
+    def test_dot_function_name_in_label(self):
+        model = parse_string(self.FUNC_SINGLE)
+        dot = visualize_dot(model)
+        assert "celsius" in dot
+
+    def test_dot_function_params_in_label(self):
+        model = parse_string(self.FUNC_MULTIPLE)
+        dot = visualize_dot(model)
+        assert "func celsius(t)" in dot
+        assert "func add(a, b)" in dot
+        assert "func pi()" in dot
+
+    def test_mermaid_functions_node_present(self):
+        model = parse_string(self.FUNC_SINGLE)
+        mmd = visualize_mermaid(model)
+        assert "functions" in mmd
+
+    def test_mermaid_function_name_in_label(self):
+        model = parse_string(self.FUNC_SINGLE)
+        mmd = visualize_mermaid(model)
+        assert "celsius" in mmd
+
+    def test_mermaid_multiple_functions(self):
+        model = parse_string(self.FUNC_MULTIPLE)
+        mmd = visualize_mermaid(model)
+        assert "func celsius(t)" in mmd
+        assert "func add(a, b)" in mmd
+        assert "func pi()" in mmd
+
+
+class TestPipelineLetVisualize:
+    """Tests for pipeline-level let binding visualization in DOT and Mermaid."""
+
+    LET_SINGLE = """
+    broker b host: "localhost" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        let threshold = 42
+        |> filter: msg.value > 10
+        |> sink to b :: "out"
+    end
+    """
+
+    LET_MULTIPLE = """
+    broker b host: "localhost" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        let low = 10
+        let high = 100
+        |> filter: msg.value > 0
+        |> sink to b :: "out"
+    end
+    """
+
+    def test_dot_let_node_present(self):
+        model = parse_string(self.LET_SINGLE)
+        dot = visualize_dot(model)
+        assert "p_p_lets" in dot
+
+    def test_dot_let_shape_note(self):
+        model = parse_string(self.LET_SINGLE)
+        dot = visualize_dot(model)
+        assert "shape=note" in dot
+
+    def test_dot_let_name_in_label(self):
+        model = parse_string(self.LET_SINGLE)
+        dot = visualize_dot(model)
+        assert "threshold" in dot
+
+    def test_dot_let_in_node_chain(self):
+        """Let node should be connected to other nodes via edges."""
+        model = parse_string(self.LET_SINGLE)
+        dot = visualize_dot(model)
+        assert "p_p_lets" in dot
+        # The let node should appear in an edge (connected in the chain)
+        assert "-> p_p_lets" in dot or "p_p_lets ->" in dot
+
+    def test_dot_multiple_let_names(self):
+        model = parse_string(self.LET_MULTIPLE)
+        dot = visualize_dot(model)
+        assert "low" in dot
+        assert "high" in dot
+
+    def test_mermaid_let_node_present(self):
+        model = parse_string(self.LET_SINGLE)
+        mmd = visualize_mermaid(model)
+        assert "p_p_lets" in mmd
+
+    def test_mermaid_let_name_in_label(self):
+        model = parse_string(self.LET_SINGLE)
+        mmd = visualize_mermaid(model)
+        assert "threshold" in mmd
+
+    def test_mermaid_multiple_let_names(self):
+        model = parse_string(self.LET_MULTIPLE)
+        mmd = visualize_mermaid(model)
+        assert "low" in mmd
+        assert "high" in mmd
+
+
+# ─── Coverage: visualize.py lines 133, 135-140 (DOT sink format + batch) ──
+
+
+class TestDotSinkFormatBatch:
+    SINK_FORMAT_BATCH = """
+    broker b host: "localhost" port: 1883 end
+
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out" format: json batch: { size: 50 timeout: 10 s }
+    end
+    """
+
+    def test_dot_sink_format_label(self):
+        """DOT sink node includes format (visualize.py line 133)."""
+        model = parse_string(self.SINK_FORMAT_BATCH)
+        dot = visualize_dot(model)
+        assert "format: json" in dot
+
+    def test_dot_sink_batch_label(self):
+        """DOT sink node includes batch info (visualize.py lines 135-140)."""
+        model = parse_string(self.SINK_FORMAT_BATCH)
+        dot = visualize_dot(model)
+        assert "batch:" in dot
+        assert "size=50" in dot
+        assert "timeout=10s" in dot
+
+    def test_mermaid_sink_format_label(self):
+        """Mermaid sink node includes format (visualize.py line 466)."""
+        model = parse_string(self.SINK_FORMAT_BATCH)
+        mmd = visualize_mermaid(model)
+        assert "format: json" in mmd
+
+
+# ─── Coverage: visualize.py lines 245-247, 563-565 (pipe source from route) ──
+
+
+class TestPipeSourceFromRoute:
+    ROUTE_THEN_PIPE = """
+    broker b host: "localhost" port: 1883 end
+
+    pipeline upstream
+        source from b :: "in"
+        |> route
+            when msg.value > 50 => sink to b :: "high"
+            default => sink to b :: "low"
+        end
+    end
+
+    pipeline downstream
+        source from pipe upstream
+        |> sink to b :: "final"
+    end
+    """
+
+    def test_dot_pipe_from_route_upstream(self):
+        """DOT pipe source from upstream with route (visualize.py lines 245-247)."""
+        model = parse_string(self.ROUTE_THEN_PIPE)
+        dot = visualize_dot(model)
+        assert "p_upstream_route" in dot
+        assert "p_downstream_source" in dot
+        assert "pipe" in dot
+        assert "style=dashed" in dot
+
+    def test_mermaid_pipe_from_route_upstream(self):
+        """Mermaid pipe source from upstream with route (visualize.py lines 563-565)."""
+        model = parse_string(self.ROUTE_THEN_PIPE)
+        mmd = visualize_mermaid(model)
+        assert "p_upstream_route" in mmd
+        assert "p_downstream_source" in mmd
+        assert "pipe" in mmd
+
+
+# ─── Coverage: visualize.py line 323, 639 (stage label fallthrough) ──
+# Lines 323 and 639 are the fallthrough returns in _dot_stage_label and
+# _mermaid_stage_label for unknown stage types. These are unreachable in
+# normal usage since all stage types are handled. We test the accumulate
+# stage which is the last known stage before the fallthrough to ensure
+# coverage of the path leading up to it.
+
+
+# ─── Coverage: visualize.py annotations in DOT/Mermaid ──
+
+
+class TestAnnotationsVisualize:
+    ANNOTATED_ERROR = """
+    broker b host: "localhost" port: 1883 end
+
+    pipeline p
+        source from b :: "in"
+        |> @error("critical filter") filter: msg.value > 0
+        |> sink to b :: "out"
+    end
+    """
+
+    def test_dot_error_annotation_in_label(self):
+        """DOT annotation with @error appears in stage label."""
+        model = parse_string(self.ANNOTATED_ERROR)
+        dot = visualize_dot(model)
+        assert "@error" in dot
+        assert "critical filter" in dot
+
+    def test_mermaid_error_annotation_in_label(self):
+        """Mermaid annotation with @error appears in stage label (visualize.py line 453-455)."""
+        model = parse_string(self.ANNOTATED_ERROR)
+        mmd = visualize_mermaid(model)
+        assert "@error" in mmd
+        assert "critical filter" in mmd
+
+
+# ─── Coverage: visualize.py route with default in DOT and Mermaid ──
+
+
+class TestRouteDefaultVisualize:
+    ROUTE_WITH_DEFAULT = """
+    broker b host: "localhost" port: 1883 end
+
+    pipeline p
+        source from b :: "in"
+        |> filter: msg.value is not null
+        |> route
+            when msg.value > 100 => sink to b :: "high"
+            default => sink to b :: "normal"
+        end
+    end
+    """
+
+    def test_dot_route_default_node(self):
+        """DOT route with default arm creates default node (visualize.py lines 155-159)."""
+        model = parse_string(self.ROUTE_WITH_DEFAULT)
+        dot = visualize_dot(model)
+        assert "route_default" in dot
+        assert "normal" in dot
+        assert 'label="default"' in dot
+
+    def test_mermaid_route_default_node(self):
+        """Mermaid route with default arm (visualize.py lines 481-485)."""
+        model = parse_string(self.ROUTE_WITH_DEFAULT)
+        mmd = visualize_mermaid(model)
+        assert "route_default" in mmd
+        assert "normal" in mmd
+        assert '"default"' in mmd

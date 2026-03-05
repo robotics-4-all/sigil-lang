@@ -26,6 +26,13 @@ def explain_model(model) -> str:
                 lines.append(f"    {f.name}: {_format_schema_type(f.type)}{opt}")
         lines.append("")
 
+    if model.functions:
+        lines.append("Functions:")
+        for f in model.functions:
+            params = ", ".join(f.params) if f.params else ""
+            lines.append(f"  func {f.name}({params}) = <expression>")
+        lines.append("")
+
     if model.brokers:
         lines.append("Brokers:")
         for b in model.brokers:
@@ -38,6 +45,9 @@ def explain_model(model) -> str:
         lines.append(f"  {_explain_source(p)}")
         if p.join:
             lines.append(f"  {_explain_join(p.join)}")
+        if p.pipeline_lets:
+            for lb in p.pipeline_lets:
+                lines.append(f"  let {lb.name} = <expression> (computed per message)")
         stages = _unwrap_stages(p)
         for i, stage in enumerate(stages):
             lines.append(f"  {_explain_stage(stage, i + 1)}")
