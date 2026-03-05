@@ -1,29 +1,33 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-04
+**Generated:** 2026-03-05
 
 ## OVERVIEW
 
-`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, and pipeline explanation.
+`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, and pipeline explanation/visualization.
 
 ## STRUCTURE
 
 ```
 aggr_app_dsl/
-├── sigil/             # Core package — grammar, parser, validator, codegen
-│   ├── grammar.tx     # textX grammar (IS the metamodel)
-│   ├── language.py    # Metamodel builder + parse entrypoints + import resolution
-│   ├── semantics.py   # Semantic validation (stage order, types, refs)
-│   ├── expressions.py # AST → Python expression compiler
-│   ├── codegen.py     # Model → generated app (Jinja2)
-│   ├── explain.py     # Human-readable pipeline explanation
-│   ├── visualize.py   # DOT/Mermaid diagram generation from models
-│   ├── cli.py         # CLI entry point (check / generate / explain / visualize)
-│   └── templates/     # Jinja2 templates for generated code
-├── examples/          # Sample .sigil files (26 progressive examples)
-├── tests/             # pytest suite (grammar, semantics, codegen, visualize, integration)
-├── setup.py           # Package config, console_scripts entry point
-└── requirements.txt   # textX, Jinja2, pytest
++-- sigil/                 # Core package (see sigil/AGENTS.md)
+|   +-- grammar.tx         # textX grammar (IS the metamodel, 493 lines)
+|   +-- language.py        # Metamodel builder + parse + import resolution
+|   +-- semantics.py       # Semantic validation (1883 lines, 30+ _check_* fns)
+|   +-- expressions.py     # AST -> Python expression compiler
+|   +-- codegen.py         # Model -> generated app (11 context dataclasses)
+|   +-- explain.py         # Human-readable pipeline explanation
+|   +-- visualize.py       # DOT/Mermaid diagram generation
+|   +-- cli.py             # CLI: check / generate / explain / visualize
+|   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2)
++-- examples/              # 27 progressive .sigil examples (01-25 + simple + multi_pipeline)
++-- tests/                 # pytest suite (~518 unit + ~26 integration tests)
++-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
++-- setup.py               # Package config, console_scripts entry point
++-- Makefile               # Docker-based build/test/run targets
++-- Dockerfile             # App container
++-- docker-compose.yml     # Full dev stack (EMQX, Redis, RabbitMQ, Kafka)
++-- .github/workflows/     # CI: unit tests on 3.10/3.11/3.12, integration via Docker
 ```
 
 ## WHERE TO LOOK
@@ -34,45 +38,53 @@ aggr_app_dsl/
 | Add/modify validation rules | `sigil/semantics.py` | Each `_check_*` returns `list[SemanticError]` |
 | Change generated Python code | `sigil/templates/*.j2` | Jinja2 with `PipelineCtx` dataclass |
 | Modify expression compilation | `sigil/expressions.py` | `compile_expr()` walks AST, emits Python |
-| Add new CLI subcommand | `sigil/cli.py` | argparse, entry point: `sigil` (check/generate/explain/visualize) |
+| Add new CLI subcommand | `sigil/cli.py` | argparse, entry point: `sigil` |
 | Explain pipeline logic | `sigil/explain.py` | `explain_model()` returns human-readable text |
 | Visualize pipeline diagrams | `sigil/visualize.py` | `visualize_dot(model)`, `visualize_mermaid(model)` |
-| Add codegen context fields | `sigil/codegen.py` | Dataclasses: `BrokerCtx`, `PipelineCtx`, etc |
-| See DSL syntax examples | `examples/*.sigil` | `simple.sigil`, `multi_pipeline.sigil` |
+| Add codegen context fields | `sigil/codegen.py` | 11 dataclasses: `BrokerCtx`, `PipelineCtx`, etc |
+| Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` |
+| Add new aggregation function | `grammar.tx` (AggFunc) + `semantics.py` (FUNCS_* sets) + `templates/pipeline.py.j2` |
+| See DSL syntax examples | `examples/*.sigil` | Progressive 01-25 |
+| Language reference | `docs/language-reference.md` | Full syntax documentation |
 
 ## CONVENTIONS
 
 - **textX grammar = metamodel**: No separate metamodel class hierarchy. Grammar rules define AST classes directly.
-- **Stage dispatch by class name**: `stage.__class__.__name__` string comparison (not `isinstance`) in `codegen.py` and `semantics.py`.
-- **Expression compiler**: Recursive `compile_expr()` using class name dispatch, not visitor pattern. Context enum (`ExprContext`) controls FieldRef compilation.
-- **Validation**: Returns `list[SemanticError]` (never raises). `validate_or_raise()` wraps for CLI. Warnings use `severity="warning"` (e.g., unused aggregations).
-- **Codegen context dataclasses**: Intermediate representation between parsed model and Jinja2 templates. All template variables come from these dataclasses.
-- **Map assignment separators**: Multiple `map:` assignments use `;` as separator (`mappings+=MapAssignment[';']`). Single assignments need no semicolon. Last assignment in a block needs no trailing `;`. Aggregate assignments do NOT use semicolons (`)` provides unambiguous boundaries).
-- **Python >=3.10**: Uses `str | None` union syntax.
-- **No linter/formatter config**: No ruff/flake8/mypy/black config files. Code uses ruff cache (`.ruff_cache/` exists).
+- **Stage dispatch by class name**: `stage.__class__.__name__` string comparison (not `isinstance`) in `codegen.py`, `semantics.py`, `explain.py`, `visualize.py`. Consistent everywhere.
+- **Expression compiler**: Recursive `compile_expr()` using class name dispatch, not visitor pattern. `ExprContext` enum (FILTER/MAP/AGGREGATE/HAVING/QUANTIFIER) controls FieldRef compilation.
+- **Validation**: Returns `list[SemanticError]` (never raises). `validate_or_raise()` wraps for CLI. Warnings use `severity="warning"`.
+- **Codegen context dataclasses**: Intermediate representation between parsed model and Jinja2 templates. `PipelineCtx` is sole interface to templates. All template variables come from these dataclasses.
+- **Relative imports within sigil/**: `from .module import ...` (e.g., `from .expressions import ...`, `from .semantics import ...`). External imports use absolute paths.
+- **Map assignment separators**: Multiple `map:` assignments use `;` as separator. `AggregateStage` does NOT use semicolons (`)` provides unambiguous boundaries).
+- **Python >=3.10**: Uses `str | None` union syntax throughout.
+- **No linter/formatter config**: No ruff/flake8/mypy/black config files.
+- **Setup.py only**: No pyproject.toml or setup.cfg. Uses `setuptools` with `package_data` for grammar.tx and templates.
+- **AST walking**: `_AST_WALK_ATTRS` tuple in codegen.py defines attribute names for recursive AST traversal (`_has_temporal_ref`, `_has_env_ref`, etc.).
+- **Duration handling**: `UNIT_MULTIPLIERS` dict defined in `semantics.py`, imported by `codegen.py` via `from .semantics import UNIT_MULTIPLIERS`.
+- **Grammar changes cascade**: Any grammar.tx change requires checking semantics, codegen, expressions, explain, visualize, and templates.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- No anti-pattern comments found in codebase.
-- No explicit forbidden patterns documented.
+- No explicit anti-pattern comments (`DO NOT`, `NEVER`, `DEPRECATED`, etc.) in codebase.
+- Warnings handled programmatically via `SemanticError(severity="warning")`, not inline comments.
 
 ## PIPELINE ARCHITECTURE
 
-The DSL defines a fixed processing pipeline: `source → [join] → deduplicate → filter → rate → flatten → distinct → throttle → sample → group_by → window → aggregate → accumulate → having → map → sink`. Stage order is enforced semantically (`STAGE_ORDER` dict in `semantics.py`). All stages except source/sink are optional. Each stage type can appear at most once (enforced by `_check_duplicate_stages`), except `WindowStage` which supports named multi-window (multiple named windows per pipeline).
+Fixed processing pipeline order: `source -> [join] -> deduplicate -> filter -> rate -> flatten -> distinct -> throttle -> sample -> group_by -> window -> aggregate -> accumulate -> having -> map -> sink`.
 
-Stages are wrapped in `AnnotatedStage` in the grammar, which holds optional `@warn`/`@error` annotations. Use `_unwrap_stages(pipeline)` to get raw stage objects.
+Stage order enforced by `STAGE_ORDER` dict in `semantics.py` (maps stage class names to integer phases -1 through 11). All stages except source/sink optional. Each stage type at most once (`_check_duplicate_stages`), except `WindowStage` (named multi-window).
 
-Pipeline output can be a `sink` (single destination) or `route` (conditional fan-out to multiple destinations). A pipeline has either `sink` or `route`, not both.
+Stages wrapped in `AnnotatedStage` (optional `@warn`/`@error` annotations). Use `_unwrap_stages(pipeline)` for raw stage objects.
 
-Source can be a broker subscription (`source from BROKER :: "topic"`) or a pipeline chain (`source from pipe NAME`). Pipe sources receive messages via in-memory callback from the upstream pipeline's `_downstream_listeners`.
+Pipeline output: `sink` (single destination) OR `route` (conditional fan-out). Never both.
 
-Join (`|> join BROKER :: "topic" on msg.X == other.Y within DURATION [type: inner|left] end`) subscribes to a second stream and matches messages by key within a time window. After a join, `other.field` references the matched message from the joined stream. Inner joins buffer unmatched primary messages and retry when join-side messages arrive. Left joins pass primary messages through with `other=None` when no match is found. Join is incompatible with pipe sources. Join sits at pipeline level (not in the `Stage` abstract rule).
+Source: broker subscription (`source from BROKER :: "topic"`) or pipeline chain (`source from pipe NAME`). Pipe sources use in-memory `_downstream_listeners`.
 
-`import "path.sigil"` at top level merges brokers, constants, and pipelines from imported files. Circular imports are detected.
+Join: subscribes to second stream, matches by key within time window. `other.field` references joined message. Inner (buffers unmatched, retries on join arrival) / left (passes through with `other=None`). Incompatible with pipe sources. Sits at pipeline level (not in `Stage` abstract rule).
+
+`import "path.sigil"` merges brokers, constants, pipelines, schemas. Circular imports detected via `_seen` set of absolute paths.
 
 ### Surface Syntax
-
-Structural blocks use `end` keywords (brokers, pipelines, routes). Stages are prefixed with the `|>` pipe operator. Data blocks (aggregate, map, accumulate, auth, batch, case, hooks) retain `{ }` braces.
 
 ```sigil
 broker local
@@ -91,63 +103,110 @@ pipeline example
 end
 ```
 
+Structural blocks use `end` keywords. Stages prefixed with `|>`. Data blocks (aggregate, map, accumulate, batch, case, hooks) use `{ }` braces.
+
 ## EXPRESSION SYSTEM
 
-Precedence (low to high): `or → and → comparison → +,- → *,/,% → ?? → unary(-,not) → atom`.
-FieldRef compilation depends on context:
-- **ALL contexts**: `other.x.y` → `_get_nested(other, 'x', 'y')` (join-stream reference, checked first)
-- **FILTER/AGGREGATE**: `msg.x.y` → `_get_nested(msg, 'x', 'y')`
-- **HAVING**: bare `id` → `aggregated['id']`; `msg.x` → `_get_nested(msg, 'x')`
-- **MAP**: bare `id` → `aggregated['id']`; `msg.x` → `_get_nested(msg, 'x')`
+Precedence (low to high): `or -> and -> comparison -> +,- -> *,/,% -> ?? -> unary(-,not) -> atom`.
 
-Constants (`const NAME = value`) are inlined at compile time via `const_map` parameter.
-`env("KEY", default)` compiles to `os.environ.get('KEY', default)`.
-`fmt("pattern {}", arg1, arg2)` compiles to `"pattern {}".format(arg1, arg2)`.
-`case { when c => r ... else => d }` compiles to nested Python ternaries.
-`old(msg.x)` compiles to `_get_nested(self._prev_msg, 'x')`.
-`changed(msg.x)` compiles to `(_get_nested(msg, 'x') != _get_nested(self._prev_msg, 'x'))`.
-`forall(m => pred)` compiles to `all(pred for m in messages)` (window-implicit).
-`exists(x in msg.field => pred)` compiles to `any(pred for x in (_get_nested(msg, 'field') or []))`.
-`@initially { publish { k: v } }` publishes ObjectLiteral on pipeline start.
-`@finally { publish { k: v } }` publishes ObjectLiteral on pipeline stop.
-Sink `format: json|csv|raw` controls serialization; `batch: { size: N, timeout: Ts }` buffers output.
+FieldRef compilation depends on context:
+- **ALL contexts**: `other.x.y` -> `_get_nested(other, 'x', 'y')` (join-stream reference)
+- **FILTER/AGGREGATE**: `msg.x.y` -> `_get_nested(msg, 'x', 'y')`
+- **HAVING**: bare `id` -> `aggregated['id']`; `msg.x` -> `_get_nested(msg, 'x')`
+- **MAP**: bare `id` -> `aggregated['id']` (or let binding); `msg.x` -> `_get_nested(msg, 'x')`
+
+Built-in expression forms:
+- Constants (`const NAME = value`): inlined at compile time via `const_map`
+- `env("KEY", default)` -> `os.environ.get('KEY', default)`
+- `fmt("pattern {}", arg1, arg2)` -> `"pattern {}".format(arg1, arg2)`
+- `case { when c => r ... else => d }` -> nested Python ternaries
+- `old(msg.x)` -> `_get_nested(self._prev_msg, 'x')`
+- `changed(msg.x)` -> `(_get_nested(msg, 'x') != _get_nested(self._prev_msg, 'x'))`
+- `forall(m => pred)` -> `all(pred for m in messages)`
+- `exists(x in msg.field => pred)` -> `any(pred for x in (_get_nested(msg, 'field') or []))`
+
+Lifecycle hooks: `@initially { publish { k: v } }` / `@finally { publish { k: v } }`.
+Sink: `format: json|csv|raw`, `batch: { size: N, timeout: Ts }`.
+Retry: `retry: N with backoff DURATION`.
+
+## CODE GENERATION FLOW
+
+1. `parse(path)` -> textX AST model (with imports resolved)
+2. `validate(model)` -> `list[SemanticError]` (30+ checks)
+3. `generate(model, output_dir)`:
+   - `_build_const_map(model)` + `_build_func_defs(model)` -> lookup tables
+   - Per pipeline: `_build_pipeline_ctx(pipeline, const_map, func_defs)` -> `PipelineCtx`
+   - Stage dispatch via `stage.__class__.__name__` populates ctx fields
+   - Expressions compiled via `compile_expr()` into Python code strings
+   - Jinja2 renders: `app.py.j2` + `pipeline.py.j2` (per pipeline) + `requirements.txt.j2`
+
+Generated app structure: `app.py` (imports, signal handling, event loop), `pipelines/<name>.py` (class per pipeline with `_on_message` chain), `pipelines/__init__.py`, `requirements.txt`.
+
+## TESTING
+
+~518 unit + ~26 integration tests across 5 files:
+
+| File | LOC | Coverage |
+|------|-----|----------|
+| `test_grammar.py` | 2883 | Parsing all DSL constructs into AST |
+| `test_semantics.py` | 2402 | All `_check_*` validation rules, errors + warnings |
+| `test_codegen.py` | 2053 | Generated code correctness, expression compilation |
+| `test_integration.py` | 1996 | End-to-end with real brokers (MQTT/Redis/AMQP/Kafka) |
+| `test_visualize.py` | 925 | DOT and Mermaid diagram output |
+
+Conventions:
+- No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py.
+- All tests use inline multi-line DSL strings (no external fixture files).
+- Tests invoke Python functions directly (`parse_string`, `validate`, `generate`, `compile_expr`). No CLI testing.
+- Integration tests: `pytest.mark.skipif` for broker availability. Docker required.
+- Codegen tests: `tempfile.TemporaryDirectory()` + Python `compile()` for syntax verification.
 
 ## COMMANDS
 
 ```bash
-# Install
+# Install (local dev)
 pip install -e .
 
-# Validate a .sigil file
+# Run tests (local, skip integration)
+pytest tests/ -v --ignore=tests/test_integration.py
+
+# Docker-based (full stack)
+make build              # Build Docker image
+make up                 # Start services (EMQX, Redis, RabbitMQ, Kafka)
+make test               # Full test suite in Docker
+make test-unit          # Unit tests only
+make test-integration   # Integration tests (real brokers)
+make clean              # Remove containers, images, caches
+
+# CLI
 sigil check examples/simple.sigil
-
-# Generate Python app from .sigil
 sigil generate examples/simple.sigil -o generated/
-
-# Explain a pipeline
 sigil explain examples/simple.sigil
-
-# Visualize a pipeline (DOT or Mermaid)
 sigil visualize examples/multi_pipeline.sigil --format dot
 sigil visualize examples/multi_pipeline.sigil --format mermaid
-
-# Run tests
-pytest tests/
 ```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`):
+- **unit**: Python 3.10/3.11/3.12 matrix, `pytest --ignore=tests/test_integration.py`
+- **integration**: Docker Compose (`make build` + `make test-integration`), depends on unit
 
 ## NOTES
 
 - Generated apps depend on `commlib-py>=0.13.0` (unified pub/sub across MQTT, Redis, AMQP, Kafka).
-- Broker `transport` field is optional; defaults to `mqtt`. Valid values: `mqtt`, `redis`, `amqp`, `kafka`.
-- Cross-transport pipelines are supported (e.g., source from MQTT, sink to Redis).
-- Window flushing uses `threading.Thread` event loop — adequate for moderate throughput.
+- Broker `transport` defaults to `mqtt`. Valid: `mqtt`, `redis`, `amqp`, `kafka`.
+- Cross-transport pipelines supported (e.g., source MQTT, sink Redis).
+- Window flushing uses `threading.Thread` event loop.
 - Generated apps support `LOG_FORMAT=json` and `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` env vars.
-- Generated apps have graceful shutdown: SIGTERM/SIGINT → drain windows/batches → stop pipelines.
-- Publish calls use retry with exponential backoff. Default: 3 attempts, 100ms base. Configurable via DSL `retry:` clause.
-- Incoming messages are validated: non-dict payloads are auto-parsed from JSON; invalid messages are logged and dropped.
-- `build_metamodel()` is cached via `@lru_cache(maxsize=1)` — safe since grammar is static.
-- Aggregate assignments support optional type annotations: `total: float = sum(msg.value)` → runtime type coercion.
-- Broker deduplication in templates: if source and sink share a broker, a single MQTT client is reused.
-- Duplicate broker names are caught by textX (`not unique`) before semantic validation runs.
-- Retry policy: `retry: N with backoff DURATION` configures publish retry per-pipeline. Populates `_MAX_PUBLISH_RETRIES` and `_PUBLISH_RETRY_BASE` in generated code.
-- Named multi-window: `|> window NAME: tumbling(...)` allows multiple windows per pipeline. Aggregations use `over NAME` to bind to specific windows. Each window has its own buffer, flush thread, and `_process_window_<name>` method. Output includes `_window` field. When single window, name and `over` are optional (backward compatible).
+- Graceful shutdown: SIGTERM/SIGINT -> drain windows/batches -> stop pipelines.
+- Publish retry with exponential backoff. Default: 3 attempts, 100ms base. Configurable via `retry:` clause.
+- Incoming messages validated: non-dict payloads auto-parsed from JSON; invalid dropped.
+- `build_metamodel()` cached via `@lru_cache(maxsize=1)`.
+- Aggregate assignments support optional type annotations: `total: float = sum(msg.value)`.
+- Broker deduplication in templates: shared broker = single client reused.
+- Duplicate broker names caught by textX (`not unique`) before semantic validation.
+- Named multi-window: `|> window NAME: tumbling(...)` with `over NAME` in aggregations. Each window gets own buffer, flush thread, `_process_window_<name>` method.
+- Root-level utility scripts (`rewrite.py`, `transform.py`, `update_*.py`, `restore.py`) are one-off migration scripts, not part of the core package.
+- `Model_parser_model.dot`, `textx_model_*.dot` are textX debug visualization artifacts.
+- 27 examples in `examples/` progress from basic (01_hello_passthrough) to advanced (25_retry_and_multi_window).
