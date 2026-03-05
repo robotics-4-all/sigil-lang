@@ -43,12 +43,13 @@ def compile_expr(
     ctx: ExprContext = ExprContext.FILTER,
     local_names: set[str] | None = None,
     const_map: dict[str, str] | None = None,
+    func_defs: dict | None = None,
 ) -> str:
     cls = node.__class__.__name__
 
     # Helper to recurse with same context
     def _r(n):
-        return compile_expr(n, ctx, local_names, const_map)
+        return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if cls == "Expression":
         parts = [_r(op) for op in node.operands]
@@ -113,7 +114,13 @@ def compile_expr(
         return f"({then} if {cond} else {els})"
 
     if cls == "CaseExpr":
-        return _compile_case_expr(node, ctx, local_names, const_map)
+        return _compile_case_expr(node, ctx, local_names, const_map, func_defs)
+
+    if cls == "MatchExpr":
+        return _compile_match_expr(node, ctx, local_names, const_map, func_defs)
+
+    if cls == "UserFuncCall":
+        return _compile_user_func_call(node, ctx, local_names, const_map, func_defs)
 
     if cls == "EnvRef":
         key = repr(node.key)
@@ -140,10 +147,14 @@ def compile_expr(
         return f"({cur} != {prev})"
 
     if cls == "ForallExpr":
-        return _compile_quantifier_expr(node, "all", ctx, local_names, const_map)
+        return _compile_quantifier_expr(
+            node, "all", ctx, local_names, const_map, func_defs
+        )
 
     if cls == "ExistsExpr":
-        return _compile_quantifier_expr(node, "any", ctx, local_names, const_map)
+        return _compile_quantifier_expr(
+            node, "any", ctx, local_names, const_map, func_defs
+        )
 
     if cls == "FuncCall":
         args = [_r(a) for a in node.args]
@@ -170,13 +181,13 @@ def compile_expr(
     raise ValueError(f"Unknown expression node: {cls}")
 
 
-def _compile_case_expr(node, ctx, local_names, const_map):
+def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
     """Compile case { when c1 => r1  when c2 => r2  else => r_else }
     into nested Python ternary: (r1 if c1 else (r2 if c2 else r_else))
     """
 
     def _r(n):
-        return compile_expr(n, ctx, local_names, const_map)
+        return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if not node.arms:
         raise ValueError("CaseExpr must have at least one 'when' arm")
@@ -193,6 +204,59 @@ def _compile_case_expr(node, ctx, local_names, const_map):
         result = f"({val} if {cond} else {result})"
 
     return result
+
+
+def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
+    """Compile match subject { case p1 => r1  case p2 => r2  else => d }
+    into nested Python ternary: (r1 if subject == p1 else (r2 if subject == p2 else d))
+    """
+
+    def _r(n):
+        return compile_expr(n, ctx, local_names, const_map, func_defs)
+
+    if not node.arms:
+        raise ValueError("MatchExpr must have at least one 'case' arm")
+
+    subject = _r(node.subject)
+
+    if node.elseExpr:
+        result = _r(node.elseExpr)
+    else:
+        result = "None"
+
+    for arm in reversed(node.arms):
+        pattern = _r(arm.pattern)
+        val = _r(arm.result)
+        result = f"({val} if {subject} == {pattern} else {result})"
+
+    return result
+
+
+def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None):
+    """Inline user-defined function: celsius(msg.t) → ((msg.t - 32) * 5 / 9)"""
+    if not func_defs or node.name not in func_defs:
+        raise ValueError(f"Unknown function: {node.name}")
+
+    func_def = func_defs[node.name]
+    params = func_def.params or []
+    args = node.args or []
+
+    if len(args) != len(params):
+        raise ValueError(
+            f"Function '{node.name}' expects {len(params)} argument(s), got {len(args)}"
+        )
+
+    param_map = {}
+    for param, arg in zip(params, args):
+        param_map[param] = compile_expr(arg, ctx, local_names, const_map, func_defs)
+
+    merged_const = dict(const_map) if const_map else {}
+    merged_const.update(param_map)
+
+    inner_locals = set(local_names) if local_names else set()
+    return (
+        f"({compile_expr(func_def.body, ctx, inner_locals, merged_const, func_defs)})"
+    )
 
 
 def _compile_field_ref(
@@ -236,13 +300,15 @@ def _compile_field_ref(
     return ".".join(segments)
 
 
-def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map):
+def _compile_quantifier_expr(
+    node, func_name, ctx, local_names, const_map, func_defs=None
+):
     var = node.var
     inner_locals = set(local_names) if local_names else set()
     inner_locals.add(var)
 
     predicate_code = compile_expr(
-        node.predicate, ExprContext.QUANTIFIER, inner_locals, const_map
+        node.predicate, ExprContext.QUANTIFIER, inner_locals, const_map, func_defs
     )
 
     if node.collection:

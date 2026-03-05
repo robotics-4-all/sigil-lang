@@ -1,5 +1,5 @@
 import pytest
-from sigil.language import parse_string, build_metamodel
+from sigil.language import parse_string, build_metamodel, parse, CircularImportError
 
 
 def _stages(pipeline):
@@ -2881,3 +2881,670 @@ class TestMultiWindow:
         assert agg.assignments[0].window_ref == "short"
         assert agg.assignments[1].window_ref == "long"
         assert agg.assignments[2].window_ref == "short"
+
+
+# ─── FuncDef (top-level user-defined functions) ─────────────────────
+
+
+class TestFuncDef:
+    def test_parse_func_single_param(self):
+        """func with one parameter parses correctly."""
+        src = """
+        broker b host: "h" port: 1 end
+        func celsius(t) = (t - 32) * 5 / 9
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        assert len(model.functions) == 1
+        f = model.functions[0]
+        assert f.name == "celsius"
+        assert f.params == ["t"]
+        assert f.body is not None
+
+    def test_parse_func_multi_param(self):
+        """func with multiple parameters."""
+        src = """
+        broker b host: "h" port: 1 end
+        func add(a, b) = a + b
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        assert len(model.functions) == 1
+        f = model.functions[0]
+        assert f.name == "add"
+        assert f.params == ["a", "b"]
+        assert f.body is not None
+
+    def test_parse_func_no_params(self):
+        """func with zero parameters."""
+        src = """
+        broker b host: "h" port: 1 end
+        func pi() = 3.14159
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        assert len(model.functions) == 1
+        f = model.functions[0]
+        assert f.name == "pi"
+        assert f.params == []
+        assert f.body is not None
+
+    def test_parse_multiple_func_defs(self):
+        """Multiple function definitions in one model."""
+        src = """
+        broker b host: "h" port: 1 end
+        func celsius(t) = (t - 32) * 5 / 9
+        func add(a, b) = a + b
+        func pi() = 3.14159
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        assert len(model.functions) == 3
+        assert model.functions[0].name == "celsius"
+        assert model.functions[1].name == "add"
+        assert model.functions[2].name == "pi"
+
+    def test_parse_func_body_is_expression(self):
+        """func body is a full expression (comparison)."""
+        src = """
+        broker b host: "h" port: 1 end
+        func is_hot(t) = t > 100
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        f = model.functions[0]
+        assert f.name == "is_hot"
+        assert f.params == ["t"]
+        # body is an Expression node (top of precedence chain)
+        assert f.body.__class__.__name__ == "Expression"
+
+
+# ─── PipelineLetBinding ─────────────────────────────────────────────
+
+
+class TestPipelineLetBinding:
+    def test_parse_single_let(self):
+        """Single let binding before stages."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            let threshold = msg.value * 2
+            |> filter: msg.value > 10
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        p = model.pipelines[0]
+        assert len(p.pipeline_lets) == 1
+        lb = p.pipeline_lets[0]
+        assert lb.name == "threshold"
+        assert lb.value is not None
+
+    def test_parse_multiple_lets(self):
+        """Multiple let bindings before stages."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            let low = 10
+            let high = 100
+            let mid = 50
+            |> filter: msg.value > 0
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        p = model.pipelines[0]
+        assert len(p.pipeline_lets) == 3
+        assert p.pipeline_lets[0].name == "low"
+        assert p.pipeline_lets[1].name == "high"
+        assert p.pipeline_lets[2].name == "mid"
+
+    def test_parse_let_with_field_ref(self):
+        """Let binding using msg field reference."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            let x = msg.temperature
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        p = model.pipelines[0]
+        assert len(p.pipeline_lets) == 1
+        lb = p.pipeline_lets[0]
+        assert lb.name == "x"
+        assert lb.value is not None
+
+    def test_parse_let_with_complex_expression(self):
+        """Let binding with arithmetic expression."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            let offset = (msg.value - 32) * 5 / 9
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        p = model.pipelines[0]
+        assert len(p.pipeline_lets) == 1
+        assert p.pipeline_lets[0].name == "offset"
+        assert p.pipeline_lets[0].value is not None
+
+    def test_parse_pipeline_no_lets(self):
+        """Pipeline without let bindings has empty list."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        p = model.pipelines[0]
+        assert len(p.pipeline_lets) == 0
+
+
+# ─── MatchExpr ──────────────────────────────────────────────────────
+
+
+class TestMatchExpr:
+    def test_parse_match_basic(self):
+        """Basic match expression with two arms and else."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: {
+                out = match msg.type {
+                    case "A" => 1
+                    case "B" => 2
+                    else => 0
+                }
+            }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        # Navigate expression tree to the MatchExpr atom
+        match_node = (
+            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        )
+        assert match_node.__class__.__name__ == "MatchExpr"
+        assert len(match_node.arms) == 2
+        assert match_node.elseExpr is not None
+
+    def test_parse_match_without_else(self):
+        """Match expression without else clause."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: {
+                out = match msg.type {
+                    case "A" => 1
+                    case "B" => 2
+                }
+            }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        match_node = (
+            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        )
+        assert match_node.__class__.__name__ == "MatchExpr"
+        assert len(match_node.arms) == 2
+        assert match_node.elseExpr is None
+
+    def test_parse_match_single_arm(self):
+        """Match expression with a single arm."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: {
+                out = match msg.status {
+                    case "ok" => 1
+                    else => 0
+                }
+            }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        match_node = (
+            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        )
+        assert match_node.__class__.__name__ == "MatchExpr"
+        assert len(match_node.arms) == 1
+        assert match_node.elseExpr is not None
+
+    def test_parse_match_arm_structure(self):
+        """MatchArm has pattern and result attributes."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: {
+                out = match msg.level {
+                    case "high" => 100
+                    case "low" => 10
+                    else => 50
+                }
+            }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        match_node = (
+            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        )
+        assert match_node.__class__.__name__ == "MatchExpr"
+        arm0 = match_node.arms[0]
+        assert arm0.__class__.__name__ == "MatchArm"
+        assert arm0.pattern is not None
+        assert arm0.result is not None
+
+    def test_parse_match_subject_is_expression(self):
+        """Match subject can be a complex expression."""
+        src = """
+        broker b host: "h" port: 1 end
+        pipeline p
+            source from b :: "a"
+            |> aggregate: { v = avg(msg.x) }
+            |> map: {
+                out = match msg.a + msg.b {
+                    case 10 => "ten"
+                    else => "other"
+                }
+            }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        match_node = (
+            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        )
+        assert match_node.__class__.__name__ == "MatchExpr"
+        assert match_node.subject is not None
+
+
+# ─── UserFuncCall ───────────────────────────────────────────────────
+
+
+class TestUserFuncCall:
+    def test_parse_user_func_call_in_filter(self):
+        """User function call in filter expression."""
+        src = """
+        broker b host: "h" port: 1 end
+        func celsius(t) = (t - 32) * 5 / 9
+        pipeline p
+            source from b :: "a"
+            |> filter: celsius(msg.temp) > 0
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        f = _stages(model.pipelines[0])[0]
+        assert f.__class__.__name__ == "FilterStage"
+        # The filter condition is a Comparison: celsius(msg.temp) > 0
+        # Left side: Addition -> Multiplication -> Coalesce -> Unary -> atom
+        atom = f.condition.operands[0].operands[0].left.left.left.left.atom
+        assert atom.__class__.__name__ == "UserFuncCall"
+        assert atom.name == "celsius"
+        assert len(atom.args) == 1
+
+    def test_parse_user_func_call_multi_args(self):
+        """User function call with multiple arguments."""
+        src = """
+        broker b host: "h" port: 1 end
+        func add(a, b) = a + b
+        pipeline p
+            source from b :: "a"
+            |> filter: add(msg.x, msg.y) > 0
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        f = _stages(model.pipelines[0])[0]
+        assert f.__class__.__name__ == "FilterStage"
+        atom = f.condition.operands[0].operands[0].left.left.left.left.atom
+        assert atom.__class__.__name__ == "UserFuncCall"
+        assert atom.name == "add"
+        assert len(atom.args) == 2
+
+    def test_parse_user_func_call_in_map(self):
+        """User function call in map expression."""
+        src = """
+        broker b host: "h" port: 1 end
+        func double(x) = x * 2
+        pipeline p
+            source from b :: "a"
+            |> map: { result = double(msg.value) }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        assert atom.__class__.__name__ == "UserFuncCall"
+        assert atom.name == "double"
+        assert len(atom.args) == 1
+
+    def test_parse_user_func_call_three_args(self):
+        """User function call with three arguments."""
+        src = """
+        broker b host: "h" port: 1 end
+        func clamp(val, lo, hi) = if val < lo then lo else if val > hi then hi else val
+        pipeline p
+            source from b :: "a"
+            |> map: { clamped = clamp(msg.value, 0, 100) }
+            |> sink to b :: "b"
+        end
+        """
+        model = parse_string(src)
+        m = [
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
+        ][0]
+        atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
+        assert atom.__class__.__name__ == "UserFuncCall"
+        assert atom.name == "clamp"
+        assert len(atom.args) == 3
+
+
+# ─── parse() and _resolve_imports() (language.py) ───────────────────
+
+
+class TestParseFile:
+    """Tests for parse(path) and _resolve_imports() in language.py."""
+
+    def test_parse_file(self):
+        """parse(path) reads a .sigil file and returns a model."""
+        import tempfile, os
+
+        src = 'broker b host: "h" port: 1 end\npipeline p\n    source from b :: "t"\n    |> sink to b :: "o"\nend\n'
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sigil", delete=False) as f:
+            f.write(src)
+            f.flush()
+            path = f.name
+        try:
+            model = parse(path)
+            assert len(model.brokers) == 1
+            assert model.brokers[0].name == "b"
+            assert len(model.pipelines) == 1
+            assert model.pipelines[0].name == "p"
+        finally:
+            os.unlink(path)
+
+    def test_parse_file_nonexistent_raises(self):
+        """parse() with a non-existent path raises an error."""
+        with pytest.raises(Exception):
+            parse("/tmp/_sigil_nonexistent_file_12345.sigil")
+
+    def test_import_resolves_broker_from_helper(self):
+        """import merges brokers from the imported file into the model."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            helper = os.path.join(td, "helper.sigil")
+            with open(helper, "w") as f:
+                f.write('broker helper_broker host: "helper" port: 2 end\n')
+
+            main = os.path.join(td, "main.sigil")
+            with open(main, "w") as f:
+                f.write(
+                    'import "helper.sigil"\n'
+                    'broker b host: "h" port: 1 end\n'
+                    "pipeline p\n"
+                    '    source from b :: "t"\n'
+                    '    |> sink to b :: "o"\n'
+                    "end\n"
+                )
+
+            model = parse(main)
+            broker_names = {br.name for br in model.brokers}
+            assert "b" in broker_names
+            assert "helper_broker" in broker_names
+            assert len(model.pipelines) == 1
+
+    def test_import_file_not_found(self):
+        """Importing a non-existent file raises FileNotFoundError."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            main = os.path.join(td, "main.sigil")
+            with open(main, "w") as f:
+                f.write(
+                    'import "nonexistent.sigil"\n'
+                    'broker b host: "h" port: 1 end\n'
+                    "pipeline p\n"
+                    '    source from b :: "t"\n'
+                    '    |> sink to b :: "o"\n'
+                    "end\n"
+                )
+
+            with pytest.raises(FileNotFoundError, match="nonexistent.sigil"):
+                parse(main)
+
+    def test_circular_import_direct(self):
+        """Two files importing each other raises CircularImportError."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            a_path = os.path.join(td, "a.sigil")
+            b_path = os.path.join(td, "b.sigil")
+
+            with open(a_path, "w") as f:
+                f.write(
+                    'import "b.sigil"\n'
+                    'broker ba host: "h" port: 1 end\n'
+                    "pipeline pa\n"
+                    '    source from ba :: "t"\n'
+                    '    |> sink to ba :: "o"\n'
+                    "end\n"
+                )
+
+            with open(b_path, "w") as f:
+                f.write(
+                    'import "a.sigil"\n'
+                    'broker bb host: "h" port: 2 end\n'
+                    "pipeline pb\n"
+                    '    source from bb :: "t2"\n'
+                    '    |> sink to bb :: "o2"\n'
+                    "end\n"
+                )
+
+            with pytest.raises(CircularImportError, match="Circular import"):
+                parse(a_path)
+
+    def test_circular_import_self(self):
+        """A file importing itself raises CircularImportError."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            self_path = os.path.join(td, "self.sigil")
+            with open(self_path, "w") as f:
+                f.write(
+                    'import "self.sigil"\n'
+                    'broker b host: "h" port: 1 end\n'
+                    "pipeline p\n"
+                    '    source from b :: "t"\n'
+                    '    |> sink to b :: "o"\n'
+                    "end\n"
+                )
+
+            with pytest.raises(CircularImportError, match="Circular import"):
+                parse(self_path)
+
+    def test_import_merges_constants_and_schemas(self):
+        """Import merges brokers, constants, and schemas from helper."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            helper = os.path.join(td, "helper.sigil")
+            with open(helper, "w") as f:
+                f.write(
+                    'broker helper_b host: "h2" port: 2 end\n'
+                    "const THRESHOLD = 42\n"
+                    "schema sensor\n"
+                    "    value: float\n"
+                    "end\n"
+                )
+
+            main = os.path.join(td, "main.sigil")
+            with open(main, "w") as f:
+                f.write(
+                    'import "helper.sigil"\n'
+                    'broker b host: "h" port: 1 end\n'
+                    "pipeline p\n"
+                    '    source from b :: "t"\n'
+                    '    |> sink to b :: "o"\n'
+                    "end\n"
+                )
+
+            model = parse(main)
+            broker_names = {br.name for br in model.brokers}
+            assert "b" in broker_names
+            assert "helper_b" in broker_names
+            assert len(model.constants) == 1
+            assert model.constants[0].name == "THRESHOLD"
+            assert len(model.schemas) == 1
+            assert model.schemas[0].name == "sensor"
+            assert len(model.pipelines) == 1
+
+    def test_import_merges_pipelines(self):
+        """Imported pipelines are merged into the main model."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            helper = os.path.join(td, "helper.sigil")
+            with open(helper, "w") as f:
+                f.write(
+                    'broker hb host: "h" port: 1 end\n'
+                    "pipeline helper_pipe\n"
+                    '    source from hb :: "t"\n'
+                    '    |> sink to hb :: "o"\n'
+                    "end\n"
+                )
+
+            main = os.path.join(td, "main.sigil")
+            with open(main, "w") as f:
+                f.write(
+                    'import "helper.sigil"\n'
+                    'broker mb host: "h" port: 2 end\n'
+                    "pipeline main_pipe\n"
+                    '    source from mb :: "t2"\n'
+                    '    |> sink to mb :: "o2"\n'
+                    "end\n"
+                )
+
+            model = parse(main)
+            pipe_names = {p.name for p in model.pipelines}
+            assert pipe_names == {"main_pipe", "helper_pipe"}
+
+    def test_transitive_imports(self):
+        """a imports b, b imports c — transitive merge works."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            c_path = os.path.join(td, "c.sigil")
+            with open(c_path, "w") as f:
+                f.write('broker cb host: "h" port: 1 end\nconst BASE = 10\n')
+
+            b_path = os.path.join(td, "b.sigil")
+            with open(b_path, "w") as f:
+                f.write(
+                    'import "c.sigil"\n'
+                    'broker bb host: "h" port: 2 end\n'
+                    "const MULTIPLIER = 5\n"
+                    "pipeline bp\n"
+                    '    source from bb :: "t"\n'
+                    '    |> sink to bb :: "o"\n'
+                    "end\n"
+                )
+
+            a_path = os.path.join(td, "a.sigil")
+            with open(a_path, "w") as f:
+                f.write(
+                    'import "b.sigil"\n'
+                    'broker ab host: "h" port: 3 end\n'
+                    "pipeline ap\n"
+                    '    source from ab :: "t2"\n'
+                    '    |> sink to ab :: "o2"\n'
+                    "end\n"
+                )
+
+            model = parse(a_path)
+            # Broker from c.sigil should be transitively available
+            broker_names = {br.name for br in model.brokers}
+            assert "cb" in broker_names
+            assert "bb" in broker_names
+            assert "ab" in broker_names
+            # Constants from both c and b
+            const_names = {c.name for c in model.constants}
+            assert "BASE" in const_names
+            assert "MULTIPLIER" in const_names
+            # Pipelines from both b and a
+            pipe_names = {p.name for p in model.pipelines}
+            assert pipe_names == {"bp", "ap"}
+
+    def test_import_no_imports_is_noop(self):
+        """File with no import declarations — _resolve_imports is a no-op."""
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "standalone.sigil")
+            with open(path, "w") as f:
+                f.write(
+                    'broker b host: "h" port: 1 end\n'
+                    "pipeline p\n"
+                    '    source from b :: "t"\n'
+                    '    |> sink to b :: "o"\n'
+                    "end\n"
+                )
+
+            model = parse(path)
+            assert len(model.brokers) == 1
+            assert len(model.pipelines) == 1
+            assert len(model.constants) == 0
+            assert len(model.schemas) == 0

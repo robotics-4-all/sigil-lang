@@ -56,6 +56,12 @@ class JoinCtx:
 
 
 @dataclass
+class PipelineLetCtx:
+    name: str
+    value_code: str
+
+
+@dataclass
 class LetBindingCtx:
     name: str
     value_code: str
@@ -92,6 +98,8 @@ class PipelineCtx:
     sink_broker: BrokerCtx
     sink_topic: str
     sink_qos: int
+    has_pipeline_lets: bool = False
+    pipeline_lets: list[PipelineLetCtx] = dc_field(default_factory=list)
     has_filter: bool = False
     filter_code: str = ""
     has_group_by: bool = False
@@ -164,8 +172,11 @@ def generate(model, output_dir: str):
     os.makedirs(os.path.join(output_dir, "pipelines"), exist_ok=True)
 
     const_map = _build_const_map(model)
+    func_defs = _build_func_defs(model)
     env = _create_jinja_env()
-    pipeline_contexts = [_build_pipeline_ctx(p, const_map) for p in model.pipelines]
+    pipeline_contexts = [
+        _build_pipeline_ctx(p, const_map, func_defs) for p in model.pipelines
+    ]
 
     _render_file(
         env,
@@ -207,7 +218,7 @@ def _render_file(env, template_name, output_path, **kwargs):
 
 
 def _build_pipeline_ctx(
-    pipeline, const_map: dict[str, str] | None = None
+    pipeline, const_map: dict[str, str] | None = None, func_defs: dict | None = None
 ) -> PipelineCtx:
     src = pipeline.source
     snk = pipeline.sink
@@ -272,6 +283,24 @@ def _build_pipeline_ctx(
     if not src.pipe and src.schema:
         ctx.schema_name = src.schema.name
 
+    pipeline_let_names: set[str] = set()
+    if pipeline.pipeline_lets:
+        ctx.has_pipeline_lets = True
+        for plb in pipeline.pipeline_lets:
+            ctx.pipeline_lets.append(
+                PipelineLetCtx(
+                    name=plb.name,
+                    value_code=compile_expr(
+                        plb.value,
+                        ExprContext.FILTER,
+                        local_names=pipeline_let_names,
+                        const_map=const_map,
+                        func_defs=func_defs,
+                    ),
+                )
+            )
+            pipeline_let_names.add(plb.name)
+
     if pipeline.route:
         route = pipeline.route
         ctx.has_route = True
@@ -279,7 +308,11 @@ def _build_pipeline_ctx(
             ctx.route_arms.append(
                 RouteArmCtx(
                     condition_code=compile_expr(
-                        arm.condition, ExprContext.FILTER, const_map=const_map
+                        arm.condition,
+                        ExprContext.FILTER,
+                        local_names=pipeline_let_names,
+                        const_map=const_map,
+                        func_defs=func_defs,
                     ),
                     broker=_build_broker_ctx(arm.sink.broker),
                     topic=arm.sink.topic,
@@ -308,7 +341,10 @@ def _build_pipeline_ctx(
                 ObjectFieldCtx(
                     name=f.name,
                     value_code=compile_expr(
-                        f.value, ExprContext.FILTER, const_map=const_map
+                        f.value,
+                        ExprContext.FILTER,
+                        const_map=const_map,
+                        func_defs=func_defs,
                     ),
                 )
             )
@@ -335,7 +371,10 @@ def _build_pipeline_ctx(
                 ObjectFieldCtx(
                     name=f.name,
                     value_code=compile_expr(
-                        f.value, ExprContext.FILTER, const_map=const_map
+                        f.value,
+                        ExprContext.FILTER,
+                        const_map=const_map,
+                        func_defs=func_defs,
                     ),
                 )
             )
@@ -367,7 +406,11 @@ def _build_pipeline_ctx(
         elif cls == "FilterStage":
             ctx.has_filter = True
             ctx.filter_code = compile_expr(
-                stage.condition, ExprContext.FILTER, const_map=const_map
+                stage.condition,
+                ExprContext.FILTER,
+                local_names=pipeline_let_names,
+                const_map=const_map,
+                func_defs=func_defs,
             )
             ctx.has_old_ref = ctx.has_old_ref or _has_temporal_ref(stage.condition)
             ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(stage.condition)
@@ -447,7 +490,10 @@ def _build_pipeline_ctx(
                 param_code = None
                 if acc.param is not None:
                     param_code = compile_expr(
-                        acc.param, ExprContext.FILTER, const_map=const_map
+                        acc.param,
+                        ExprContext.FILTER,
+                        const_map=const_map,
+                        func_defs=func_defs,
                     )
                 ctx.accumulations.append(
                     AccumCtx(
@@ -461,7 +507,11 @@ def _build_pipeline_ctx(
         elif cls == "HavingStage":
             ctx.has_having = True
             ctx.having_code = compile_expr(
-                stage.condition, ExprContext.HAVING, const_map=const_map
+                stage.condition,
+                ExprContext.HAVING,
+                local_names=pipeline_let_names,
+                const_map=const_map,
+                func_defs=func_defs,
             )
             ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(stage.condition)
             ctx.has_quantifier_over_messages = (
@@ -471,7 +521,7 @@ def _build_pipeline_ctx(
 
         elif cls == "MapStage":
             ctx.has_map = True
-            local_names: set[str] = set()
+            local_names: set[str] = set(pipeline_let_names)
             for lb in stage.bindings:
                 ctx.let_bindings.append(
                     LetBindingCtx(
@@ -481,6 +531,7 @@ def _build_pipeline_ctx(
                             ExprContext.MAP,
                             local_names=local_names,
                             const_map=const_map,
+                            func_defs=func_defs,
                         ),
                     )
                 )
@@ -494,6 +545,7 @@ def _build_pipeline_ctx(
                             ExprContext.MAP,
                             local_names=local_names,
                             const_map=const_map,
+                            func_defs=func_defs,
                         ),
                     )
                 )
@@ -535,6 +587,13 @@ def _build_const_map(model) -> dict[str, str]:
             result[c.name] = repr(val.val)
         elif cls == "BoolLiteral":
             result[c.name] = "True" if val.val else "False"
+    return result
+
+
+def _build_func_defs(model) -> dict:
+    result = {}
+    for f in model.functions or []:
+        result[f.name] = f
     return result
 
 

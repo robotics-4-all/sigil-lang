@@ -27,6 +27,15 @@ def visualize_dot(model) -> str:
         lines.append(f'    constants [shape=note label="{label}"];')
         lines.append("")
 
+    if model.functions:
+        func_rows = []
+        for f in model.functions:
+            params = ", ".join(f.params) if f.params else ""
+            func_rows.append(f"func {f.name}({params})")
+        label = "functions\\n" + "\\n".join(func_rows)
+        lines.append(f'    functions [shape=note label="{label}"];')
+        lines.append("")
+
     # Broker nodes
     broker_ids = {}
     for b in model.brokers:
@@ -92,6 +101,13 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
         label = f"join ({jtype})\\n{left} == {right}\\nwithin {window}"
         lines.append(f'        {join_id} [shape=box style=bold label="{label}"];')
         node_chain.append(join_id)
+
+    if pipeline.pipeline_lets:
+        let_id = f"{prefix}_lets"
+        let_names = ", ".join(lb.name for lb in pipeline.pipeline_lets)
+        label = f"let\\n{let_names}"
+        lines.append(f'        {let_id} [shape=note label="{label}"];')
+        node_chain.append(let_id)
 
     raw_stages = _unwrap_stages(pipeline)
     annotations_map = _build_annotations_map(pipeline)
@@ -349,7 +365,15 @@ def visualize_mermaid(model) -> str:
         lines.append(f'    constants["{_mermaid_escape(label)}"]')
         lines.append("")
 
-    # Broker nodes
+    if model.functions:
+        func_rows = []
+        for f in model.functions:
+            params = ", ".join(f.params) if f.params else ""
+            func_rows.append(f"func {f.name}({params})")
+        label = "functions\n" + "\n".join(func_rows)
+        lines.append(f'    functions["{_mermaid_escape(label)}"]')
+        lines.append("")
+
     broker_ids = {}
     for b in model.brokers:
         bid = f"broker_{b.name}"
@@ -360,7 +384,6 @@ def visualize_mermaid(model) -> str:
     if model.brokers:
         lines.append("")
 
-    # Pipelines
     for p in model.pipelines:
         _mermaid_pipeline(p, lines, broker_ids, model)
 
@@ -411,7 +434,13 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
         lines.append(f'        {join_id}["{_mermaid_escape(label)}"]')
         node_chain.append(join_id)
 
-    # Stages
+    if pipeline.pipeline_lets:
+        let_id = f"{prefix}_lets"
+        let_names = ", ".join(lb.name for lb in pipeline.pipeline_lets)
+        label = f"let\n{let_names}"
+        lines.append(f'        {let_id}["{_mermaid_escape(label)}"]')
+        node_chain.append(let_id)
+
     raw_stages = _unwrap_stages(pipeline)
     annotations_map = _build_annotations_map(pipeline)
 

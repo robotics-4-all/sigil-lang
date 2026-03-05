@@ -68,12 +68,14 @@ SCALAR_FUNCS_NUMERIC = {"abs", "round", "floor", "ceil"}
 def validate(model) -> list[SemanticError]:
     errors: list[SemanticError] = []
     const_names = {c.name for c in model.constants}
+    func_names = {f.name for f in model.functions} if model.functions else set()
     errors.extend(_check_unique_broker_names(model))
     errors.extend(_check_unique_pipeline_names(model))
     errors.extend(_check_unique_const_names(model))
     errors.extend(_check_unique_schema_names(model))
     errors.extend(_check_schema_fields(model))
     errors.extend(_check_brokers(model))
+    errors.extend(_check_func_defs(model))
     for pipeline in model.pipelines:
         errors.extend(_check_source(pipeline, model))
         errors.extend(_check_sink_or_route(pipeline))
@@ -91,7 +93,10 @@ def validate(model) -> list[SemanticError]:
         errors.extend(_check_dedup_constraints(pipeline))
         errors.extend(_check_scalar_funcs(pipeline))
         errors.extend(_check_let_bindings(pipeline))
+        errors.extend(_check_pipeline_let_bindings(pipeline, const_names))
         errors.extend(_check_case_exprs(pipeline))
+        errors.extend(_check_match_exprs(pipeline))
+        errors.extend(_check_user_func_calls(pipeline, func_names))
         errors.extend(_check_temporal_refs(pipeline, model))
         errors.extend(_check_temporal_field_validity(pipeline))
         errors.extend(_check_env_refs(pipeline))
@@ -290,10 +295,16 @@ def _check_map_references(pipeline, const_names=None):
             for acc in stage.assignments:
                 agg_names.add(acc.name)
 
+    pipeline_let_names = set()
+    if pipeline.pipeline_lets:
+        for plb in pipeline.pipeline_lets:
+            pipeline_let_names.add(plb.name)
+
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "MapStage":
             continue
         valid_names = set(agg_names)
+        valid_names |= pipeline_let_names
         if const_names:
             valid_names |= const_names
         for binding in stage.bindings:
@@ -794,6 +805,9 @@ def _check_having_references(pipeline, const_names=None):
                 agg_names.add(acc.name)
 
     valid_names = set(agg_names)
+    if pipeline.pipeline_lets:
+        for plb in pipeline.pipeline_lets:
+            valid_names.add(plb.name)
     if const_names:
         valid_names |= const_names
 
@@ -1518,6 +1532,172 @@ def _check_retry(pipeline):
             )
         )
     return errors
+
+
+# ─── Pipeline-level let-bindings ────────────────────────────────────
+
+
+def _check_pipeline_let_bindings(pipeline, const_names=None):
+    errors = []
+    if not pipeline.pipeline_lets:
+        return errors
+
+    seen = set()
+    for lb in pipeline.pipeline_lets:
+        if lb.name in seen:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': duplicate pipeline "
+                    f"let-binding '{lb.name}'."
+                )
+            )
+        if const_names and lb.name in const_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': pipeline let-binding "
+                    f"'{lb.name}' shadows a constant."
+                )
+            )
+        seen.add(lb.name)
+    return errors
+
+
+# ─── User-defined functions ─────────────────────────────────────────
+
+_BUILTIN_FUNC_NAMES = {"abs", "round", "len", "lower", "upper", "floor", "ceil", "fmt"}
+
+
+def _check_func_defs(model):
+    errors = []
+    if not model.functions:
+        return errors
+
+    seen = set()
+    for func in model.functions:
+        if func.name in seen:
+            errors.append(
+                SemanticError(
+                    f"Duplicate function name '{func.name}'. "
+                    f"Function names must be unique."
+                )
+            )
+        if func.name in _BUILTIN_FUNC_NAMES:
+            errors.append(
+                SemanticError(f"Function '{func.name}' shadows a built-in function.")
+            )
+        seen.add(func.name)
+
+        param_seen = set()
+        for param in func.params or []:
+            if param in param_seen:
+                errors.append(
+                    SemanticError(
+                        f"Function '{func.name}': duplicate parameter '{param}'."
+                    )
+                )
+            param_seen.add(param)
+    return errors
+
+
+def _check_user_func_calls(pipeline, func_names):
+    errors = []
+    for stage in _unwrap_stages(pipeline):
+        _walk_expr_for_user_func_calls(stage, pipeline.name, func_names, errors)
+    if pipeline.pipeline_lets:
+        for lb in pipeline.pipeline_lets:
+            _walk_expr_for_user_func_calls(lb.value, pipeline.name, func_names, errors)
+    return errors
+
+
+def _walk_expr_for_user_func_calls(node, pipeline_name, func_names, errors):
+    cls = node.__class__.__name__
+    if cls == "UserFuncCall":
+        if node.name not in func_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': call to undefined function "
+                    f"'{node.name}'."
+                )
+            )
+
+    for attr_name in _EXPR_WALK_ATTRS + (
+        "stages",
+        "assignments",
+        "mappings",
+        "bindings",
+        "list",
+        "subject",
+        "pattern",
+    ):
+        child = getattr(node, attr_name, None)
+        if child is None:
+            continue
+        if isinstance(child, list):
+            for item in child:
+                if (
+                    hasattr(item, "__class__")
+                    and item.__class__.__module__ != "builtins"
+                ):
+                    _walk_expr_for_user_func_calls(
+                        item, pipeline_name, func_names, errors
+                    )
+        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
+            _walk_expr_for_user_func_calls(child, pipeline_name, func_names, errors)
+
+
+# ─── Match expression validation ────────────────────────────────────
+
+
+def _check_match_exprs(pipeline):
+    errors = []
+    for stage in _unwrap_stages(pipeline):
+        _walk_expr_for_match(stage, pipeline.name, errors)
+    if pipeline.pipeline_lets:
+        for lb in pipeline.pipeline_lets:
+            _walk_expr_for_match(lb.value, pipeline.name, errors)
+    return errors
+
+
+def _walk_expr_for_match(node, pipeline_name, errors):
+    cls = node.__class__.__name__
+    if cls == "MatchExpr":
+        if not node.arms:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': match expression must have "
+                    f"at least one 'case' arm."
+                )
+            )
+        if node.arms and not node.elseExpr:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': match expression without "
+                    f"'else' arm may produce None at runtime.",
+                    severity="warning",
+                )
+            )
+
+    for attr_name in _EXPR_WALK_ATTRS + (
+        "stages",
+        "assignments",
+        "mappings",
+        "bindings",
+        "list",
+        "subject",
+        "pattern",
+    ):
+        child = getattr(node, attr_name, None)
+        if child is None:
+            continue
+        if isinstance(child, list):
+            for item in child:
+                if (
+                    hasattr(item, "__class__")
+                    and item.__class__.__module__ != "builtins"
+                ):
+                    _walk_expr_for_match(item, pipeline_name, errors)
+        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
+            _walk_expr_for_match(child, pipeline_name, errors)
 
 
 # ─── Schema validation ──────────────────────────────────────────────

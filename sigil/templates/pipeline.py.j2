@@ -394,6 +394,11 @@ class {{ p.class_name }}Pipeline:
             if not isinstance(msg, dict):
                 logger.warning("Invalid message type: %s", type(msg).__name__)
                 return
+{% if p.has_pipeline_lets %}
+{% for plb in p.pipeline_lets %}
+        {{ plb.name }} = {{ plb.value_code }}
+{% endfor %}
+{% endif %}
 {% if p.has_dedup %}
         _dedup_key = str(_get_nested(msg, {{ p.dedup_key_code }}))
         _now = time.time()
