@@ -1,10 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-05
+**Generated:** 2026-03-06
 
 ## OVERVIEW
 
-`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, and pipeline explanation/visualization.
+`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, and pipeline explanation/visualization.
 
 ## STRUCTURE
 
@@ -13,15 +13,15 @@ aggr_app_dsl/
 +-- sigil/                 # Core package (see sigil/AGENTS.md)
 |   +-- grammar.tx         # textX grammar (IS the metamodel, 493 lines)
 |   +-- language.py        # Metamodel builder + parse + import resolution
-|   +-- semantics.py       # Semantic validation (1883 lines, 30+ _check_* fns)
-|   +-- expressions.py     # AST -> Python expression compiler
-|   +-- codegen.py         # Model -> generated app (11 context dataclasses)
+|   +-- semantics.py       # Semantic validation (1883 lines, 34+ _check_* fns)
+|   +-- expressions.py     # AST -> Python expression compiler (327 lines)
+|   +-- codegen.py         # Model -> generated app (11 context dataclasses, 694 lines)
 |   +-- explain.py         # Human-readable pipeline explanation
 |   +-- visualize.py       # DOT/Mermaid diagram generation
 |   +-- cli.py             # CLI: check / generate / explain / visualize
 |   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2)
 +-- examples/              # 27 progressive .sigil examples (01-25 + simple + multi_pipeline)
-+-- tests/                 # pytest suite (~518 unit + ~26 integration tests)
++-- tests/                 # pytest suite (~692 unit + ~26 integration tests, 94% coverage)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
 +-- setup.py               # Package config, console_scripts entry point
 +-- Makefile               # Docker-based build/test/run targets
@@ -70,7 +70,9 @@ aggr_app_dsl/
 
 ## PIPELINE ARCHITECTURE
 
-Fixed processing pipeline order: `source -> [join] -> deduplicate -> filter -> rate -> flatten -> distinct -> throttle -> sample -> group_by -> window -> aggregate -> accumulate -> having -> map -> sink`.
+Fixed processing pipeline order: `source -> [join] -> [let bindings] -> deduplicate -> filter -> rate -> flatten -> distinct -> throttle -> sample -> group_by -> window -> aggregate -> accumulate -> having -> map -> sink`.
+
+Pipeline-level let bindings (`let name = expr`) appear between join and stages. Computed per-message, available in all downstream stage expressions.
 
 Stage order enforced by `STAGE_ORDER` dict in `semantics.py` (maps stage class names to integer phases -1 through 11). All stages except source/sink optional. Each stage type at most once (`_check_duplicate_stages`), except `WindowStage` (named multi-window).
 
@@ -120,10 +122,12 @@ Built-in expression forms:
 - `env("KEY", default)` -> `os.environ.get('KEY', default)`
 - `fmt("pattern {}", arg1, arg2)` -> `"pattern {}".format(arg1, arg2)`
 - `case { when c => r ... else => d }` -> nested Python ternaries
+- `match subject { case p => r ... else => d }` -> nested Python ternaries (`r if subject == p else d`)
 - `old(msg.x)` -> `_get_nested(self._prev_msg, 'x')`
 - `changed(msg.x)` -> `(_get_nested(msg, 'x') != _get_nested(self._prev_msg, 'x'))`
 - `forall(m => pred)` -> `all(pred for m in messages)`
 - `exists(x in msg.field => pred)` -> `any(pred for x in (_get_nested(msg, 'field') or []))`
+- User-defined functions: `func celsius(t) = (t - 32) * 5 / 9` -> inlined at call sites via `func_defs`
 
 Lifecycle hooks: `@initially { publish { k: v } }` / `@finally { publish { k: v } }`.
 Sink: `format: json|csv|raw`, `batch: { size: N, timeout: Ts }`.
@@ -144,15 +148,15 @@ Generated app structure: `app.py` (imports, signal handling, event loop), `pipel
 
 ## TESTING
 
-~518 unit + ~26 integration tests across 5 files:
+~692 unit + ~26 integration tests across 5 files (94% coverage):
 
 | File | LOC | Coverage |
 |------|-----|----------|
-| `test_grammar.py` | 2883 | Parsing all DSL constructs into AST |
-| `test_semantics.py` | 2402 | All `_check_*` validation rules, errors + warnings |
-| `test_codegen.py` | 2053 | Generated code correctness, expression compilation |
+| `test_codegen.py` | 3625 | Generated code correctness, expression compilation, explain |
+| `test_grammar.py` | 3550 | Parsing all DSL constructs into AST, file imports |
+| `test_semantics.py` | 3056 | All `_check_*` validation rules, errors + warnings |
 | `test_integration.py` | 1996 | End-to-end with real brokers (MQTT/Redis/AMQP/Kafka) |
-| `test_visualize.py` | 925 | DOT and Mermaid diagram output |
+| `test_visualize.py` | 1202 | DOT and Mermaid diagram output |
 
 Conventions:
 - No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py.
