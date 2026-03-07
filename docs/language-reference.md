@@ -167,8 +167,8 @@ end
 
 pipeline monitor
     source from local :: "sensors/data" schema: SensorReading
-    |> filter: msg.temp > 30.0
-    |> filter: msg.location.lat > 35.0   // nested access validated
+    |> filter msg.temp > 30.0
+    |> filter msg.location.lat > 35.0   // nested access validated
     |> sink to local :: "alerts"
 end
 ```
@@ -261,7 +261,7 @@ Downstream stages (like `filter`, `aggregate`, or `map`) can access fields from 
 ### Null Handling (Left Join)
 When using a `left` join, joined fields may be `null`. Use the null coalesce operator (`??`) to provide default values:
 ```sigil
-|> map: {
+|> map {
     customer_name = other.name ?? "Guest"
 }
 ```
@@ -280,8 +280,8 @@ pipeline enrich_orders
         within 30 s
         type: inner
     end
-    |> filter: other.active == true
-    |> map: {
+    |> filter other.active == true
+    |> map {
         order_id = msg.order_id;
         customer_name = other.name ?? "unknown";
         amount = msg.amount
@@ -330,7 +330,7 @@ Conditions are evaluated in order. The first matching arm is used. The `default`
 Drops duplicate messages based on a specific field within a sliding time window.
 
 ```sigil
-|> deduplicate: msg.event_id within 5m
+|> deduplicate msg.event_id within 5m
 ```
 - **key**: Must be a message field path starting with `msg.`.
 - **within**: The time window for tracking duplicates.
@@ -339,7 +339,7 @@ Drops duplicate messages based on a specific field within a sliding time window.
 Drops messages that do not satisfy a boolean expression.
 
 ```sigil
-|> filter: msg.status == "active" and msg.value > 0
+|> filter msg.status == "active" and msg.value > 0
 ```
 
 ### flatten
@@ -348,10 +348,10 @@ Expands an array field into individual messages. Each element of the array
 becomes a separate message flowing through the rest of the pipeline.
 
 **Syntax:**
-|> flatten: msg.<field>
+|> flatten msg.<field>
 
 **Example:**
-|> flatten: msg.items
+|> flatten msg.items
 
 If `msg = {"items": [{"name": "a"}, {"name": "b"}]}`, the flatten stage
 produces two messages: `{"name": "a"}` and `{"name": "b"}`.
@@ -364,10 +364,10 @@ Deduplicates messages by a field value within a time window. Messages with
 the same field value within the TTL window are dropped.
 
 **Syntax:**
-|> distinct: msg.<field> within <duration>
+|> distinct msg.<field> within <duration>
 
 **Example:**
-|> distinct: msg.event_id within 10 m
+|> distinct msg.event_id within 10 m
 
 Unlike `deduplicate` (which uses string key matching), `distinct` compares
 field values for equality and automatically expires entries after the TTL.
@@ -379,12 +379,12 @@ Rate-limits messages with configurable overflow behavior. Unlike `rate`
 and process them when capacity becomes available.
 
 **Syntax:**
-|> throttle: <limit> per <duration> [overflow: drop|buffer] [buffer: <size>]
+|> throttle <limit> per <duration> [overflow: drop|buffer] [buffer: <size>]
 
 **Examples:**
-|> throttle: 100 per 1 s                        // drop excess (default)
-|> throttle: 10 per 1 s overflow: buffer         // buffer excess (default 1000)
-|> throttle: 10 per 1 s overflow: buffer buffer: 500  // buffer with size limit
+|> throttle 100 per 1 s                        // drop excess (default)
+|> throttle 10 per 1 s overflow: buffer         // buffer excess (default 1000)
+|> throttle 10 per 1 s overflow: buffer buffer: 500  // buffer with size limit
 
 When overflow is `buffer`, excess messages are queued (up to buffer size)
 and automatically drained when rate tokens become available. When the buffer
@@ -396,19 +396,19 @@ Probabilistically samples a percentage of messages. Each message has an
 independent chance of being kept.
 
 **Syntax:**
-|> sample: <percentage> %
+|> sample <percentage> %
 
 **Example:**
-|> sample: 10 %
+|> sample 10 %
 
-The percentage must be between 1 and 100. `sample: 100 %` keeps all
-messages. `sample: 1 %` keeps approximately 1 in 100 messages.
+The percentage must be between 1 and 100. `sample 100 %` keeps all
+messages. `sample 1 %` keeps approximately 1 in 100 messages.
 
 ### group_by
 Partitions messages into groups for windowed aggregation.
 
 ```sigil
-|> group_by: msg.sensor_id, msg.region
+|> group_by msg.sensor_id, msg.region
 ```
 Requires a `window` stage to follow.
 
@@ -419,8 +419,8 @@ Defines the time-based buffer for aggregation.
 Pipelines can define multiple windows to perform aggregations over different time horizons simultaneously. When using multiple windows, each must be given a unique name.
 
 ```sigil
-|> window short: tumbling(1m)
-|> window long: tumbling(5m)
+|> window short tumbling(1m)
+|> window long tumbling(5m)
 ```
 
 When multiple windows are defined:
@@ -434,13 +434,13 @@ If only a single window is used, naming is optional and the `over` keyword is no
 #### Tumbling Window
 Fixed-size, non-overlapping windows.
 ```sigil
-|> window: tumbling(1h)
+|> window tumbling(1h)
 ```
 
 #### Sliding Window
 Overlapping windows that advance by a specified step.
 ```sigil
-|> window: sliding(1h, step = 15m)
+|> window sliding(1h, step = 15m)
 ```
 The `step` must be less than or equal to the window size.
 
@@ -448,7 +448,7 @@ The `step` must be less than or equal to the window size.
 Performs calculations over the messages in the current window.
 
 ```sigil
-|> aggregate: {
+|> aggregate {
     avg_val = avg(msg.value)
     max_val = max(msg.value)
     total   = sum(msg.count)
@@ -460,7 +460,7 @@ Performs calculations over the messages in the current window.
 When multiple windows are defined, use the `over` keyword to associate an aggregation with a specific window.
 
 ```sigil
-|> aggregate: {
+|> aggregate {
     avg_1m = avg(msg.value) over short
     avg_5m = avg(msg.value) over long
 }
@@ -494,7 +494,7 @@ Requires a `window` stage.
 Filters the results of an aggregation.
 
 ```sigil
-|> having: avg_val > 10 and samples >= 5
+|> having avg_val > 10 and samples >= 5
 ```
 In the `having` stage, bare identifiers (like `avg_val`) resolve to the names defined in the `aggregate` stage.
 
@@ -502,7 +502,7 @@ In the `having` stage, bare identifiers (like `avg_val`) resolve to the names de
 Transforms the output message structure.
 
 ```sigil
-|> map: {
+|> map {
     let temp_c = (avg_val - 32) * 5 / 9;
     
     sensor_id = msg.sensor_id;
@@ -691,10 +691,10 @@ Annotations can be used to emit diagnostic messages during the `sigil check` pro
 
 ```sigil
 |> @warn("This filter might be too restrictive")
-filter: msg.value > 1000
+filter msg.value > 1000
 
 |> @error("Deprecated stage usage")
-deduplicate: msg.id within 1s
+deduplicate msg.id within 1s
 ```
 
 ## Imports

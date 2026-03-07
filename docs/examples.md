@@ -57,7 +57,7 @@ end
 
 pipeline valid_readings
     source from local :: "sensors/temperature" qos: 1 format: json
-    |> filter: msg.value > -40 and msg.value < 85
+    |> filter msg.value > -40 and msg.value < 85
     |> sink to local :: "validated/temperature" qos: 1
 end
 ```
@@ -82,8 +82,8 @@ end
 
 pipeline temperature_summary
     source from local :: "sensors/+/temperature" qos: 1 format: json
-    |> window: tumbling(30 s)
-    |> aggregate: {
+    |> window tumbling(30 s)
+    |> aggregate {
         avg_temp = avg(msg.value)
         min_temp = min(msg.value)
         max_temp = max(msg.value)
@@ -112,8 +112,8 @@ end
 
 pipeline vibration_monitor
     source from local :: "machines/+/vibration" qos: 2 format: json
-    |> window: sliding(10 s, step = 2 s)
-    |> aggregate: {
+    |> window sliding(10 s, step = 2 s)
+    |> aggregate {
         avg_rms    = avg(msg.rms)
         peak_rms   = max(msg.rms)
         deviation  = stddev(msg.rms)
@@ -141,9 +141,9 @@ end
 
 pipeline zone_temperature
     source from factory :: "factory/sensors/temperature" format: json
-    |> group_by: msg.zone
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> group_by msg.zone
+    |> window tumbling(1 m)
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         readings = count()
@@ -172,13 +172,13 @@ end
 
 pipeline energy_report
     source from meters :: "meters/+/energy" format: json
-    |> window: tumbling(1 h)
-    |> aggregate: {
+    |> window tumbling(1 h)
+    |> aggregate {
         total_kwh = sum(msg.kwh)
         peak_kw   = max(msg.kw)
         readings  = count()
     }
-    |> map: {
+    |> map {
         energy      = total_kwh;
         peak_demand = peak_kw;
         cost_eur    = total_kwh * 0.12;
@@ -217,10 +217,10 @@ end
 
 pipeline fleet_telemetry
     source from fleet_mqtt :: "fleet/+/telemetry"
-    |> filter: msg.speed > 0
-    |> group_by: msg.vehicle_id
-    |> window: tumbling(5 m)
-    |> aggregate: {
+    |> filter msg.speed > 0
+    |> group_by msg.vehicle_id
+    |> window tumbling(5 m)
+    |> aggregate {
         avg_speed = avg(msg.speed)
         max_speed = max(msg.speed)
         total_dist = sum(msg.distance)
@@ -229,7 +229,7 @@ pipeline fleet_telemetry
         first_loc = first(msg.location)
         last_loc = last(msg.location)
     }
-    |> map: {
+    |> map {
         vehicle = msg.vehicle_id;
         stats = {
             avg: avg_speed,
@@ -275,8 +275,8 @@ end
 
 pipeline smart_summary
     source from edge_mqtt :: "sensors/data"
-    |> window: sliding(10 s, step = 2 s)
-    |> aggregate: {
+    |> window sliding(10 s, step = 2 s)
+    |> aggregate {
         val = avg(msg.value)
     }
     |> sink to cloud_redis :: "summary_stream"
@@ -305,8 +305,8 @@ end
 
 pipeline monitor
     source from local :: "sensors/temp"
-    |> filter: msg.value > TEMP_THRESHOLD
-    |> map: {
+    |> filter msg.value > TEMP_THRESHOLD
+    |> map {
         val = msg.value;
         env = env("DEPLOY_ENV", "development")
     }
@@ -335,13 +335,13 @@ end
 
 pipeline error_monitor
     source from local :: "api/logs"
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> window tumbling(1 m)
+    |> aggregate {
         total = count()
         errors = count(msg.status >= 500)
     }
-    |> having: total >= MIN_REQUESTS
-    |> map: {
+    |> having total >= MIN_REQUESTS
+    |> map {
         let rate = (errors / total) * 100;
         error_rate = rate;
         severity = case {
@@ -372,9 +372,9 @@ end
 
 pipeline sensor_cleaner
     source from local :: "sensors/raw"
-    |> deduplicate: msg.event_id within 60 s
-    |> filter: changed(msg.status) or msg.value > 100
-    |> map: {
+    |> deduplicate msg.event_id within 60 s
+    |> filter changed(msg.status) or msg.value > 100
+    |> map {
         current = msg.value;
         previous = old(msg.value);
         status = msg.status
@@ -401,12 +401,12 @@ end
 
 pipeline quality_check
     source from local :: "iot/data"
-    |> filter: exists(t in msg.tags => t == "alarm")
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> filter exists(t in msg.tags => t == "alarm")
+    |> window tumbling(1 m)
+    |> aggregate {
         readings = count()
     }
-    |> having: forall(m => m.value > 0)
+    |> having forall(m => m.value > 0)
     |> sink to local :: "iot/quality"
 end
 ```
@@ -497,13 +497,13 @@ end
 
 pipeline clean
     source from local :: "raw/data"
-    |> filter: msg.valid == true
+    |> filter msg.valid == true
     |> sink to local :: "internal/clean"
 end
 
 pipeline enrich
     source from pipe clean
-    |> map: {
+    |> map {
         val = msg.value;
         origin = "enriched";
         value = msg.value
@@ -563,10 +563,10 @@ end
 pipeline annotated_pipe
     source from local :: "input"
     @warn("Filtering might drop important spikes")
-    |> filter: msg.value < 100
+    |> filter msg.value < 100
     @error("Aggregation is required for the dashboard")
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> window tumbling(1 m)
+    |> aggregate {
         total = sum(msg.value)
     }
     |> sink to local :: "output"
@@ -591,14 +591,14 @@ end
 
 pipeline rate_limited
     source from local :: "high_volume/input"
-    |> rate: 100 per 1 s
+    |> rate 100 per 1 s
        on_excess: drop
     |> sink to local :: "throttled/output"
 end
 
 pipeline warning_rate
     source from local :: "api/requests"
-    |> rate: 10 per 1 s
+    |> rate 10 per 1 s
        on_excess: warn
     |> sink to local :: "monitored/output"
 end
@@ -623,14 +623,14 @@ end
 
 pipeline smoothed_temp
     source from local :: "sensors/temp"
-    |> window: tumbling(10 s)
-    |> aggregate: {
+    |> window tumbling(10 s)
+    |> aggregate {
         avg_temp = avg(msg.value)
     }
-    |> accumulate: {
+    |> accumulate {
         smooth = ema(avg_temp, 0.3)
     }
-    |> map: {
+    |> map {
         temp = smooth
     }
     |> sink to local :: "analytics/smooth"
@@ -638,7 +638,7 @@ end
 
 pipeline energy_total
     source from local :: "meters/power"
-    |> accumulate: {
+    |> accumulate {
         total_energy = cumsum(msg.watts * (1/3600));
         change = delta(msg.watts)
     }
@@ -664,12 +664,12 @@ end
 
 pipeline formatted_output
     source from local :: "sensors/+"
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> window tumbling(1 m)
+    |> aggregate {
         avg_val: float = avg(msg.value)
         total: int = count()
     }
-    |> map: {
+    |> map {
         message = fmt("Sensor {} average is {:.2f} over {} samples", 
                       msg.sensor_id, avg_val, total);
         value = avg_val
@@ -712,7 +712,7 @@ end
 
 pipeline validated_pipeline
     source from local :: "sensors/data" schema: SensorReading
-    |> filter: msg.value > 0
+    |> filter msg.value > 0
     |> sink to local :: "validated/data"
 end
 ```
@@ -745,7 +745,7 @@ pipeline customer_enrichment
        within 30 s 
        type: inner
     end
-    |> map: {
+    |> map {
         reading = msg.value;
         customer_name = other.name ?? "Unknown";
         zone = other.zone ?? "Default"
@@ -778,8 +778,8 @@ end
 
 pipeline robust_sensor
     source from local :: "sensors/+"
-    |> filter: msg.value / msg.divisor > 0
-    |> map: {
+    |> filter msg.value / msg.divisor > 0
+    |> map {
         val = msg.value
     }
     |> sink to local :: "output"
@@ -788,7 +788,7 @@ end
 
 pipeline silent_fail
     source from local :: "unreliable/source"
-    |> filter: msg.x > 0
+    |> filter msg.x > 0
     |> sink to local :: "output"
     on_error: drop
 end
@@ -814,25 +814,25 @@ end
 
 pipeline data_sampler
     source from local :: "high_frequency/data"
-    |> sample: 10%
+    |> sample 10%
     |> sink to local :: "sampled/data"
 end
 
 pipeline list_flattener
     source from local :: "batches"
-    |> flatten: msg.items
+    |> flatten msg.items
     |> sink to local :: "individual_items"
 end
 
 pipeline event_dedup
     source from local :: "events"
-    |> distinct: msg.event_id within 10 m
+    |> distinct msg.event_id within 10 m
     |> sink to local :: "unique_events"
 end
 
 pipeline smooth_flow
     source from local :: "bursty/source"
-    |> throttle: 5 per 1 s 
+    |> throttle 5 per 1 s 
        overflow: buffer 
        buffer: 200
     |> sink to local :: "smooth/output"
@@ -859,13 +859,13 @@ end
 pipeline resilient_analytics
     retry: 5 with backoff 500 ms
     source from local :: "sensors/temp"
-    |> window short: tumbling(1 m)
-    |> window long: tumbling(5 m)
-    |> aggregate: {
+    |> window short tumbling(1 m)
+    |> window long tumbling(5 m)
+    |> aggregate {
         avg_1m = avg(msg.value) over short
         avg_5m = avg(msg.value) over long
     }
-    |> map: {
+    |> map {
         current_avg = avg_1m;
         trend_avg = avg_5m;
         diff = avg_1m - avg_5m
