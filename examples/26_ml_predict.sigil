@@ -1,0 +1,68 @@
+/*
+ * Example 26 — ML Inference (Predict Stage)
+ * ==========================================
+ * Demonstrates using a pre-trained ML model in a streaming pipeline.
+ *
+ * MODEL DECLARATION:
+ *   model <name>
+ *       source: <path-or-env>        -- path to model file
+ *       runtime: onnx|sklearn|torch|tflite|custom
+ *       features: [msg.field, ...]   -- input features extracted from message
+ *       returns: [name, ...]         -- output names injected into message
+ *   end
+ *
+ * PREDICT STAGE:
+ *   |> predict <model-name>
+ *
+ * After prediction, output values are available as msg.<name> in
+ * downstream stages (filter, map, aggregate, etc.).
+ *
+ * SUPPORTED RUNTIMES:
+ *   onnx    — ONNX Runtime (onnxruntime)
+ *   sklearn — scikit-learn (joblib)
+ *   torch   — PyTorch TorchScript (torch.jit)
+ *   tflite  — TensorFlow Lite (tflite-runtime)
+ *   custom  — User Python module with predict(input) -> list
+ *
+ * SCENARIO:
+ *   Sensor telemetry flows in from edge devices.  An ONNX anomaly
+ *   detection model scores each reading.  The score and metadata are
+ *   forwarded to a cloud alerting topic.
+ *
+ * INPUT:  {"device_id": "S-42", "temperature": 87.3, "humidity": 0.92, "pressure": 1013.2}
+ * OUTPUT: {"device_id": "S-42", "anomaly_score": 0.91, "temperature": 87.3}
+ */
+
+broker edge
+    host: "localhost"
+    port: 1883
+end
+
+broker cloud
+    host: "mqtt.cloud.io"
+    port: 8883
+    ssl: true
+end
+
+model anomaly_detector
+    source: "models/anomaly.onnx"
+    runtime: onnx
+    features: [msg.temperature, msg.humidity, msg.pressure]
+    returns: [anomaly_score, is_anomaly]
+end
+
+pipeline anomaly_alert
+    source from edge :: "sensors/+/telemetry"
+
+    |> filter msg.temperature is not null
+
+    |> predict anomaly_detector
+
+    |> map {
+        device_id = msg.device_id;
+        anomaly_score = msg.anomaly_score;
+        temperature = msg.temperature
+    }
+
+    |> sink to cloud :: "alerts/anomaly"
+end

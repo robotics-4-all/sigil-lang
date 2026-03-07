@@ -1,0 +1,60 @@
+/*
+ * Example 28 — ML Quality Inspection with PyTorch
+ * =================================================
+ * Uses a TorchScript model for real-time quality scoring on a
+ * manufacturing production line.
+ *
+ * RUNTIME: torch — loads a TorchScript model via torch.jit.load.
+ *
+ * SCENARIO:
+ *   Vision sensors on a conveyor belt extract numeric features
+ *   from product images (edge-computed upstream).  A PyTorch model
+ *   predicts a quality score and defect probability.  Products
+ *   scoring below threshold are diverted for manual inspection.
+ *   Windowed statistics track line quality over 10-minute periods.
+ *
+ * INPUT:  {"product_id": "P-8842", "line": "A3",
+ *          "brightness": 0.82, "symmetry": 0.95,
+ *          "edge_sharpness": 0.71, "color_deviation": 0.04}
+ * OUTPUT: {"line": "A3", "avg_quality": 0.87, "defect_rate": 0.03,
+ *          "inspected": 412}
+ */
+
+broker factory
+    transport: redis
+    host: "10.0.1.50"
+    port: 6379
+end
+
+model quality_model
+    source: env("QUALITY_MODEL_PATH", "models/quality_inspector.pt")
+    runtime: torch
+    features: [msg.brightness, msg.symmetry, msg.edge_sharpness, msg.color_deviation]
+    returns: [quality_score, defect_prob]
+end
+
+pipeline quality_monitor
+    source from factory :: "line/+/features"
+
+    |> predict quality_model
+
+    |> group_by msg.line
+
+    |> window tumbling(10 m)
+
+    |> aggregate {
+        avg_quality = avg(msg.quality_score)
+        max_defect  = max(msg.defect_prob)
+        defect_rate = avg(msg.defect_prob)
+        inspected   = count()
+    }
+
+    |> map {
+        avg_quality  = avg_quality;
+        defect_rate  = defect_rate;
+        max_defect   = max_defect;
+        inspected    = inspected
+    }
+
+    |> sink to factory :: "analytics/quality/summary"
+end
