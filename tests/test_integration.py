@@ -365,7 +365,7 @@ class TestMQTTFilter:
         end
         pipeline filtered
             source from b :: "{src_topic}"
-            |> filter: msg.value > 20
+            |> filter msg.value > 20
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -424,8 +424,8 @@ class TestMQTTWindowAggregate:
         end
         pipeline windowed
             source from b :: "{src_topic}"
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> window tumbling(1 s)
+            |> aggregate {{
                 avg_val = avg(msg.value)
                 total   = sum(msg.value)
                 n       = count()
@@ -488,12 +488,12 @@ class TestMQTTMapStage:
         end
         pipeline mapped
             source from b :: "{src_topic}"
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> window tumbling(1 s)
+            |> aggregate {{
                 avg_val = avg(msg.value)
                 n       = count()
             }}
-            |> map: {{
+            |> map {{
                 average = avg_val;
                 samples = n
             }}
@@ -556,9 +556,9 @@ class TestMQTTFilterAndAggregate:
         end
         pipeline combo
             source from b :: "{src_topic}"
-            |> filter: msg.value > 10
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> filter msg.value > 10
+            |> window tumbling(1 s)
+            |> aggregate {{
                 total = sum(msg.value)
                 n     = count()
             }}
@@ -614,7 +614,7 @@ class TestMQTTDedup:
         end
         pipeline deduped
             source from b :: "{src_topic}"
-            |> deduplicate: msg.event_id within 5 s
+            |> deduplicate msg.event_id within 5 s
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -670,7 +670,7 @@ class TestMQTTDedup:
         end
         pipeline dedup_ttl
             source from b :: "{src_topic}"
-            |> deduplicate: msg.event_id within 1 s
+            |> deduplicate msg.event_id within 1 s
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -734,12 +734,12 @@ class TestMQTTHaving:
         end
         pipeline having_test
             source from b :: "{src_topic}"
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> window tumbling(1 s)
+            |> aggregate {{
                 total = sum(msg.value)
                 n     = count()
             }}
-            |> having: n > 2
+            |> having n > 2
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -793,11 +793,11 @@ class TestMQTTHaving:
         end
         pipeline having_suppress
             source from b :: "{src_topic}"
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> window tumbling(1 s)
+            |> aggregate {{
                 n = count()
             }}
-            |> having: n > 100
+            |> having n > 100
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -850,7 +850,7 @@ class TestMQTTConst:
         const THRESHOLD = 20
         pipeline const_filter
             source from b :: "{src_topic}"
-            |> filter: msg.value > THRESHOLD
+            |> filter msg.value > THRESHOLD
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -908,12 +908,12 @@ class TestMQTTLetBindings:
         end
         pipeline let_test
             source from b :: "{src_topic}"
-            |> window: tumbling(1 s)
-            |> aggregate: {{
+            |> window tumbling(1 s)
+            |> aggregate {{
                 avg_val = avg(msg.value)
                 total   = sum(msg.value)
             }}
-            |> map: {{
+            |> map {{
                 let ratio = avg_val / total;
                 result = ratio
             }}
@@ -979,12 +979,12 @@ class TestMQTTMultiPipeline:
         end
         pipeline high_values
             source from b :: "{src_topic}"
-            |> filter: msg.value >= 50
+            |> filter msg.value >= 50
             |> sink to b :: "{snk_topic_high}"
         end
         pipeline low_values
             source from b :: "{src_topic}"
-            |> filter: msg.value < 50
+            |> filter msg.value < 50
             |> sink to b :: "{snk_topic_low}"
         end
         """
@@ -1166,7 +1166,7 @@ time.sleep(3)
         end
         pipeline redis_filt
             source from b :: "{src_topic}"
-            |> filter: msg.value > 50
+            |> filter msg.value > 50
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1289,7 +1289,7 @@ class TestAMQPFilter:
         end
         pipeline amqp_filt
             source from b :: "{src_topic}"
-            |> filter: msg.value > 50
+            |> filter msg.value > 50
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1508,7 +1508,7 @@ class TestKafkaFilter:
         end
         pipeline kafka_filt
             source from b :: "{src_topic}"
-            |> filter: msg.value > 50
+            |> filter msg.value > 50
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1591,7 +1591,7 @@ class TestMQTTFlatten:
         end
         pipeline flat
             source from b :: "{src_topic}"
-            |> flatten: msg.items
+            |> flatten msg.items
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1646,7 +1646,7 @@ class TestMQTTFlatten:
         end
         pipeline flat_pass
             source from b :: "{src_topic}"
-            |> flatten: msg.items
+            |> flatten msg.items
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1698,7 +1698,7 @@ class TestMQTTDistinct:
         end
         pipeline dist
             source from b :: "{src_topic}"
-            |> distinct: msg.sensor_id within 3 s
+            |> distinct msg.sensor_id within 3 s
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1763,7 +1763,7 @@ class TestMQTTThrottle:
         end
         pipeline throttled
             source from b :: "{src_topic}"
-            |> throttle: 2 per 1 s
+            |> throttle 2 per 1 s
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1821,7 +1821,7 @@ class TestMQTTSample:
         end
         pipeline sampled
             source from b :: "{src_topic}"
-            |> sample: 50%
+            |> sample 50%
             |> sink to b :: "{snk_topic}"
         end
         """
@@ -1877,7 +1877,7 @@ class TestMQTTRetryPolicy:
         end
         pipeline retry_test
             source from b :: "{src_topic}"
-            |> filter: msg.value > 10
+            |> filter msg.value > 10
             |> sink to b :: "{snk_topic}"
             retry: 3 with backoff 200 ms
         end
@@ -1923,7 +1923,7 @@ class TestMQTTRetryPolicy:
 
 @mqtt_available
 class TestMQTTMultiWindow:
-    """Named multi-window: two windows with different sizes produce separate outputs."""
+    """Named multi-window two windows with different sizes produce separate outputs."""
 
     def test_multi_window_produces_tagged_results(self):
         uid = _uid()
@@ -1938,9 +1938,9 @@ class TestMQTTMultiWindow:
         end
         pipeline multi_win
             source from b :: "{src_topic}"
-            |> window fast: tumbling(1 s)
-            |> window slow: tumbling(3 s)
-            |> aggregate: {{
+            |> window fast tumbling(1 s)
+            |> window slow tumbling(3 s)
+            |> aggregate {{
                 fast_n = count() over fast
                 slow_n = count() over slow
             }}

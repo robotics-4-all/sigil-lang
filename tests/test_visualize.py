@@ -21,22 +21,22 @@ broker b host: "localhost" port: 1883 end
 pipeline full
     source from b :: "sensors/raw" format: json
 
-    |> deduplicate: msg.event_id within 10 s
+    |> deduplicate msg.event_id within 10 s
 
-    |> filter: msg.value > 0
+    |> filter msg.value > 0
 
-    |> group_by: msg.sensor_id
+    |> group_by msg.sensor_id
 
-    |> window: tumbling(5 m)
+    |> window tumbling(5 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_val = avg(msg.value)
         n = count()
     }
 
-    |> having: n > 3
+    |> having n > 3
 
-    |> map: {
+    |> map {
         average = avg_val;
         samples = n
     }
@@ -87,7 +87,7 @@ end
 pipeline classify
     source from local :: "sensors/all"
 
-    |> filter: msg.value is not null
+    |> filter msg.value is not null
 
     |> route
         when msg.value > 90 => sink to alerts :: "priority.high"
@@ -106,7 +106,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline p
     source from b :: "in"
-    |> filter: msg.value > THRESHOLD
+    |> filter msg.value > THRESHOLD
     |> sink to b :: "out"
 end
 """
@@ -117,14 +117,14 @@ broker b host: "localhost" port: 1883 end
 pipeline annotated
     source from b :: "in"
 
-    |> @warn("large window may cause memory pressure") window: tumbling(1 h)
+    |> @warn("large window may cause memory pressure") window tumbling(1 h)
 
-    |> aggregate: {
+    |> aggregate {
         avg_val = avg(msg.value)
         n = count()
     }
 
-    |> map: {
+    |> map {
         average = avg_val;
         samples = n
     }
@@ -172,13 +172,13 @@ broker b host: "localhost" port: 1883 end
 pipeline sliding
     source from b :: "in"
 
-    |> window: sliding(10 m, step = 2 m)
+    |> window sliding(10 m, step = 2 m)
 
-    |> aggregate: {
+    |> aggregate {
         total = sum(msg.value)
     }
 
-    |> map: {
+    |> map {
         result = total
     }
 
@@ -196,8 +196,8 @@ pipeline enrich
         within 30 s
         type: inner
     end
-    |> filter: other.active == true
-    |> map: {
+    |> filter other.active == true
+    |> map {
         order_id = msg.order_id;
         customer_name = other.name
     }
@@ -610,7 +610,7 @@ class TestCrossFormat:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> rate: 100 per 1s on_excess: warn
+            |> rate 100 per 1s on_excess: warn
             |> sink to b :: "o"
         end
         """
@@ -625,7 +625,7 @@ class TestCrossFormat:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> rate: 100 per 1s on_excess: warn
+            |> rate 100 per 1s on_excess: warn
             |> sink to b :: "o"
         end
         """
@@ -639,9 +639,9 @@ class TestCrossFormat:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> window: tumbling(10s)
-            |> aggregate: { avg_val = avg(msg.v) }
-            |> accumulate: { smooth = ema(avg_val, 0.3) }
+            |> window tumbling(10s)
+            |> aggregate { avg_val = avg(msg.v) }
+            |> accumulate { smooth = ema(avg_val, 0.3) }
             |> sink to b :: "o"
         end
         """
@@ -655,9 +655,9 @@ class TestCrossFormat:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> window: tumbling(10s)
-            |> aggregate: { avg_val = avg(msg.v) }
-            |> accumulate: { smooth = ema(avg_val, 0.3) }
+            |> window tumbling(10s)
+            |> aggregate { avg_val = avg(msg.v) }
+            |> accumulate { smooth = ema(avg_val, 0.3) }
             |> sink to b :: "o"
         end
         """
@@ -686,7 +686,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline sensor_check
     source from b :: "sensors/raw" schema: Sensor
-    |> filter: msg.temp > 30.0
+    |> filter msg.temp > 30.0
     |> sink to b :: "sensors/hot"
 end
 """
@@ -696,7 +696,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline with_dlq
     source from b :: "input"
-    |> filter: msg.value > 0
+    |> filter msg.value > 0
     |> sink to b :: "output"
     on_error: sink to b :: "errors/with_dlq"
 end
@@ -750,7 +750,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline flat
     source from b :: "in"
-    |> flatten: msg.items
+    |> flatten msg.items
     |> sink to b :: "out"
 end
 """
@@ -760,7 +760,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline dedup
     source from b :: "in"
-    |> distinct: msg.id within 5 m
+    |> distinct msg.id within 5 m
     |> sink to b :: "out"
 end
 """
@@ -770,7 +770,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline throttled
     source from b :: "in"
-    |> throttle: 100 per 1 s overflow: drop
+    |> throttle 100 per 1 s overflow: drop
     |> sink to b :: "out"
 end
 """
@@ -780,7 +780,7 @@ broker b host: "localhost" port: 1883 end
 
 pipeline sampled
     source from b :: "in"
-    |> sample: 50 %
+    |> sample 50 %
     |> sink to b :: "out"
 end
 """
@@ -848,9 +848,9 @@ broker b host: "localhost" port: 1883 end
 
 pipeline multi_win
     source from b :: "in"
-    |> window short: tumbling(1 m)
-    |> window long: tumbling(5 m)
-    |> aggregate: {
+    |> window short tumbling(1 m)
+    |> window long tumbling(5 m)
+    |> aggregate {
         avg_1m = avg(msg.value) over short
         avg_5m = avg(msg.value) over long
     }
@@ -996,7 +996,7 @@ class TestPipelineLetVisualize:
     pipeline p
         source from b :: "in"
         let threshold = 42
-        |> filter: msg.value > 10
+        |> filter msg.value > 10
         |> sink to b :: "out"
     end
     """
@@ -1007,7 +1007,7 @@ class TestPipelineLetVisualize:
         source from b :: "in"
         let low = 10
         let high = 100
-        |> filter: msg.value > 0
+        |> filter msg.value > 0
         |> sink to b :: "out"
     end
     """
@@ -1148,7 +1148,7 @@ class TestAnnotationsVisualize:
 
     pipeline p
         source from b :: "in"
-        |> @error("critical filter") filter: msg.value > 0
+        |> @error("critical filter") filter msg.value > 0
         |> sink to b :: "out"
     end
     """
@@ -1177,7 +1177,7 @@ class TestRouteDefaultVisualize:
 
     pipeline p
         source from b :: "in"
-        |> filter: msg.value is not null
+        |> filter msg.value is not null
         |> route
             when msg.value > 100 => sink to b :: "high"
             default => sink to b :: "normal"

@@ -31,16 +31,16 @@ end
 pipeline temp_avg
     source from local :: "sensors/+/temperature" qos: 1 format: json
 
-    |> filter: msg.value > -40 and msg.value < 85
+    |> filter msg.value > -40 and msg.value < 85
 
-    |> window: tumbling(5 m)
+    |> window tumbling(5 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_val = avg(msg.value)
         n       = count()
     }
 
-    |> map: {
+    |> map {
         average = avg_val;
         samples = n
     }
@@ -148,7 +148,7 @@ class TestExpressionCompiler:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: {expr_src}
+            |> filter {expr_src}
             |> sink to b :: "t"
         end
         """
@@ -191,8 +191,8 @@ class TestExpressionCompiler:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> aggregate: { r = avg(msg.v) }
-            |> map: { f = r * 1.8 + 32 }
+            |> aggregate { r = avg(msg.v) }
+            |> map { f = r * 1.8 + 32 }
             |> sink to b :: "t"
         end
         """
@@ -269,8 +269,8 @@ class TestExpressionCompiler:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> aggregate: { v = avg(msg.x) }
-            |> map: { out = case { when v > 0 => "pos" when v == 0 => "zero" else => "neg" } }
+            |> aggregate { v = avg(msg.x) }
+            |> map { out = case { when v > 0 => "pos" when v == 0 => "zero" else => "neg" } }
             |> sink to b :: "t"
         end
         """
@@ -300,8 +300,8 @@ def test_let_binding_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: {
+        |> aggregate { v = avg(msg.x) }
+        |> map {
             let ratio = v * 100;
             result = ratio
         }
@@ -413,7 +413,7 @@ def test_const_inlined_in_filter():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.v > THRESHOLD
+        |> filter msg.v > THRESHOLD
         |> sink to b :: "b"
     end
     """
@@ -431,9 +431,9 @@ def test_const_inlined_in_map():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { result = v * FACTOR }
+        |> window tumbling(5 m)
+        |> aggregate { v = avg(msg.x) }
+        |> map { result = v * FACTOR }
         |> sink to b :: "b"
     end
     """
@@ -450,7 +450,7 @@ def test_env_ref_generates_import_os():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.v > env("THRESHOLD", 100)
+        |> filter msg.v > env("THRESHOLD", 100)
         |> sink to b :: "b"
     end
     """
@@ -467,9 +467,9 @@ def test_case_in_map_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { out = case { when v > 100 => "high" when v > 0 => "low" else => "none" } }
+        |> window tumbling(5 m)
+        |> aggregate { v = avg(msg.x) }
+        |> map { out = case { when v > 100 => "high" when v > 0 => "low" else => "none" } }
         |> sink to b :: "b"
     end
     """
@@ -487,10 +487,10 @@ def test_having_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count()  a = avg(msg.v) }
-        |> having: n > 5
-        |> map: { result = a }
+        |> window tumbling(5 m)
+        |> aggregate { n = count()  a = avg(msg.v) }
+        |> having n > 5
+        |> map { result = a }
         |> sink to b :: "b"
     end
     """
@@ -508,7 +508,7 @@ def test_dedup_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> deduplicate: msg.event_id within 30 s
+        |> deduplicate msg.event_id within 30 s
         |> sink to b :: "b"
     end
     """
@@ -527,7 +527,7 @@ def test_temporal_codegen_has_prev_msg():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: old(msg.status) != msg.status
+        |> filter old(msg.status) != msg.status
         |> sink to b :: "b"
     end
     """
@@ -548,9 +548,9 @@ def test_forall_compiles_to_all():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { n = count() }
-        |> having: forall(m => m > 0)
+        |> window tumbling(10s)
+        |> aggregate { n = count() }
+        |> having forall(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -568,7 +568,7 @@ def test_exists_with_collection_compiles_to_any():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: exists(x in msg.tags => x == "critical")
+        |> filter exists(x in msg.tags => x == "critical")
         |> sink to b :: "b"
     end
     """
@@ -586,9 +586,9 @@ def test_forall_expression_compiler():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { n = count() }
-        |> having: forall(m => m > 0)
+        |> window tumbling(10s)
+        |> aggregate { n = count() }
+        |> having forall(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -606,7 +606,7 @@ def test_exists_expression_compiler():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: exists(x in msg.items => x > 10)
+        |> filter exists(x in msg.items => x > 10)
         |> sink to b :: "b"
     end
     """
@@ -937,7 +937,7 @@ def test_annotation_does_not_affect_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.x > 0
+        |> filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -945,7 +945,7 @@ def test_annotation_does_not_affect_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> @warn("slow") filter: msg.x > 0
+        |> @warn("slow") filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -983,9 +983,9 @@ def test_explain_stages():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> filter: msg.x > 0
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count() }
+        |> filter msg.x > 0
+        |> window tumbling(5 m)
+        |> aggregate { n = count() }
         |> sink to b :: "out"
     end
     """
@@ -1021,7 +1021,7 @@ class TestRightSideArithmeticCompilation:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: {expr_src}
+            |> filter {expr_src}
             |> sink to b :: "o"
         end
         """
@@ -1099,7 +1099,7 @@ class TestRateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 100 per 1s
+            |> rate 100 per 1s
             |> sink to b :: "out"
         end
         """
@@ -1115,7 +1115,7 @@ class TestRateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 50 per 5s on_excess: warn
+            |> rate 50 per 5s on_excess: warn
             |> sink to b :: "out"
         end
         """
@@ -1129,7 +1129,7 @@ class TestRateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 10 per 1s on_excess: error
+            |> rate 10 per 1s on_excess: error
             |> sink to b :: "out"
         end
         """
@@ -1142,7 +1142,7 @@ class TestRateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 10 per 1s on_excess: drop
+            |> rate 10 per 1s on_excess: drop
             |> sink to b :: "out"
         end
         """
@@ -1221,7 +1221,7 @@ class TestJoinCodegen:
                 on msg.id == other.id
                 within 10 s
             end
-            |> map: { name = other.name }
+            |> map { name = other.name }
             |> sink to b :: "out"
         end
         """
@@ -1246,8 +1246,8 @@ class TestJoinCodegen:
                 within 30 s
                 type: inner
             end
-            |> filter: msg.value > 0
-            |> map: { customer = other.name }
+            |> filter msg.value > 0
+            |> map { customer = other.name }
             |> sink to local :: "enriched"
         end
         """
@@ -1272,9 +1272,9 @@ class TestAccumulateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10s)
-            |> aggregate: { avg_val = avg(msg.v) }
-            |> accumulate: { smooth = ema(avg_val, 0.3) }
+            |> window tumbling(10s)
+            |> aggregate { avg_val = avg(msg.v) }
+            |> accumulate { smooth = ema(avg_val, 0.3) }
             |> sink to b :: "out"
         end
         """
@@ -1289,9 +1289,9 @@ class TestAccumulateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10s)
-            |> aggregate: { total = sum(msg.v) }
-            |> accumulate: { running = cumsum(total) }
+            |> window tumbling(10s)
+            |> aggregate { total = sum(msg.v) }
+            |> accumulate { running = cumsum(total) }
             |> sink to b :: "out"
         end
         """
@@ -1305,9 +1305,9 @@ class TestAccumulateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10s)
-            |> aggregate: { total = sum(msg.v) }
-            |> accumulate: { change = delta(total) }
+            |> window tumbling(10s)
+            |> aggregate { total = sum(msg.v) }
+            |> accumulate { change = delta(total) }
             |> sink to b :: "out"
         end
         """
@@ -1322,11 +1322,11 @@ class TestAccumulateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10s)
-            |> aggregate: { avg_val = avg(msg.v) }
-            |> accumulate: { smooth = ema(avg_val, 0.3) }
-            |> having: smooth > 10
-            |> map: { result = smooth }
+            |> window tumbling(10s)
+            |> aggregate { avg_val = avg(msg.v) }
+            |> accumulate { smooth = ema(avg_val, 0.3) }
+            |> having smooth > 10
+            |> map { result = smooth }
             |> sink to b :: "out"
         end
         """
@@ -1341,20 +1341,20 @@ class TestAccumulateCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 100 per 1s on_excess: warn
-            |> filter: msg.v > 0
-            |> window: tumbling(10s)
-            |> aggregate: {
+            |> rate 100 per 1s on_excess: warn
+            |> filter msg.v > 0
+            |> window tumbling(10s)
+            |> aggregate {
                 avg_val = avg(msg.v)
                 total = sum(msg.v)
             }
-            |> accumulate: {
+            |> accumulate {
                 smooth = ema(avg_val, 0.3)
                 running = cumsum(total)
                 change = delta(total)
             }
-            |> having: smooth > 5
-            |> map: {
+            |> having smooth > 5
+            |> map {
                 smoothed = smooth;
                 cumulative = running;
                 delta_val = change
@@ -1385,7 +1385,7 @@ class TestFmtCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> map: {
+            |> map {
                 label = fmt("Temperature: {}C", msg.temp)
             }
             |> sink to b :: "out"
@@ -1401,7 +1401,7 @@ class TestFmtCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> map: {
+            |> map {
                 label = fmt("{} = {}", msg.key, msg.value)
             }
             |> sink to b :: "out"
@@ -1429,8 +1429,8 @@ class TestTypeAnnotationCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: {
+            |> window tumbling(10 s)
+            |> aggregate {
                 total: float = sum(msg.value)
             }
             |> sink to b :: "out"
@@ -1445,8 +1445,8 @@ class TestTypeAnnotationCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: {
+            |> window tumbling(10 s)
+            |> aggregate {
                 n: int = count()
             }
             |> sink to b :: "out"
@@ -1461,8 +1461,8 @@ class TestTypeAnnotationCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: {
+            |> window tumbling(10 s)
+            |> aggregate {
                 total = sum(msg.value)
             }
             |> sink to b :: "out"
@@ -1478,8 +1478,8 @@ class TestTypeAnnotationCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: {
+            |> window tumbling(10 s)
+            |> aggregate {
                 total: float = sum(msg.value)
                 n = count()
                 avg_val: float = avg(msg.value)
@@ -1511,8 +1511,8 @@ class TestHardeningCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: { total = sum(msg.value) }
+            |> window tumbling(10 s)
+            |> aggregate { total = sum(msg.value) }
             |> sink to b :: "out"
         end
         """
@@ -1611,7 +1611,7 @@ class TestSchemaCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in" schema: Sensor
-            |> filter: msg.temp > 30.0
+            |> filter msg.temp > 30.0
             |> sink to b :: "out"
         end
         """
@@ -1650,7 +1650,7 @@ class TestSchemaCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in" schema: Sensor
-            |> filter: msg.temp > 30.0
+            |> filter msg.temp > 30.0
             |> sink to b :: "out"
         end
         """
@@ -1737,9 +1737,9 @@ class TestOnErrorCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> filter: msg.value > 0
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
+            |> filter msg.value > 0
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
             on_error: sink to b :: "errors/p"
         end
@@ -1752,7 +1752,7 @@ class TestOnErrorCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> filter: msg.value > 0
+            |> filter msg.value > 0
             |> sink to b :: "out"
             on_error: drop
         end
@@ -1799,7 +1799,7 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> flatten: msg.items
+            |> flatten msg.items
             |> sink to b :: "out"
         end
         """
@@ -1814,7 +1814,7 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> distinct: msg.event_id within 30 s
+            |> distinct msg.event_id within 30 s
             |> sink to b :: "out"
         end
         """
@@ -1828,7 +1828,7 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> throttle: 100 per 1 s overflow: drop
+            |> throttle 100 per 1 s overflow: drop
             |> sink to b :: "out"
         end
         """
@@ -1842,7 +1842,7 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> throttle: 10 per 1 s overflow: buffer buffer: 500
+            |> throttle 10 per 1 s overflow: buffer buffer: 500
             |> sink to b :: "out"
         end
         """
@@ -1857,7 +1857,7 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> sample: 50 %
+            |> sample 50 %
             |> sink to b :: "out"
         end
         """
@@ -1870,10 +1870,10 @@ class TestNewStagesCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> flatten: msg.items
-            |> distinct: msg.id within 10 s
-            |> throttle: 50 per 5 s overflow: buffer buffer: 200
-            |> sample: 75 %
+            |> flatten msg.items
+            |> distinct msg.id within 10 s
+            |> throttle 50 per 5 s overflow: buffer buffer: 200
+            |> sample 75 %
             |> sink to b :: "out"
         end
         """
@@ -1936,9 +1936,9 @@ class TestRetryPolicyCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> filter: msg.value > 0
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
+            |> filter msg.value > 0
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
             retry: 7 with backoff 300 ms
         end
@@ -1962,8 +1962,8 @@ class TestMultiWindowCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(1 m)
-            |> aggregate: { n = count() }
+            |> window tumbling(1 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
         end
         """
@@ -1978,9 +1978,9 @@ class TestMultiWindowCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
                 avg_5m = avg(msg.value) over long
             }
@@ -1999,9 +1999,9 @@ class TestMultiWindowCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
                 avg_5m = avg(msg.value) over long
             }
@@ -2018,9 +2018,9 @@ class TestMultiWindowCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
                 avg_5m = avg(msg.value) over long
             }
@@ -2036,13 +2036,13 @@ class TestMultiWindowCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(30 s)
-            |> window long: sliding(10 m, step = 2 m)
-            |> aggregate: {
+            |> window short tumbling(30 s)
+            |> window long sliding(10 m, step = 2 m)
+            |> aggregate {
                 avg_short = avg(msg.value) over short
                 n_long = count() over long
             }
-            |> map: {
+            |> map {
                 fast_avg = avg_short;
                 slow_count = n_long
             }
@@ -2066,7 +2066,7 @@ class TestMatchExprCompilation:
         {prefix}
         pipeline p
             source from b :: "t"
-            |> map: {{ {map_body} }}
+            |> map {{ {map_body} }}
             |> sink to b :: "t"
         end
         """
@@ -2129,7 +2129,7 @@ class TestMatchExprCompilation:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: match msg.type { case "valid" => true else => false }
+            |> filter match msg.type { case "valid" => true else => false }
             |> sink to b :: "t"
         end
         """
@@ -2159,7 +2159,7 @@ class TestUserFuncCallCompilation:
         func double(x) = x * 2
         pipeline p
             source from b :: "t"
-            |> filter: double(msg.value) > 100
+            |> filter double(msg.value) > 100
             |> sink to b :: "t"
         end
         """
@@ -2179,7 +2179,7 @@ class TestUserFuncCallCompilation:
         func celsius(t) = (t - 32) * 5 / 9
         pipeline p
             source from b :: "t"
-            |> filter: celsius(msg.temp) > 0
+            |> filter celsius(msg.temp) > 0
             |> sink to b :: "t"
         end
         """
@@ -2199,7 +2199,7 @@ class TestUserFuncCallCompilation:
         func add(a, b) = a + b
         pipeline p
             source from b :: "t"
-            |> filter: add(msg.x, msg.y) > 0
+            |> filter add(msg.x, msg.y) > 0
             |> sink to b :: "t"
         end
         """
@@ -2217,7 +2217,7 @@ class TestUserFuncCallCompilation:
         func double(x) = x * 2
         pipeline p
             source from b :: "t"
-            |> map: { result = double(msg.value) }
+            |> map { result = double(msg.value) }
             |> sink to b :: "t"
         end
         """
@@ -2237,7 +2237,7 @@ class TestUserFuncCallCompilation:
         func double(x) = x * 2
         pipeline p
             source from b :: "t"
-            |> filter: double(msg.value) > 0
+            |> filter double(msg.value) > 0
             |> sink to b :: "t"
         end
         """
@@ -2260,7 +2260,7 @@ class TestUserFuncCodegen:
         func double(x) = x * 2
         pipeline p
             source from b :: "t"
-            |> filter: double(msg.value) > 100
+            |> filter double(msg.value) > 100
             |> sink to b :: "o"
         end
         """
@@ -2279,7 +2279,7 @@ class TestUserFuncCodegen:
         func triple(x) = x * 3
         pipeline p
             source from b :: "t"
-            |> map: { result = triple(msg.value) }
+            |> map { result = triple(msg.value) }
             |> sink to b :: "o"
         end
         """
@@ -2298,8 +2298,8 @@ class TestUserFuncCodegen:
         func offset(x) = x + 10
         pipeline p
             source from b :: "t"
-            |> filter: double(msg.value) > 50
-            |> map: { adjusted = offset(msg.value) }
+            |> filter double(msg.value) > 50
+            |> map { adjusted = offset(msg.value) }
             |> sink to b :: "o"
         end
         """
@@ -2325,7 +2325,7 @@ class TestPipelineLetCodegen:
         pipeline p
             source from b :: "t"
             let threshold = msg.value * 2
-            |> filter: msg.value > 0
+            |> filter msg.value > 0
             |> sink to b :: "o"
         end
         """
@@ -2344,7 +2344,7 @@ class TestPipelineLetCodegen:
             source from b :: "t"
             let low = 10
             let high = 100
-            |> filter: msg.value > 0
+            |> filter msg.value > 0
             |> sink to b :: "o"
         end
         """
@@ -2367,7 +2367,7 @@ class TestPipelineLetCodegen:
         pipeline p
             source from b :: "t"
             let scaled = msg.temperature * 1.8 + 32
-            |> filter: msg.value > 0
+            |> filter msg.value > 0
             |> sink to b :: "o"
         end
         """
@@ -2393,7 +2393,7 @@ class TestMatchExprCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> map: {
+            |> map {
                 category = match msg.level {
                     case 1 => "low"
                     case 2 => "med"
@@ -2421,7 +2421,7 @@ class TestMatchExprCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: match msg.type { case "valid" => true else => false }
+            |> filter match msg.type { case "valid" => true else => false }
             |> sink to b :: "o"
         end
         """
@@ -2437,7 +2437,7 @@ class TestMatchExprCodegen:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> map: {
+            |> map {
                 label = match msg.code {
                     case 1 => "one"
                     case 2 => "two"
@@ -2473,7 +2473,7 @@ class TestCombinedFeaturesCodegen:
         pipeline p
             source from b :: "t"
             let threshold = 50
-            |> filter: double(msg.value) > threshold
+            |> filter double(msg.value) > threshold
             |> sink to b :: "o"
         end
         """
@@ -2492,7 +2492,7 @@ class TestCombinedFeaturesCodegen:
         pipeline p
             source from b :: "t"
             let base = msg.value * 10
-            |> map: {
+            |> map {
                 label = match msg.type {
                     case "A" => "alpha"
                     else => "other"
@@ -2517,8 +2517,8 @@ class TestCombinedFeaturesCodegen:
         pipeline p
             source from b :: "t"
             let factor = msg.weight
-            |> filter: scale(msg.value) > 50
-            |> map: {
+            |> filter scale(msg.value) > 50
+            |> map {
                 category = match msg.level {
                     case 1 => "low"
                     case 2 => "mid"
@@ -2546,7 +2546,7 @@ class TestCombinedFeaturesCodegen:
         func negate(x) = x * -1
         pipeline p
             source from b :: "t"
-            |> map: {
+            |> map {
                 inverted = negate(msg.value);
                 label = match msg.status {
                     case "ok" => "good"
@@ -2813,7 +2813,7 @@ class TestExplainPipelineLetBindings:
         pipeline p
             source from b :: "t"
             let threshold = msg.value * 2
-            |> filter: msg.value > 0
+            |> filter msg.value > 0
             |> sink to b :: "o"
         end
         """
@@ -3054,7 +3054,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> deduplicate: msg.id within 5 s
+            |> deduplicate msg.id within 5 s
             |> sink to b :: "out"
         end
         """
@@ -3068,7 +3068,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> rate: 100 per 1 s
+            |> rate 100 per 1 s
             |> sink to b :: "out"
         end
         """
@@ -3082,7 +3082,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> flatten: msg.items
+            |> flatten msg.items
             |> sink to b :: "out"
         end
         """
@@ -3096,7 +3096,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> distinct: msg.val within 1 m
+            |> distinct msg.val within 1 m
             |> sink to b :: "out"
         end
         """
@@ -3110,7 +3110,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> throttle: 10 per 1 s
+            |> throttle 10 per 1 s
             |> sink to b :: "out"
         end
         """
@@ -3124,7 +3124,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> sample: 50 %
+            |> sample 50 %
             |> sink to b :: "out"
         end
         """
@@ -3138,7 +3138,7 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> filter: msg.v > 0
+            |> filter msg.v > 0
             |> sink to b :: "out"
         end
         """
@@ -3152,9 +3152,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> group_by: msg.region
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
+            |> group_by msg.region
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
         end
         """
@@ -3168,8 +3168,8 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
         end
         """
@@ -3184,8 +3184,8 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: sliding(10 m, step = 2 m)
-            |> aggregate: { n = count() }
+            |> window sliding(10 m, step = 2 m)
+            |> aggregate { n = count() }
             |> sink to b :: "out"
         end
         """
@@ -3201,9 +3201,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
                 avg_5m = avg(msg.value) over long
             }
@@ -3220,8 +3220,8 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: {
+            |> window tumbling(5 m)
+            |> aggregate {
                 total = sum(msg.value)
             }
             |> sink to b :: "out"
@@ -3237,8 +3237,8 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: {
+            |> window tumbling(5 m)
+            |> aggregate {
                 n = count()
             }
             |> sink to b :: "out"
@@ -3253,8 +3253,8 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window short: tumbling(1 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
             }
             |> sink to b :: "out"
@@ -3269,9 +3269,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: { avg_val = avg(msg.v) }
-            |> accumulate: { smooth = ema(avg_val, 0.3) }
+            |> window tumbling(10 s)
+            |> aggregate { avg_val = avg(msg.v) }
+            |> accumulate { smooth = ema(avg_val, 0.3) }
             |> sink to b :: "out"
         end
         """
@@ -3285,9 +3285,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(10 s)
-            |> aggregate: { total = sum(msg.v) }
-            |> accumulate: { running = cumsum(total) }
+            |> window tumbling(10 s)
+            |> aggregate { total = sum(msg.v) }
+            |> accumulate { running = cumsum(total) }
             |> sink to b :: "out"
         end
         """
@@ -3301,9 +3301,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
-            |> having: n > 5
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
+            |> having n > 5
             |> sink to b :: "out"
         end
         """
@@ -3317,9 +3317,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
-            |> map: { result = n }
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
+            |> map { result = n }
             |> sink to b :: "out"
         end
         """
@@ -3333,9 +3333,9 @@ class TestExplainAllStageTypes:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "in"
-            |> window: tumbling(5 m)
-            |> aggregate: { n = count() }
-            |> map: {
+            |> window tumbling(5 m)
+            |> aggregate { n = count() }
+            |> map {
                 let doubled = n * 2;
                 result = doubled
             }
@@ -3368,22 +3368,22 @@ class TestExplainComprehensivePipeline:
             @initially { publish { status: "started" } }
             source from b :: "sensors/in" schema: Sensor
             let scaled = msg.value * 2
-            |> deduplicate: msg.id within 5 s
-            |> filter: msg.value > 0
-            |> rate: 100 per 1 s
-            |> flatten: msg.items
-            |> distinct: msg.value within 1 m
-            |> throttle: 10 per 1 s
-            |> sample: 50 %
-            |> group_by: msg.region
-            |> window: tumbling(5 m)
-            |> aggregate: {
+            |> deduplicate msg.id within 5 s
+            |> filter msg.value > 0
+            |> rate 100 per 1 s
+            |> flatten msg.items
+            |> distinct msg.value within 1 m
+            |> throttle 10 per 1 s
+            |> sample 50 %
+            |> group_by msg.region
+            |> window tumbling(5 m)
+            |> aggregate {
                 total = sum(msg.value)
                 n = count()
             }
-            |> accumulate: { smooth = ema(total, 0.3) }
-            |> having: total > 100
-            |> map: {
+            |> accumulate { smooth = ema(total, 0.3) }
+            |> having total > 100
+            |> map {
                 let x = total * 2;
                 result = x;
                 count_val = n
@@ -3450,9 +3450,9 @@ def test_group_by_multiple_fields_codegen():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "t"
-        |> group_by: msg.region, msg.zone
-        |> window: tumbling(1 m)
-        |> aggregate: { total = sum(msg.value) }
+        |> group_by msg.region, msg.zone
+        |> window tumbling(1 m)
+        |> aggregate { total = sum(msg.value) }
         |> sink to b :: "o"
     end
     """
@@ -3476,7 +3476,7 @@ def test_const_string_and_bool_codegen():
     const B = true
     pipeline p
         source from b :: "t"
-        |> filter: msg.label == S and B
+        |> filter msg.label == S and B
         |> sink to b :: "o"
     end
     """
@@ -3500,7 +3500,7 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: {expr_src}
+            |> filter {expr_src}
             |> sink to b :: "t"
         end
         """
@@ -3533,8 +3533,8 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> aggregate: { v = avg(msg.x) }
-            |> map: { out = case { when v > 0 => "pos" } }
+            |> aggregate { v = avg(msg.x) }
+            |> map { out = case { when v > 0 => "pos" } }
             |> sink to b :: "t"
         end
         """
@@ -3550,9 +3550,9 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.v) }
-            |> having: total > 10
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.v) }
+            |> having total > 10
             |> sink to b :: "t"
         end
         """
@@ -3567,9 +3567,9 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.v) }
-            |> having: msg.count > 0
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.v) }
+            |> having msg.count > 0
             |> sink to b :: "t"
         end
         """
@@ -3596,9 +3596,9 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.v) }
-            |> having: msg.data.count > 0
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.v) }
+            |> having msg.data.count > 0
             |> sink to b :: "t"
         end
         """
@@ -3613,7 +3613,7 @@ class TestExpressionCompilerCoverage:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "t"
-            |> filter: exists(x in msg.items => x > 0)
+            |> filter exists(x in msg.items => x > 0)
             |> sink to b :: "t"
         end
         """
