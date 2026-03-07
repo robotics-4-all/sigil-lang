@@ -1,0 +1,65 @@
+/*
+ * Example 29 — Edge ML Inference with TensorFlow Lite
+ * ====================================================
+ * Runs a lightweight TFLite model on an edge gateway for
+ * real-time predictive maintenance of industrial pumps.
+ *
+ * RUNTIME: tflite — uses tflite-runtime for minimal footprint
+ *          on constrained devices (RPi, Jetson Nano, etc.).
+ *
+ * SCENARIO:
+ *   Vibration and temperature sensors on industrial pumps publish
+ *   readings at 1 Hz.  A quantized TFLite model predicts remaining
+ *   useful life (RUL) and failure probability locally on the edge
+ *   gateway.  Only readings with elevated failure risk are forwarded
+ *   to the cloud, saving bandwidth.
+ *
+ * INPUT:  {"pump_id": "PUMP-07", "vibration_x": 0.42, "vibration_y": 0.38,
+ *          "vibration_z": 0.55, "bearing_temp": 72.1, "flow_rate": 14.8}
+ * OUTPUT: {"pump_id": "PUMP-07", "failure_prob": 0.73, "rul_hours": 48.2,
+ *          "bearing_temp": 72.1}
+ */
+
+broker edge_gateway
+    host: "localhost"
+    port: 1883
+end
+
+broker cloud_hub
+    host: "iot.cloud-provider.com"
+    port: 8883
+    ssl: true
+    auth: {
+        username: "edge-gw-07"
+        password: "gw-auth-token"
+    }
+end
+
+model pump_health
+    source: "models/pump_rul_quantized.tflite"
+    runtime: tflite
+    features: [msg.vibration_x, msg.vibration_y, msg.vibration_z,
+               msg.bearing_temp, msg.flow_rate]
+    returns: [failure_prob, rul_hours]
+end
+
+pipeline predictive_maintenance
+    source from edge_gateway :: "pumps/+/sensors"
+
+    |> deduplicate msg.pump_id within 2 s
+
+    |> predict pump_health
+
+    |> filter msg.failure_prob > 0.5
+
+    |> map {
+        pump_id      = msg.pump_id;
+        failure_prob = msg.failure_prob;
+        rul_hours    = msg.rul_hours;
+        bearing_temp = msg.bearing_temp
+    }
+
+    |> sink to cloud_hub :: "maintenance/alerts"
+
+    on_error: drop
+end

@@ -3,7 +3,7 @@ SERVICE  := app
 PYTEST   := pytest tests/ -v
 
 .PHONY: build rebuild up down restart install test test-unit test-integration \
-        shell logs status check generate clean help
+        shell logs status check generate validate-examples clean help
 
 build:
 	$(COMPOSE) build
@@ -46,6 +46,9 @@ check: up
 generate: up
 	$(COMPOSE) exec $(SERVICE) sigil generate $(FILE) -o $(or $(OUT),generated/)
 
+validate-examples:
+	@python -c "import sys,os;from sigil.language import parse_string;from sigil.semantics import validate;fail=0;files=sorted(f for f in os.listdir('examples') if f.endswith('.sigil'));exec('for f in files:\n path=os.path.join(\"examples\",f)\n try:\n  m=parse_string(open(path).read());errs=[e for e in validate(m) if e.severity==\"error\"]\n  if errs:\n   print(f\"  FAIL {path}\");[print(f\"       {e}\") for e in errs];fail=1\n  else:print(f\"  OK   {path}\")\n except Exception as exc:print(f\"  FAIL {path}\");print(f\"       {exc}\");fail=1');sys.exit(1 if fail else 0)" && echo "" && echo "All examples valid." || (echo "" && echo "Some examples failed validation." && false)
+
 clean: down
 	$(COMPOSE) down -v --rmi local
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -69,6 +72,7 @@ help:
 	@echo "  logs              Tail service logs"
 	@echo "  status            Show container status"
 	@echo ""
-	@echo "  check FILE=X      Validate a .sigil file"
-	@echo "  generate FILE=X   Generate code (OUT=dir, default: generated/)"
-	@echo "  clean             Remove containers, images, caches"
+	@echo "  check FILE=X        Validate a .sigil file"
+	@echo "  generate FILE=X    Generate code (OUT=dir, default: generated/)"
+	@echo "  validate-examples  Validate all examples/*.sigil files"
+	@echo "  clean              Remove containers, images, caches"

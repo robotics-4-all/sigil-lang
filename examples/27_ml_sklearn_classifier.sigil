@@ -1,0 +1,50 @@
+/*
+ * Example 27 — ML Classification with scikit-learn
+ * ==================================================
+ * Uses a pre-trained scikit-learn classifier to categorize
+ * incoming support tickets by urgency level.
+ *
+ * RUNTIME: sklearn — loads a joblib-serialized model.
+ *
+ * SCENARIO:
+ *   Customer support tickets arrive as structured messages.
+ *   An sklearn model classifies each ticket as low/medium/high
+ *   urgency based on word count, response time, and sentiment.
+ *   Results are routed to priority-specific queues.
+ *
+ * INPUT:  {"ticket_id": "TK-991", "word_count": 320, "response_hours": 0.5,
+ *          "sentiment_score": -0.7, "category": "billing"}
+ * OUTPUT: {"ticket_id": "TK-991", "urgency": 2, "category": "billing"}
+ *         (routed to "tickets/high" because urgency >= 2)
+ */
+
+broker support
+    transport: amqp
+    host: "rabbitmq.internal"
+    port: 5672
+    auth: {
+        username: "ticket-svc"
+        password: "amqp-token"
+    }
+end
+
+model urgency_classifier
+    source: "models/urgency_clf.pkl"
+    runtime: sklearn
+    features: [msg.word_count, msg.response_hours, msg.sentiment_score]
+    returns: [urgency]
+end
+
+pipeline ticket_triage
+    source from support :: "tickets/incoming"
+
+    |> filter msg.word_count is not null
+
+    |> predict urgency_classifier
+
+    |> route
+        when msg.urgency >= 2 => sink to support :: "tickets/high"
+        when msg.urgency >= 1 => sink to support :: "tickets/medium"
+        default               => sink to support :: "tickets/low"
+    end
+end
