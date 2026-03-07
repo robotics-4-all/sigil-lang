@@ -1,17 +1,30 @@
-# Sigil
+<p align="center">
+  <img src=".github/assets/sigil_logo.png" alt="Sigil" width="180" />
+</p>
 
-Sigil is a domain-specific language for building stream-processing aggregation pipelines that compile to standalone Python applications.
+<h1 align="center">Sigil</h1>
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
-![License Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)
-![Built with textX](https://img.shields.io/badge/built%20with-textX-orange.svg)
+<p align="center">
+  A domain-specific language for building stream-processing aggregation pipelines<br>that compile to standalone Python applications.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/license-Apache--2.0-green.svg" alt="License Apache-2.0" />
+  <img src="https://img.shields.io/badge/built%20with-textX-orange.svg" alt="Built with textX" />
+</p>
+
+<p align="center">
+  <img src=".github/assets/sigil_landing.png" alt="Sigil — Stream Processing Pipelines" width="100%" />
+</p>
 
 ## Features
 
 - Declarative pipeline syntax with pipe operators (`|>`)
 - Multi-transport support (MQTT, Redis, AMQP, Kafka) via commlib-py
 - Windowed aggregation (tumbling/sliding) with named multi-window
-- 16 processing stages: filter, deduplicate, rate limit, flatten, distinct, throttle, sample, group_by, window, aggregate, accumulate, having, map, join, route
+- 17 processing stages: filter, predict, deduplicate, rate limit, flatten, distinct, throttle, sample, group_by, window, aggregate, accumulate, having, map, join, route
+- ML inference via `predict` stage (ONNX, scikit-learn, PyTorch, TFLite, custom runtimes)
 - Schema declarations with strict/lenient validation
 - Error handling with Dead Letter Queue (DLQ) routing
 - Pipeline chaining (source from pipe)
@@ -102,6 +115,28 @@ pipeline enrich_orders
 end
 ```
 
+### ML Inference
+```sigil
+model anomaly_detector
+    source: "models/anomaly.onnx"
+    runtime: onnx
+    features: [msg.temperature, msg.humidity, msg.pressure]
+    returns: [anomaly_score, is_anomaly]
+end
+
+pipeline sensor_monitoring
+    source from edge :: "sensors/+/data"
+    |> filter msg.temperature is not null
+    |> predict anomaly_detector
+    |> map {
+        device_id = msg.device_id;
+        score = msg.anomaly_score;
+        temperature = msg.temperature
+    }
+    |> sink to cloud :: "alerts/anomaly"
+end
+```
+
 ### Conditional Routing
 ```sigil
 pipeline classify
@@ -126,7 +161,7 @@ end
 
 ## Pipeline Stages
 
-Sigil enforces a fixed stage order: `source` → `join` → `deduplicate` → `filter` → `rate` → `flatten` → `distinct` → `throttle` → `sample` → `group_by` → `window` → `aggregate` → `accumulate` → `having` → `map` → `sink`.
+Sigil enforces a fixed stage order: `source` → `join` → `deduplicate` → `filter`/`predict` → `rate` → `flatten` → `distinct` → `throttle` → `sample` → `group_by` → `window` → `aggregate` → `accumulate` → `having` → `map` → `sink`.
 
 | Stage | Description | Syntax Snippet |
 |-------|-------------|----------------|
@@ -134,6 +169,7 @@ Sigil enforces a fixed stage order: `source` → `join` → `deduplicate` → `f
 | `join` | Enrich stream with another stream | `|> join broker :: "topic" on ... end` |
 | `deduplicate` | Drop duplicates by key within TTL | `|> deduplicate msg.id within 5 s` |
 | `filter` | Drop messages by condition | `|> filter msg.val > 10` |
+| `predict` | ML model inference | `|> predict my_model` |
 | `rate` | Limit message frequency | `|> rate 100 per 1 s` |
 | `flatten` | Expand array field into messages | `|> flatten msg.items` |
 | `distinct` | Drop duplicate values within TTL | `|> distinct msg.val within 1 m` |
@@ -156,7 +192,7 @@ The project includes a `docker-compose.yml` that provisions the full development
 | MQTT | EMQX | 1883 |
 | Redis | redis:7-alpine | 6379 |
 | AMQP | rabbitmq:3-management-alpine | 5672 |
-| Kafka | bitnami/kafka (KRaft) | 9092 |
+| Kafka | apache/kafka (KRaft) | 9092 |
 
 ### Makefile Targets
 
@@ -170,6 +206,7 @@ make shell              # Open bash in app container
 make logs               # Tail service logs
 make check FILE=X       # Validate a .sigil file
 make generate FILE=X    # Generate code (OUT=dir)
+make validate-examples  # Validate all examples/*.sigil files
 make clean              # Remove containers, images, caches
 ```
 
@@ -200,6 +237,11 @@ make clean              # Remove containers, images, caches
 - 23_on_error_dlq: Error handling and Dead Letter Queues
 - 24_new_stages: Flatten, distinct, and sample stages
 - 25_retry_and_multi_window: Publish retries and named windows
+- 26_ml_predict: ML inference with ONNX anomaly detection
+- 27_ml_sklearn_classifier: scikit-learn ticket classification with routing
+- 28_ml_torch_quality: PyTorch quality scoring with windowed aggregation
+- 29_ml_tflite_edge: TFLite predictive maintenance on edge gateways
+- 30_ml_custom_runtime: Custom Python module for financial signal detection
 
 ## Documentation
 
@@ -211,7 +253,7 @@ Sigil uses a compiler pipeline that transforms high-level DSL definitions into p
 
 ## Testing
 
-The project maintains a comprehensive test suite with over 518 unit tests and 26 integration tests.
+The project maintains a comprehensive test suite with over 737 unit tests and 26 integration tests.
 
 ```bash
 pytest tests/             # Run all tests
