@@ -9,23 +9,23 @@
 ## STRUCTURE
 
 ```
-aggr_app_dsl/
+sigil-lang/
 +-- sigil/                 # Core package (see sigil/AGENTS.md)
-|   +-- grammar.tx         # textX grammar (IS the metamodel, 493 lines)
-|   +-- language.py        # Metamodel builder + parse + import resolution
-|   +-- semantics.py       # Semantic validation (1883 lines, 34+ _check_* fns)
+|   +-- grammar.tx         # textX grammar (IS the metamodel, 495 lines)
+|   +-- language.py        # Metamodel builder + parse + import resolution (67 lines)
+|   +-- semantics.py       # Semantic validation (1883 lines, 50 _check_* fns)
 |   +-- expressions.py     # AST -> Python expression compiler (327 lines)
 |   +-- codegen.py         # Model -> generated app (11 context dataclasses, 694 lines)
-|   +-- explain.py         # Human-readable pipeline explanation
-|   +-- visualize.py       # DOT/Mermaid diagram generation
-|   +-- cli.py             # CLI: check / generate / explain / visualize
-|   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2)
+|   +-- explain.py         # Human-readable pipeline explanation (215 lines)
+|   +-- visualize.py       # DOT/Mermaid diagram generation (644 lines)
+|   +-- cli.py             # CLI: check / generate / explain / visualize (132 lines)
+|   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2, requirements.txt.j2)
 +-- examples/              # 27 progressive .sigil examples (01-25 + simple + multi_pipeline)
-+-- tests/                 # pytest suite (~692 unit + ~26 integration tests, 94% coverage)
++-- tests/                 # pytest suite (~718 unit + ~26 integration tests)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
 +-- setup.py               # Package config, console_scripts entry point
 +-- Makefile               # Docker-based build/test/run targets
-+-- Dockerfile             # App container
++-- Dockerfile             # App container (python:3.12-slim)
 +-- docker-compose.yml     # Full dev stack (EMQX, Redis, RabbitMQ, Kafka)
 +-- .github/workflows/     # CI: unit tests on 3.10/3.11/3.12, integration via Docker
 ```
@@ -42,7 +42,7 @@ aggr_app_dsl/
 | Explain pipeline logic | `sigil/explain.py` | `explain_model()` returns human-readable text |
 | Visualize pipeline diagrams | `sigil/visualize.py` | `visualize_dot(model)`, `visualize_mermaid(model)` |
 | Add codegen context fields | `sigil/codegen.py` | 11 dataclasses: `BrokerCtx`, `PipelineCtx`, etc |
-| Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` |
+| Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` + `explain.py` + `visualize.py` |
 | Add new aggregation function | `grammar.tx` (AggFunc) + `semantics.py` (FUNCS_* sets) + `templates/pipeline.py.j2` |
 | See DSL syntax examples | `examples/*.sigil` | Progressive 01-25 |
 | Language reference | `docs/language-reference.md` | Full syntax documentation |
@@ -55,18 +55,21 @@ aggr_app_dsl/
 - **Validation**: Returns `list[SemanticError]` (never raises). `validate_or_raise()` wraps for CLI. Warnings use `severity="warning"`.
 - **Codegen context dataclasses**: Intermediate representation between parsed model and Jinja2 templates. `PipelineCtx` is sole interface to templates. All template variables come from these dataclasses.
 - **Relative imports within sigil/**: `from .module import ...` (e.g., `from .expressions import ...`, `from .semantics import ...`). External imports use absolute paths.
-- **Map assignment separators**: Multiple `map:` assignments use `;` as separator. `AggregateStage` does NOT use semicolons (`)` provides unambiguous boundaries).
+- **Map assignment separators**: Multiple `map` assignments use `;` as separator. `AggregateStage` does NOT use semicolons (`}` provides unambiguous boundaries).
 - **Python >=3.10**: Uses `str | None` union syntax throughout.
-- **No linter/formatter config**: No ruff/flake8/mypy/black config files.
+- **No linter/formatter config**: No ruff/flake8/mypy/black config files. No `# type: ignore`, `# noqa`, or `# pylint: disable` anywhere.
 - **Setup.py only**: No pyproject.toml or setup.cfg. Uses `setuptools` with `package_data` for grammar.tx and templates.
 - **AST walking**: `_AST_WALK_ATTRS` tuple in codegen.py defines attribute names for recursive AST traversal (`_has_temporal_ref`, `_has_env_ref`, etc.).
 - **Duration handling**: `UNIT_MULTIPLIERS` dict defined in `semantics.py`, imported by `codegen.py` via `from .semantics import UNIT_MULTIPLIERS`.
 - **Grammar changes cascade**: Any grammar.tx change requires checking semantics, codegen, expressions, explain, visualize, and templates.
+- **Naming**: `snake_case` functions/variables, `PascalCase` classes, `_` prefix for private helpers. No TODO/FIXME/HACK comments in codebase.
+- **No `__main__.py`**: Package not runnable via `python -m sigil`. Use `sigil` CLI entry point only.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - No explicit anti-pattern comments (`DO NOT`, `NEVER`, `DEPRECATED`, etc.) in codebase.
 - Warnings handled programmatically via `SemanticError(severity="warning")`, not inline comments.
+- No type suppression (`# type: ignore`, `# noqa`) anywhere in the codebase.
 
 ## PIPELINE ARCHITECTURE
 
@@ -96,9 +99,9 @@ end
 
 pipeline example
     source from local :: "input/topic"
-    |> filter: msg.value > 10
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> filter msg.value > 10
+    |> window tumbling(1 m)
+    |> aggregate {
         total = sum(msg.value)
     }
     |> sink to local :: "output/topic"
@@ -136,7 +139,7 @@ Retry: `retry: N with backoff DURATION`.
 ## CODE GENERATION FLOW
 
 1. `parse(path)` -> textX AST model (with imports resolved)
-2. `validate(model)` -> `list[SemanticError]` (30+ checks)
+2. `validate(model)` -> `list[SemanticError]` (50 checks)
 3. `generate(model, output_dir)`:
    - `_build_const_map(model)` + `_build_func_defs(model)` -> lookup tables
    - Per pipeline: `_build_pipeline_ctx(pipeline, const_map, func_defs)` -> `PipelineCtx`
@@ -148,15 +151,15 @@ Generated app structure: `app.py` (imports, signal handling, event loop), `pipel
 
 ## TESTING
 
-~692 unit + ~26 integration tests across 5 files (94% coverage):
+~718 unit + ~26 integration tests across 5 files:
 
-| File | LOC | Coverage |
-|------|-----|----------|
-| `test_codegen.py` | 3625 | Generated code correctness, expression compilation, explain |
-| `test_grammar.py` | 3550 | Parsing all DSL constructs into AST, file imports |
-| `test_semantics.py` | 3056 | All `_check_*` validation rules, errors + warnings |
-| `test_integration.py` | 1996 | End-to-end with real brokers (MQTT/Redis/AMQP/Kafka) |
-| `test_visualize.py` | 1202 | DOT and Mermaid diagram output |
+| File | LOC | Tests | Coverage |
+|------|-----|-------|----------|
+| `test_codegen.py` | 3625 | 208 | Generated code correctness, expression compilation, explain |
+| `test_grammar.py` | 3550 | 187 | Parsing all DSL constructs into AST, file imports |
+| `test_semantics.py` | 3056 | 194 | All `_check_*` validation rules, errors + warnings |
+| `test_integration.py` | 1996 | 26 | End-to-end with real brokers (MQTT/Redis/AMQP/Kafka) |
+| `test_visualize.py` | 1202 | 103 | DOT and Mermaid diagram output |
 
 Conventions:
 - No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py.
@@ -210,7 +213,8 @@ GitHub Actions (`.github/workflows/ci.yml`):
 - Aggregate assignments support optional type annotations: `total: float = sum(msg.value)`.
 - Broker deduplication in templates: shared broker = single client reused.
 - Duplicate broker names caught by textX (`not unique`) before semantic validation.
-- Named multi-window: `|> window NAME: tumbling(...)` with `over NAME` in aggregations. Each window gets own buffer, flush thread, `_process_window_<name>` method.
-- Root-level utility scripts (`rewrite.py`, `transform.py`, `update_*.py`, `restore.py`) are one-off migration scripts, not part of the core package.
-- `Model_parser_model.dot`, `textx_model_*.dot` are textX debug visualization artifacts.
+- Named multi-window `|> window NAME tumbling(...)` with `over NAME` in aggregations. Each window gets own buffer, flush thread, `_process_window_<name>` method.
+- Root-level utility scripts (`replace_colons.py`, `replace_colons_script.py`) are one-off migration scripts, not part of the core package.
 - 27 examples in `examples/` progress from basic (01_hello_passthrough) to advanced (25_retry_and_multi_window).
+- `pipeline.py.j2` is the largest template at 1053 lines.
+- Version: `0.1.0` (defined in both `setup.py` and `sigil/__init__.py`).

@@ -8,9 +8,9 @@ DSL compiler core: textX grammar -> parse -> validate -> generate standalone Pyt
 
 | Module | LOC | Role | Key Exports |
 |--------|-----|------|-------------|
-| `grammar.tx` | 493 | textX grammar definition | AST classes: `Model`, `Broker`, `Pipeline`, `ConstDef`, `SchemaDef`, `FuncDef`, `Stage` variants, `Expression` tree, `ImportDecl`, `AnnotatedStage`, `RouteBlock`, `ObjectLiteral`, hooks |
+| `grammar.tx` | 495 | textX grammar definition | AST classes: `Model`, `Broker`, `Pipeline`, `ConstDef`, `SchemaDef`, `FuncDef`, `Stage` variants, `Expression` tree, `ImportDecl`, `AnnotatedStage`, `RouteBlock`, `ObjectLiteral`, hooks |
 | `language.py` | 67 | Parser entrypoints + import resolution | `build_metamodel()`, `parse(path)`, `parse_string(src)`, `CircularImportError` |
-| `semantics.py` | 1883 | Semantic validation (34+ checks) | `validate(model)`, `validate_or_raise(model)`, `SemanticError`, `SemanticValidationError`, `_unwrap_stages()`, `UNIT_MULTIPLIERS`, `STAGE_ORDER` |
+| `semantics.py` | 1883 | Semantic validation (50 checks) | `validate(model)`, `validate_or_raise(model)`, `SemanticError`, `SemanticValidationError`, `_unwrap_stages()`, `UNIT_MULTIPLIERS`, `STAGE_ORDER` |
 | `expressions.py` | 327 | Expression -> Python compiler | `compile_expr(node, ctx, local_names, const_map, func_defs)`, `extract_field_keys(ref)`, `ExprContext` enum |
 | `codegen.py` | 694 | Model -> file generation | `generate(model, output_dir)`, 11 `*Ctx` dataclasses |
 | `explain.py` | 215 | Pipeline explanation | `explain_model(model)` -> human-readable string |
