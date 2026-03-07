@@ -25,7 +25,7 @@ pipeline classify
 
     source from local :: "sensors/all"
 
-    |> filter: msg.value is not null
+    |> filter msg.value is not null
 
     |> route
         when msg.value > 90 => sink to alerts :: "priority.high"

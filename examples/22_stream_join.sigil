@@ -27,8 +27,8 @@ pipeline enrich_orders
         within 30 s
         type: inner
     end
-    |> filter: other.active == true
-    |> map: {
+    |> filter other.active == true
+    |> map {
         order_id = msg.order_id;
         customer_name = other.name ?? "unknown";
         customer_email = other.email;

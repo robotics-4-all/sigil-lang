@@ -22,7 +22,7 @@ end
 // unavailable or rejects the message.
 pipeline sensor_reliable
     source from local :: "sensors/raw"
-    |> filter: msg.value > 0
+    |> filter msg.value > 0
     |> sink to local :: "sensors/validated"
 
     // Retry policy: 5 attempts with 500ms base backoff
@@ -36,11 +36,11 @@ pipeline multi_timeframe
     source from local :: "metrics/cpu"
 
     // Define two named windows: one for short-term and one for long-term metrics
-    |> window short: tumbling(1 m)
-    |> window long: tumbling(5 m)
+    |> window short tumbling(1 m)
+    |> window long tumbling(5 m)
 
     // Perform aggregations referencing specific windows using the 'over' keyword
-    |> aggregate: {
+    |> aggregate {
         avg_1m = avg(msg.cpu_percent) over short
         max_1m = max(msg.cpu_percent) over short
         avg_5m = avg(msg.cpu_percent) over long
@@ -48,7 +48,7 @@ pipeline multi_timeframe
     }
 
     // Map the results to a structured output
-    |> map: {
+    |> map {
         short_avg = avg_1m;
         short_max = max_1m;
         long_avg = avg_5m;
@@ -65,10 +65,10 @@ pipeline market_analysis
     source from local :: "market/ticks"
 
     // Define windows for different analysis granularities
-    |> window minute: tumbling(1 m)
-    |> window hourly: tumbling(1 h)
+    |> window minute tumbling(1 m)
+    |> window hourly tumbling(1 h)
 
-    |> aggregate: {
+    |> aggregate {
         avg_price_1m = avg(msg.price) over minute
         vol_1m = sum(msg.volume) over minute
         avg_price_1h = avg(msg.price) over hourly
@@ -76,7 +76,7 @@ pipeline market_analysis
     }
 
     // Filter out low-volume windows before sinking
-    |> having: vol_1m > 100 or vol_1h > 1000
+    |> having vol_1m > 100 or vol_1h > 1000
 
     |> sink to local :: "market/analysis"
 

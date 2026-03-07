@@ -1,11 +1,11 @@
 /*
  * Example 11 — Deduplication and Temporal Logic
  * ================================================
- * Introduces `deduplicate:` for dropping duplicate messages and
+ * Introduces `deduplicate` for dropping duplicate messages and
  * `old()` / `changed()` for temporal state awareness.
  *
  * NEW FEATURES:
- *   deduplicate: msg.field within 30s
+ *   deduplicate msg.field within 30s
  *       — drop messages with duplicate key values within a time window
  *       — must appear before filter (earliest stage position)
  *
@@ -41,12 +41,12 @@ pipeline sensor_dedup
     source from factory :: "sensors/+/events" qos: 1 format: json
 
     // Stage 1: Deduplicate — drop retransmits within 60 seconds
-    |> deduplicate: msg.event_id within 60s
+    |> deduplicate msg.event_id within 60s
 
     // Stage 2: Filter — only forward meaningful changes
     //   changed(msg.status) → status field differs from last message
     //   old(msg.value)      → previous message's value
-    |> filter: changed(msg.status) or msg.value > (old(msg.value) * 1.1)
+    |> filter changed(msg.status) or msg.value > (old(msg.value) * 1.1)
 
     |> sink to factory :: "sensors/processed" qos: 1
 end

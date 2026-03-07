@@ -4,7 +4,7 @@
  * Collect messages over a fixed time window, then compute aggregates.
  *
  * CONCEPTS INTRODUCED:
- *   - window: tumbling(duration)  — fixed, non-overlapping time windows
+ *   - window tumbling(duration)  — fixed, non-overlapping time windows
  *   - aggregate                   — reduce a batch of messages to summary values
  *   - Aggregation functions: avg, sum, min, max, count, stddev, first, last
  *   - Duration units: ms, s, m, h, d
@@ -31,10 +31,10 @@ pipeline temperature_summary
     source from local :: "sensors/+/temperature" qos: 1 format: json
 
     // Collect messages for 30 seconds, then flush
-    |> window: tumbling(30 s)
+    |> window tumbling(30 s)
 
     // Compute summary statistics over the window
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)       // arithmetic mean
         min_temp = min(msg.value)       // lowest reading
         max_temp = max(msg.value)       // highest reading

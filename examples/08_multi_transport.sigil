@@ -58,15 +58,15 @@ pipeline smart_summary
     source from edge :: "sensors/+/data" qos: 1 format: json
 
     // Drop sensor noise (readings below threshold)
-    |> filter: msg.value > 0 and msg.quality != 0
+    |> filter msg.value > 0 and msg.quality != 0
 
     // Per-sensor aggregation
-    |> group_by: msg.sensor_id
+    |> group_by msg.sensor_id
 
     // 2-minute sliding window, updated every 30 seconds
-    |> window: sliding(2 m, step = 30 s)
+    |> window sliding(2 m, step = 30 s)
 
-    |> aggregate: {
+    |> aggregate {
         avg_val  = avg(msg.value)
         max_val  = max(msg.value)
         min_val  = min(msg.value)
@@ -74,7 +74,7 @@ pipeline smart_summary
         samples  = count()
     }
 
-    |> map: {
+    |> map {
         average   = avg_val;
         peak      = max_val;
         low       = min_val;

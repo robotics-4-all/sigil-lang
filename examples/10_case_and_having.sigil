@@ -2,12 +2,12 @@
  * Example 10 — Case Expressions and Having Stage
  * =================================================
  * Introduces `case { when => }` for conditional mapping and
- * `having:` for post-aggregate filtering.
+ * `having` for post-aggregate filtering.
  *
  * NEW FEATURES:
  *   case { when cond => val  else => fallback }
  *       — SQL-style conditional expression (any nesting depth)
- *   having: condition
+ *   having condition
  *       — filter AFTER aggregation (like SQL HAVING)
  *       — references aggregation names directly
  *
@@ -39,13 +39,13 @@ pipeline error_rate_monitor
     source from monitoring :: "servers/+/access_log" qos: 1 format: json
 
     // Only process actual HTTP responses (status >= 100)
-    |> filter: msg.status >= 100
+    |> filter msg.status >= 100
 
-    |> group_by: msg.host
+    |> group_by msg.host
 
-    |> window: tumbling(5 m)
+    |> window tumbling(5 m)
 
-    |> aggregate: {
+    |> aggregate {
         total      = count()
         avg_status = avg(msg.status)
         max_status = max(msg.status)
@@ -54,9 +54,9 @@ pipeline error_rate_monitor
     }
 
     // Having: only report hosts with enough data points
-    |> having: total >= MIN_REQUESTS
+    |> having total >= MIN_REQUESTS
 
-    |> map: {
+    |> map {
         // Compute error rate (approximate: avg_status > 400 means errors)
         let error_rate = (avg_status - 200) / 300;
 

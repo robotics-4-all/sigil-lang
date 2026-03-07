@@ -22,20 +22,20 @@ end
 pipeline temperature_monitor
     source from edge :: "factory/+/temperature" qos: 1 format: json
 
-    |> filter: msg.value > -40 and msg.value < 150
+    |> filter msg.value > -40 and msg.value < 150
 
-    |> group_by: msg.zone
+    |> group_by msg.zone
 
-    |> window: tumbling(1 m)
+    |> window tumbling(1 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         min_temp = min(msg.value)
         readings = count()
     }
 
-    |> map: {
+    |> map {
         temperature_avg = avg_temp;
         temperature_max = max_temp;
         temperature_min = min_temp;
@@ -48,11 +48,11 @@ end
 pipeline vibration_alert
     source from edge :: "factory/+/vibration" qos: 2 format: json
 
-    |> filter: msg.rms > 10.0
+    |> filter msg.rms > 10.0
 
-    |> window: sliding(30 s, step = 5 s)
+    |> window sliding(30 s, step = 5 s)
 
-    |> aggregate: {
+    |> aggregate {
         peak_rms   = max(msg.rms)
         avg_rms    = avg(msg.rms)
         deviation  = stddev(msg.rms)

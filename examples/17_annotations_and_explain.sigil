@@ -18,17 +18,17 @@ pipeline monitored
     source from local :: "sensors/temperature"
 
     // @warn annotations emit warnings during validation
-    |> @warn("large window may cause memory pressure") window: tumbling(1 h)
+    |> @warn("large window may cause memory pressure") window tumbling(1 h)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         n = count()
     }
 
-    |> @warn("having with > 100 threshold may filter most windows") having: n > 100
+    |> @warn("having with > 100 threshold may filter most windows") having n > 100
 
-    |> map: {
+    |> map {
         let severity = case {
             when max_temp > TEMP_LIMIT => "critical"
             when max_temp > 80 => "warning"

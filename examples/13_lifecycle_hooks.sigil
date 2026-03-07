@@ -28,17 +28,17 @@ pipeline monitored_temps
 
     source from edge :: "sensors/temperature"
 
-    |> filter: msg.value is not null
+    |> filter msg.value is not null
 
-    |> window: tumbling(30 s)
+    |> window tumbling(30 s)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         n = count()
     }
 
-    |> map: {
+    |> map {
         average = avg_temp;
         peak = max_temp;
         samples = n

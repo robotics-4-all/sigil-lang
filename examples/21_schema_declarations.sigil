@@ -55,14 +55,14 @@ end
 // all exist in SensorReading and have the expected types.
 pipeline sensor_monitor
     source from local :: "sensors/data" schema: SensorReading
-    |> filter: msg.active == true and msg.temp > -40.0
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> filter msg.active == true and msg.temp > -40.0
+    |> window tumbling(1 m)
+    |> aggregate {
         avg_temp: float = avg(msg.temp)
         avg_humidity: float = avg(msg.humidity)
         readings = count()
     }
-    |> map: {
+    |> map {
         temperature = avg_temp;
         humidity = avg_humidity;
         sample_count = readings
@@ -75,7 +75,7 @@ end
 // that 'location' is an object type containing 'lat'.
 pipeline geo_filter
     source from local :: "sensors/enriched" schema: EnrichedReading
-    |> filter: msg.location.lat > 35.0 and msg.location.lon < 25.0
+    |> filter msg.location.lat > 35.0 and msg.location.lon < 25.0
     |> sink to local :: "sensors/greece"
 end
 
