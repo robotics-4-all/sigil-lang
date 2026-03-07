@@ -88,6 +88,20 @@ class RouteArmCtx:
 
 
 @dataclass
+class ModelCtx:
+    name: str
+    source_code: str
+    runtime: str
+    input_key_strs: list[str]
+    returns: list[str]
+
+
+@dataclass
+class PredictCtx:
+    model: ModelCtx
+
+
+@dataclass
 class PipelineCtx:
     name: str
     class_name: str
@@ -165,6 +179,8 @@ class PipelineCtx:
     has_retry: bool = False
     retry_max: int = 3
     retry_backoff_seconds: float = 0.1
+    has_predict: bool = False
+    predictions: list[PredictCtx] = dc_field(default_factory=list)
 
 
 def generate(model, output_dir: str):
@@ -173,9 +189,10 @@ def generate(model, output_dir: str):
 
     const_map = _build_const_map(model)
     func_defs = _build_func_defs(model)
+    model_map = _build_model_map(model, const_map, func_defs)
     env = _create_jinja_env()
     pipeline_contexts = [
-        _build_pipeline_ctx(p, const_map, func_defs) for p in model.pipelines
+        _build_pipeline_ctx(p, const_map, func_defs, model_map) for p in model.pipelines
     ]
 
     _render_file(
@@ -193,8 +210,16 @@ def generate(model, output_dir: str):
     with open(init_path, "w") as f:
         f.write("")
 
+    ml_runtimes = set()
+    for pctx in pipeline_contexts:
+        for pred in pctx.predictions:
+            ml_runtimes.add(pred.model.runtime)
+
     _render_file(
-        env, "requirements.txt.j2", os.path.join(output_dir, "requirements.txt")
+        env,
+        "requirements.txt.j2",
+        os.path.join(output_dir, "requirements.txt"),
+        ml_runtimes=ml_runtimes,
     )
 
     return output_dir
@@ -218,7 +243,10 @@ def _render_file(env, template_name, output_path, **kwargs):
 
 
 def _build_pipeline_ctx(
-    pipeline, const_map: dict[str, str] | None = None, func_defs: dict | None = None
+    pipeline,
+    const_map: dict[str, str] | None = None,
+    func_defs: dict | None = None,
+    model_map: dict[str, ModelCtx] | None = None,
 ) -> PipelineCtx:
     src = pipeline.source
     snk = pipeline.sink
@@ -415,6 +443,12 @@ def _build_pipeline_ctx(
             ctx.has_old_ref = ctx.has_old_ref or _has_temporal_ref(stage.condition)
             ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(stage.condition)
 
+        elif cls == "PredictStage":
+            ctx.has_predict = True
+            if model_map and stage.model.name in model_map:
+                model_ctx = model_map[stage.model.name]
+                ctx.predictions.append(PredictCtx(model=model_ctx))
+
         elif cls == "GroupByStage":
             ctx.has_group_by = True
             ctx.group_by_keys = [extract_field_keys(ref) for ref in stage.fields]
@@ -594,6 +628,30 @@ def _build_func_defs(model) -> dict:
     result = {}
     for f in model.functions or []:
         result[f.name] = f
+    return result
+
+
+def _build_model_map(
+    model, const_map: dict[str, str] | None = None, func_defs: dict | None = None
+) -> dict[str, ModelCtx]:
+    result = {}
+    for m in model.models:
+        source_code = compile_expr(
+            m.source, ExprContext.FILTER, const_map=const_map, func_defs=func_defs
+        )
+        input_key_strs = []
+        if m.features:
+            for ref in m.features:
+                keys = extract_field_keys(ref)
+                input_key_strs.append(", ".join(repr(k) for k in keys))
+        returns = list(m.returns) if m.returns else []
+        result[m.name] = ModelCtx(
+            name=m.name,
+            source_code=source_code,
+            runtime=m.runtime,
+            input_key_strs=input_key_strs,
+            returns=returns,
+        )
     return result
 
 

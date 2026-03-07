@@ -27,11 +27,13 @@
  *   flatten, distinct, throttle, sample, overflow, buffer,
  *   retry, backoff, with, over,
  *   int, float, str, bool,
- *   func, match
+ *   func, match,
+ *   model, predict, runtime, features, returns,
+ *   onnx, sklearn, torch, tflite, custom
  */
 
 Model:
-    (imports+=ImportDecl | brokers+=Broker | pipelines+=Pipeline | constants+=ConstDef | schemas+=SchemaDef | functions+=FuncDef)*
+    (imports+=ImportDecl | brokers+=Broker | pipelines+=Pipeline | constants+=ConstDef | schemas+=SchemaDef | functions+=FuncDef | models+=ModelDef)*
 ;
 
 // ─── Imports ────────────────────────────────────────────────────────
@@ -196,8 +198,8 @@ BatchConfig:
 
 // ─── Pipeline stages (abstract) ────────────────────────────────────
 Stage:
-    DeduplicateStage | FilterStage | RateStage | FlattenStage | DistinctStage
-    | ThrottleStage | SampleStage | GroupByStage | WindowStage
+    DeduplicateStage | FilterStage | PredictStage | RateStage | FlattenStage
+    | DistinctStage | ThrottleStage | SampleStage | GroupByStage | WindowStage
     | AggregateStage | AccumulateStage | HavingStage | MapStage
 ;
 
@@ -309,6 +311,24 @@ LetBinding:
 
 MapAssignment:
     target=ID '=' value=Expression
+;
+
+PredictStage:
+    'predict' model=[ModelDef]
+;
+
+// ─── ML model declarations ─────────────────────────────────────────
+ModelDef:
+    'model' name=ID
+        'source' ':' source=Expression
+        'runtime' ':' runtime=ModelRuntime
+        ('features' ':' '[' features+=FieldRef[','] ']')?
+        ('returns' ':' '[' returns+=ID[','] ']')?
+    'end'
+;
+
+ModelRuntime:
+    'onnx' | 'sklearn' | 'torch' | 'tflite' | 'custom'
 ;
 
 // ─── Expression grammar (precedence climbing) ──────────────────────

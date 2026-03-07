@@ -65,3 +65,5 @@ def _resolve_imports(model, source_path: str, mm, _seen: set | None = None):
             model.pipelines.append(p)
         for s in imported.schemas:
             model.schemas.append(s)
+        for md in imported.models:
+            model.models.append(md)

@@ -1,1 +1,17 @@
 commlib-py>=0.13.0
+{% if ml_runtimes %}
+numpy
+{% endif %}
+{% if "onnx" in ml_runtimes %}
+onnxruntime
+{% endif %}
+{% if "sklearn" in ml_runtimes %}
+scikit-learn
+joblib
+{% endif %}
+{% if "torch" in ml_runtimes %}
+torch
+{% endif %}
+{% if "tflite" in ml_runtimes %}
+tflite-runtime
+{% endif %}
