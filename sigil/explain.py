@@ -33,6 +33,18 @@ def explain_model(model) -> str:
             lines.append(f"  func {f.name}({params}) = <expression>")
         lines.append("")
 
+    if model.models:
+        lines.append("Models:")
+        for m in model.models:
+            runtime = m.runtime
+            lines.append(f"  {m.name}: {runtime}")
+            if m.features:
+                input_strs = [".".join(ref.segments) for ref in m.features]
+                lines.append(f"    features: [{', '.join(input_strs)}]")
+            if m.returns:
+                lines.append(f"    returns: [{', '.join(m.returns)}]")
+        lines.append("")
+
     if model.brokers:
         lines.append("Brokers:")
         for b in model.brokers:
@@ -184,6 +196,9 @@ def _explain_stage(stage, index):
             parts.append(f"let {', '.join(bindings)}")
         parts.append(f"emit {', '.join(targets)}")
         return f"{prefix} [map]: {'; '.join(parts)}"
+
+    if cls == "PredictStage":
+        return f"{prefix} [predict]: apply model '{stage.model.name}'"
 
     return f"{prefix} [{cls}]"
 

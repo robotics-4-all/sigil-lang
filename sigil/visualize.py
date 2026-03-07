@@ -36,6 +36,15 @@ def visualize_dot(model) -> str:
         lines.append(f'    functions [shape=note label="{label}"];')
         lines.append("")
 
+    if model.models:
+        for m in model.models:
+            mid = f"model_{m.name}"
+            label = f"{m.name}\\n({m.runtime})"
+            lines.append(
+                f'    {mid} [shape=hexagon style=filled fillcolor="#e6f3ff" label="{label}"];'
+            )
+        lines.append("")
+
     # Broker nodes
     broker_ids = {}
     for b in model.brokers:
@@ -320,6 +329,9 @@ def _dot_stage_label(stage, cls):
         targets = [m.target for m in stage.mappings]
         return f"map\\n{', '.join(targets)}"
 
+    if cls == "PredictStage":
+        return f"predict\\n{stage.model.name}"
+
     return cls
 
 
@@ -372,6 +384,13 @@ def visualize_mermaid(model) -> str:
             func_rows.append(f"func {f.name}({params})")
         label = "functions\n" + "\n".join(func_rows)
         lines.append(f'    functions["{_mermaid_escape(label)}"]')
+        lines.append("")
+
+    if model.models:
+        for m in model.models:
+            mid = f"model_{m.name}"
+            label = f"{m.name}\n({m.runtime})"
+            lines.append(f'    {mid}{{{{"{_mermaid_escape(label)}"}}}}')
         lines.append("")
 
     broker_ids = {}
@@ -635,6 +654,9 @@ def _mermaid_stage_label(stage, cls):
     if cls == "MapStage":
         targets = [m.target for m in stage.mappings]
         return f"map\n{', '.join(targets)}"
+
+    if cls == "PredictStage":
+        return f"predict\n{stage.model.name}"
 
     return cls
 
