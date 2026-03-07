@@ -5,10 +5,10 @@
  * flatten, distinct, throttle, and sample.
  *
  * CONCEPTS INTRODUCED:
- *   - flatten  : expands an array field into individual messages
- *   - distinct : deduplicates messages by a field value within a time window
- *   - throttle : limits message throughput with optional buffering
- *   - sample   : probabilistic sampling of messages (percentage-based)
+ *   - flatten expands an array field into individual messages
+ *   - distinct deduplicates messages by a field value within a time window
+ *   - throttle limits message throughput with optional buffering
+ *   - sample probabilistic sampling of messages (percentage-based)
  *
  * STAGE ORDER:
  *   source → deduplicate → filter → rate → flatten → distinct → throttle →
@@ -26,10 +26,10 @@ pipeline flatten_orders
     source from local :: "orders/raw"
 
     // Expand the 'items' array field into individual messages
-    |> flatten: msg.items
+    |> flatten msg.items
 
     // Extract fields from the now-flattened message
-    |> map: {
+    |> map {
         item_name = msg.item_name;
         quantity = msg.quantity;
         price = msg.price
@@ -44,10 +44,10 @@ pipeline distinct_events
     source from local :: "events/raw"
 
     // Filter out test events before deduplication
-    |> filter: msg.status != "test"
+    |> filter msg.status != "test"
 
     // Only allow one message per event_id every 10 minutes
-    |> distinct: msg.event_id within 10m
+    |> distinct msg.event_id within 10m
 
     |> sink to local :: "events/unique"
 end
@@ -58,10 +58,10 @@ pipeline throttled_alerts
     source from local :: "alerts/raw"
 
     // Only process high-severity alerts
-    |> filter: msg.severity > 3
+    |> filter msg.severity > 3
 
     // Limit to 5 alerts per second. If exceeded, buffer up to 200 messages.
-    |> throttle: 5 per 1s overflow: buffer buffer: 200
+    |> throttle 5 per 1s overflow: buffer buffer: 200
 
     |> sink to local :: "alerts/throttled"
 end
@@ -72,16 +72,16 @@ pipeline sampled_telemetry
     source from local :: "telemetry/raw"
 
     // Probabilistically keep only 10% of messages
-    |> sample: 10%
+    |> sample 10%
 
     // Aggregate the sampled data over 1-minute windows
-    |> window: tumbling(1m)
-    |> aggregate: {
+    |> window tumbling(1m)
+    |> aggregate {
         avg_value = avg(msg.value)
         sample_count = count()
     }
 
-    |> map: {
+    |> map {
         avg_value = avg_value;
         sample_count = sample_count
     }
@@ -95,17 +95,17 @@ pipeline combined_pipeline
     source from local :: "data/raw"
 
     // 1. Expand nested readings
-    |> flatten: msg.readings
+    |> flatten msg.readings
 
     // 2. Deduplicate by sensor_id within 5 minutes
-    |> distinct: msg.sensor_id within 5m
+    |> distinct msg.sensor_id within 5m
 
     // 3. Sample 50% of the unique readings
-    |> sample: 50%
+    |> sample 50%
 
     // 4. Aggregate over 30-second windows
-    |> window: tumbling(30s)
-    |> aggregate: {
+    |> window tumbling(30s)
+    |> aggregate {
         avg_val = avg(msg.value)
         min_val = min(msg.value)
         max_val = max(msg.value)
@@ -113,7 +113,7 @@ pipeline combined_pipeline
     }
 
     // 5. Format the output
-    |> map: {
+    |> map {
         avg_val = avg_val;
         min_val = min_val;
         max_val = max_val;

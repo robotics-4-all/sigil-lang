@@ -15,8 +15,8 @@ end
 // Format sensor readings into human-readable labels
 pipeline sensor_labels
     source from local :: "sensors/+/reading"
-    |> filter: msg.value is not null
-    |> map: {
+    |> filter msg.value is not null
+    |> map {
         label = fmt("Sensor {} reads {} at location {}", msg.sensor_id, msg.value, msg.location);
         short = fmt("[{}] {}", msg.sensor_id, msg.value)
     }
@@ -26,14 +26,14 @@ end
 // Use type annotations to ensure aggregate outputs have correct types
 pipeline typed_aggregation
     source from local :: "sensors/+/temperature"
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> window tumbling(1 m)
+    |> aggregate {
         avg_temp: float = avg(msg.temperature)
         max_temp: float = max(msg.temperature)
         min_temp: float = min(msg.temperature)
         sample_count: int = count()
     }
-    |> map: {
+    |> map {
         summary = fmt("Avg: {}, Min: {}, Max: {} ({} samples)",
             avg_temp, min_temp, max_temp, sample_count);
         average = avg_temp;

@@ -18,10 +18,10 @@ pipeline clean
     source from local :: "sensors/raw"
 
     // Dedup by sensor + timestamp
-    |> deduplicate: msg.event_id within 10 s
+    |> deduplicate msg.event_id within 10 s
 
     // Drop invalid readings
-    |> filter: msg.value is not null and msg.value > -100 and msg.value < 200
+    |> filter msg.value is not null and msg.value > -100 and msg.value < 200
 
     |> sink to local :: "sensors/clean"
 end
@@ -31,16 +31,16 @@ end
 pipeline enrich
     source from pipe clean
 
-    |> window: tumbling(1 m)
+    |> window tumbling(1 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         min_temp = min(msg.value)
         n = count()
     }
 
-    |> map: {
+    |> map {
         average = avg_temp;
         range = max_temp - min_temp;
         samples = n

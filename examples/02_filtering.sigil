@@ -4,7 +4,7 @@
  * Drop messages that don't match a condition.
  *
  * CONCEPTS INTRODUCED:
- *   - filter    : boolean expression that gates messages
+ *   - filter boolean expression that gates messages
  *   - msg.*     : field references into the message payload
  *   - and / or  : logical operators in expressions
  *   - qos       : MQTT quality-of-service level (0, 1, or 2)
@@ -32,7 +32,7 @@ pipeline valid_readings
 
     // Only pass messages where the value is within physical range.
     // Messages that fail this test are silently dropped.
-    |> filter: msg.value > -40 and msg.value < 85
+    |> filter msg.value > -40 and msg.value < 85
 
     |> sink to local :: "validated/temperature" qos: 1
 end

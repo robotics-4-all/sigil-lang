@@ -4,7 +4,7 @@
  * Overlapping windows that slide forward by a step interval.
  *
  * CONCEPTS INTRODUCED:
- *   - window: sliding(size, step = interval)
+ *   - window sliding(size, step = interval)
  *   - stddev() — standard deviation aggregation
  *   - Millisecond durations (ms)
  *
@@ -34,9 +34,9 @@ pipeline vibration_monitor
     source from local :: "machines/+/vibration" qos: 2 format: json
 
     // 10-second window, sliding every 2 seconds
-    |> window: sliding(10 s, step = 2 s)
+    |> window sliding(10 s, step = 2 s)
 
-    |> aggregate: {
+    |> aggregate {
         avg_rms    = avg(msg.rms)      // mean vibration level
         peak_rms   = max(msg.rms)      // peak vibration
         deviation  = stddev(msg.rms)   // variability (spikes vs steady)

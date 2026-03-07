@@ -33,17 +33,17 @@ pipeline temp_monitor
 
     // Filter: only process readings above minimum humidity
     // and with temperature above our named threshold
-    |> filter: msg.humidity >= HUMIDITY_MIN and msg.temp_c > TEMP_THRESHOLD
+    |> filter msg.humidity >= HUMIDITY_MIN and msg.temp_c > TEMP_THRESHOLD
 
-    |> window: tumbling(1 m)
+    |> window tumbling(1 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.temp_c)
         max_temp = max(msg.temp_c)
         readings = count()
     }
 
-    |> map: {
+    |> map {
         avg_celsius = avg_temp;
         peak = max_temp;
         sample_count = readings;

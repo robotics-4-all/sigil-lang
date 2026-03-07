@@ -34,9 +34,9 @@ end
 pipeline energy_report
     source from meters :: "meters/+/energy" format: json
 
-    |> window: tumbling(1 h)
+    |> window tumbling(1 h)
 
-    |> aggregate: {
+    |> aggregate {
         total_kwh = sum(msg.kwh)       // total energy consumed
         peak_kw   = max(msg.kw)        // peak demand
         readings  = count()            // number of meter readings
@@ -47,7 +47,7 @@ pipeline energy_report
      * Inside a map, bare names refer to aggregation outputs.
      * You can use arithmetic to derive new values.
      */
-    |> map: {
+    |> map {
         energy      = total_kwh;
         peak_demand = peak_kw;
         cost_eur    = total_kwh * 0.12;

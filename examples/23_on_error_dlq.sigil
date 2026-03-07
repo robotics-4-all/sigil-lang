@@ -32,13 +32,13 @@ end
 //   }
 pipeline sensor_pipeline
     source from local :: "sensors/raw"
-    |> filter: msg.value > 0
-    |> window: tumbling(1 m)
-    |> aggregate: {
+    |> filter msg.value > 0
+    |> window tumbling(1 m)
+    |> aggregate {
         avg_value: float = avg(msg.value)
         count = count()
     }
-    |> map: {
+    |> map {
         average = avg_value;
         samples = count
     }
@@ -51,7 +51,7 @@ end
 // Here: source from MQTT, DLQ to Redis for persistent error storage.
 pipeline payment_processor
     source from local :: "payments/incoming"
-    |> filter: msg.amount > 0 and msg.currency != ""
+    |> filter msg.amount > 0 and msg.currency != ""
     |> sink to local :: "payments/validated"
     on_error: sink to redis_broker :: "dlq:payments"
 end
@@ -62,7 +62,7 @@ end
 // telemetry that can tolerate data loss).
 pipeline telemetry_best_effort
     source from local :: "telemetry/raw"
-    |> filter: msg.signal_strength > -90
+    |> filter msg.signal_strength > -90
     |> sink to local :: "telemetry/filtered"
     on_error: drop
 end

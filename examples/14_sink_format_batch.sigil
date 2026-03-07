@@ -26,11 +26,11 @@ const BATCH_THRESHOLD = 200
 pipeline event_batcher
     source from ingest :: "events/raw"
 
-    |> deduplicate: msg.event_id within 60 s
+    |> deduplicate msg.event_id within 60 s
 
-    |> filter: msg.event_type is not null
+    |> filter msg.event_type is not null
 
-    |> map: {
+    |> map {
         event = msg.event_type;
         payload = msg.data ?? "empty";
         ts = msg.timestamp
@@ -43,9 +43,9 @@ end
 pipeline csv_exporter
     source from ingest :: "metrics/raw"
 
-    |> filter: msg.value is not null
+    |> filter msg.value is not null
 
-    |> map: {
+    |> map {
         metric = msg.name;
         value = msg.value;
         unit = msg.unit ?? "unknown"

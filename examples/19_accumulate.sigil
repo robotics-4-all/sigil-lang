@@ -1,8 +1,8 @@
 // Example 19: Stateful Accumulation Across Windows
 //
-// The `accumulate:` stage computes values that persist across window flushes.
+// The `accumulate` stage computes values that persist across window flushes.
 // It operates on aggregate results and injects computed values back into the
-// aggregated dict, making them available to `having:` and `map:` stages.
+// aggregated dict, making them available to `having` and `map` stages.
 //
 // Accumulation functions:
 //   ema(field, alpha)  — Exponential Moving Average (0 < alpha <= 1)
@@ -19,16 +19,16 @@ end
 // Track smoothed temperature with EMA
 pipeline smoothed_temperature
     source from sensors :: "sensors/temperature"
-    |> window: tumbling(30s)
-    |> aggregate: {
+    |> window tumbling(30s)
+    |> aggregate {
         avg_temp = avg(msg.temperature)
         max_temp = max(msg.temperature)
     }
-    |> accumulate: {
+    |> accumulate {
         smooth_temp = ema(avg_temp, 0.3)
     }
-    |> having: smooth_temp > 20
-    |> map: {
+    |> having smooth_temp > 20
+    |> map {
         temperature = smooth_temp;
         peak = max_temp
     }
@@ -38,21 +38,21 @@ end
 // Track cumulative energy with running total and change detection
 pipeline energy_monitor
     source from sensors :: "sensors/power"
-    |> filter: msg.watts > 0
-    |> rate: 200 per 1s on_excess: warn
-    |> window: tumbling(1m)
-    |> aggregate: {
+    |> filter msg.watts > 0
+    |> rate 200 per 1s on_excess: warn
+    |> window tumbling(1m)
+    |> aggregate {
         total_watts = sum(msg.watts)
         avg_watts = avg(msg.watts)
         samples = count()
     }
-    |> accumulate: {
+    |> accumulate {
         cumulative_energy = cumsum(total_watts)
         power_change = delta(avg_watts)
         trend = ema(avg_watts, 0.2)
     }
-    |> having: samples > 5
-    |> map: {
+    |> having samples > 5
+    |> map {
         energy_kwh = cumulative_energy / 60000;
         current_trend = trend;
         change = power_change;

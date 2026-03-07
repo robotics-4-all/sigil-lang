@@ -4,7 +4,7 @@
  * Aggregate messages separately for each group key.
  *
  * CONCEPTS INTRODUCED:
- *   - group_by: msg.field   — partition messages by a field value
+ *   - group_by msg.field   — partition messages by a field value
  *   - Per-group aggregation — each group gets its own window and stats
  *
  * WHAT IT DOES:
@@ -38,11 +38,11 @@ pipeline zone_temperature
     source from factory :: "factory/sensors/temperature" format: json
 
     // Partition the stream: each zone is aggregated independently
-    |> group_by: msg.zone
+    |> group_by msg.zone
 
-    |> window: tumbling(1 m)
+    |> window tumbling(1 m)
 
-    |> aggregate: {
+    |> aggregate {
         avg_temp = avg(msg.value)
         max_temp = max(msg.value)
         readings = count()
