@@ -1200,3 +1200,70 @@ class TestRouteDefaultVisualize:
         assert "route_default" in mmd
         assert "normal" in mmd
         assert '"default"' in mmd
+
+
+PREDICT_VIS_SRC = """
+broker b host: "localhost" port: 1883 end
+model det
+    source: "models/anomaly.onnx"
+    runtime: onnx
+    features: [msg.x, msg.y]
+    returns: [score, flag]
+end
+pipeline p
+    source from b :: "in"
+    |> predict det
+    |> sink to b :: "out"
+end
+"""
+
+
+def test_dot_predict_stage():
+    model = parse_string(PREDICT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "predict" in dot
+
+
+def test_dot_predict_label():
+    model = parse_string(PREDICT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "det" in dot
+    assert "predict" in dot
+
+
+def test_dot_model_declaration():
+    model = parse_string(PREDICT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "model_det" in dot
+    assert "hexagon" in dot
+    assert "onnx" in dot
+
+
+def test_mermaid_predict_stage():
+    model = parse_string(PREDICT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "predict" in mmd
+
+
+def test_mermaid_predict_label():
+    model = parse_string(PREDICT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "det" in mmd
+    assert "predict" in mmd
+
+
+def test_mermaid_model_declaration():
+    model = parse_string(PREDICT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "model_det" in mmd
+    assert "onnx" in mmd
+
+
+def test_dot_and_mermaid_both_include_predict():
+    model = parse_string(PREDICT_VIS_SRC)
+    dot = visualize_dot(model)
+    mmd = visualize_mermaid(model)
+    assert "predict" in dot
+    assert "predict" in mmd
+    assert "model_det" in dot
+    assert "model_det" in mmd

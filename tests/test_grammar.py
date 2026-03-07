@@ -3548,3 +3548,261 @@ class TestParseFile:
             assert len(model.pipelines) == 1
             assert len(model.constants) == 0
             assert len(model.schemas) == 0
+
+
+PREDICT_BASE = """
+broker b host: "localhost" port: 1883 end
+"""
+
+
+def test_parse_model_def_full():
+    src = (
+        PREDICT_BASE
+        + """
+model det
+    source: "models/anomaly.onnx"
+    runtime: onnx
+    features: [msg.temperature, msg.humidity, msg.pressure]
+    returns: [anomaly_score, is_anomaly]
+end
+pipeline p
+    source from b :: "in"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert len(model.models) == 1
+    m = model.models[0]
+    assert m.name == "det"
+    assert m.runtime == "onnx"
+    assert len(m.features) == 3
+    assert m.features[0].segments == ["msg", "temperature"]
+    assert m.features[1].segments == ["msg", "humidity"]
+    assert m.features[2].segments == ["msg", "pressure"]
+    assert m.returns == ["anomaly_score", "is_anomaly"]
+
+
+def test_parse_model_def_minimal():
+    src = (
+        PREDICT_BASE
+        + """
+model m
+    source: "model.pkl"
+    runtime: sklearn
+end
+pipeline p
+    source from b :: "in"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert len(model.models) == 1
+    m = model.models[0]
+    assert m.name == "m"
+    assert m.runtime == "sklearn"
+    assert m.features == []
+    assert m.returns == []
+
+
+def test_parse_model_runtime_onnx():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: "x" runtime: onnx end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    assert parse_string(src).models[0].runtime == "onnx"
+
+
+def test_parse_model_runtime_sklearn():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: "x" runtime: sklearn end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    assert parse_string(src).models[0].runtime == "sklearn"
+
+
+def test_parse_model_runtime_torch():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: "x" runtime: torch end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    assert parse_string(src).models[0].runtime == "torch"
+
+
+def test_parse_model_runtime_tflite():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: "x" runtime: tflite end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    assert parse_string(src).models[0].runtime == "tflite"
+
+
+def test_parse_model_runtime_custom():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: "x" runtime: custom end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    assert parse_string(src).models[0].runtime == "custom"
+
+
+def test_parse_predict_stage():
+    src = (
+        PREDICT_BASE
+        + """
+model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+pipeline p
+    source from b :: "in"
+    |> predict det
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert len(stages) == 1
+    assert stages[0].__class__.__name__ == "PredictStage"
+    assert stages[0].model.name == "det"
+
+
+def test_parse_predict_with_filter():
+    src = (
+        PREDICT_BASE
+        + """
+model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+pipeline p
+    source from b :: "in"
+    |> filter msg.x > 0
+    |> predict det
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert len(stages) == 2
+    assert stages[0].__class__.__name__ == "FilterStage"
+    assert stages[1].__class__.__name__ == "PredictStage"
+
+
+def test_predict_model_cross_reference():
+    src = (
+        PREDICT_BASE
+        + """
+model my_model source: "m.bin" runtime: sklearn features: [msg.a] returns: [b] end
+pipeline p
+    source from b :: "in"
+    |> predict my_model
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stage = _stages(model.pipelines[0])[0]
+    assert stage.model is model.models[0]
+    assert stage.model.name == "my_model"
+
+
+def test_model_source_as_env():
+    src = (
+        PREDICT_BASE
+        + """
+model m source: env("MODEL_PATH", "default.onnx") runtime: onnx features: [msg.x] returns: [y] end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    model = parse_string(src)
+    m = model.models[0]
+    assert m.source is not None
+
+
+def test_model_multiple_inputs():
+    src = (
+        PREDICT_BASE
+        + """
+model m
+    source: "m.onnx"
+    runtime: onnx
+    features: [msg.a, msg.b.c, msg.d]
+    returns: [out]
+end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    model = parse_string(src)
+    m = model.models[0]
+    assert len(m.features) == 3
+    assert m.features[1].segments == ["msg", "b", "c"]
+
+
+def test_model_multiple_outputs():
+    src = (
+        PREDICT_BASE
+        + """
+model m
+    source: "m.onnx"
+    runtime: onnx
+    features: [msg.x]
+    returns: [a, b, c, d]
+end
+pipeline p source from b :: "in" |> sink to b :: "out" end
+"""
+    )
+    model = parse_string(src)
+    assert model.models[0].returns == ["a", "b", "c", "d"]
+
+
+def test_predict_and_downstream_map():
+    src = (
+        PREDICT_BASE
+        + """
+model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [score] end
+pipeline p
+    source from b :: "in"
+    |> predict det
+    |> map {
+        result = msg.score
+    }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert len(stages) == 2
+    assert stages[0].__class__.__name__ == "PredictStage"
+    assert stages[1].__class__.__name__ == "MapStage"
+
+
+def test_multiple_models():
+    src = (
+        PREDICT_BASE
+        + """
+model m1 source: "a.onnx" runtime: onnx features: [msg.x] returns: [y] end
+model m2 source: "b.pkl" runtime: sklearn features: [msg.a] returns: [b] end
+pipeline p
+    source from b :: "in"
+    |> predict m1
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert len(model.models) == 2
+    assert model.models[0].name == "m1"
+    assert model.models[1].name == "m2"

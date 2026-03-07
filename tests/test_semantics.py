@@ -3054,3 +3054,196 @@ def test_schema_object_field_not_traversable_as_scalar():
     errs = _errors(src)
     schema_errs = [e for e in errs if "not found in schema" in str(e)]
     assert len(schema_errs) >= 1
+
+
+def test_valid_model_and_predict():
+    src = """
+    broker b host: "h" port: 1883 end
+    model det
+        source: "m.onnx"
+        runtime: onnx
+        features: [msg.x, msg.y]
+        returns: [score, flag]
+    end
+    pipeline p
+        source from b :: "in"
+        |> predict det
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_duplicate_model_names():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "a" runtime: onnx features: [msg.x] returns: [y] end
+    model m source: "b" runtime: sklearn features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert any("Duplicate model" in str(e) for e in errs)
+
+
+def test_duplicate_model_outputs():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m
+        source: "m.onnx"
+        runtime: onnx
+        features: [msg.x]
+        returns: [score, score]
+    end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert any("duplicate output" in str(e) for e in errs)
+
+
+def test_model_non_custom_no_features_warning():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m
+        source: "m.onnx"
+        runtime: onnx
+    end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    warnings = [e for e in errs if e.severity == "warning"]
+    assert any("features" in str(w) for w in warnings)
+
+
+def test_model_non_custom_no_returns_warning():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m
+        source: "m.onnx"
+        runtime: onnx
+    end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    warnings = [e for e in errs if e.severity == "warning"]
+    assert any("returns" in str(w) for w in warnings)
+
+
+def test_custom_runtime_no_features_no_warning():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m
+        source: "my_module.py"
+        runtime: custom
+    end
+    pipeline p
+        source from b :: "in"
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert errs == []
+
+
+def test_predict_stage_order_after_filter():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> filter msg.x > 0
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_predict_stage_order_before_filter():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> filter msg.x > 0
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_predict_after_aggregate_error():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> window tumbling(1 m)
+        |> aggregate { a = avg(msg.x) }
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    real_errs = [e for e in errs if e.severity == "error"]
+    assert any(
+        "order" in str(e).lower() or "stage" in str(e).lower() for e in real_errs
+    )
+
+
+def test_duplicate_predict_stage():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert any(
+        "duplicate" in str(e).lower() and "predict" in str(e).lower() for e in errs
+    )
+
+
+def test_predict_with_window_and_aggregate():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [score] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> window tumbling(1 m)
+        |> aggregate { avg_score = avg(msg.score) }
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_predict_with_downstream_map():
+    src = """
+    broker b host: "h" port: 1883 end
+    model m source: "m.onnx" runtime: onnx features: [msg.x] returns: [score] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> map { result = msg.score }
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
