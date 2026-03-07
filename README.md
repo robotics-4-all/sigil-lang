@@ -63,7 +63,7 @@ python generated/main.py
 ```sigil
 pipeline temperature_filter
     source from edge :: "sensors/+/temperature"
-    |> filter: msg.value > -40 and msg.value < 85
+    |> filter msg.value > -40 and msg.value < 85
     |> sink to edge :: "filtered/temperature"
 end
 ```
@@ -72,10 +72,10 @@ end
 ```sigil
 pipeline fleet_summary
     source from fleet :: "trucks/+/telemetry"
-    |> filter: msg.speed_kmh >= 5
-    |> group_by: msg.region
-    |> window: tumbling(5 m)
-    |> aggregate: {
+    |> filter msg.speed_kmh >= 5
+    |> group_by msg.region
+    |> window tumbling(5 m)
+    |> aggregate {
         avg_speed = avg(msg.speed_kmh)
         top_speed = max(msg.speed_kmh)
         active_trucks = count()
@@ -93,7 +93,7 @@ pipeline enrich_orders
         within 30 s
         type: inner
     end
-    |> map: {
+    |> map {
         order_id = msg.order_id;
         customer_name = other.name ?? "unknown";
         amount = msg.amount
@@ -106,7 +106,7 @@ end
 ```sigil
 pipeline classify
     source from local :: "sensors/all"
-    |> filter: msg.value is not null
+    |> filter msg.value is not null
     |> route
         when msg.value > 90 => sink to alerts :: "priority.high"
         when msg.value > 50 => sink to local :: "priority/medium"
@@ -132,19 +132,19 @@ Sigil enforces a fixed stage order: `source` → `join` → `deduplicate` → `f
 |-------|-------------|----------------|
 | `source` | Define message entry point | `source from broker :: "topic"` |
 | `join` | Enrich stream with another stream | `|> join broker :: "topic" on ... end` |
-| `deduplicate` | Drop duplicates by key within TTL | `|> deduplicate: msg.id within 5 s` |
-| `filter` | Drop messages by condition | `|> filter: msg.val > 10` |
-| `rate` | Limit message frequency | `|> rate: 100 per 1 s` |
-| `flatten` | Expand array field into messages | `|> flatten: msg.items` |
-| `distinct` | Drop duplicate values within TTL | `|> distinct: msg.val within 1 m` |
-| `throttle` | Token-bucket rate limiting | `|> throttle: 10 per 1 s` |
-| `sample` | Probabilistic sampling | `|> sample: 10 %` |
-| `group_by` | Partition for aggregation | `|> group_by: msg.region` |
-| `window` | Define aggregation buffer | `|> window: tumbling(1 m)` |
-| `aggregate` | Perform window calculations | `|> aggregate: { total = sum(msg.v) }` |
-| `accumulate` | Running accumulators across windows | `|> accumulate: { s = ema(msg.v, 0.3) }` |
-| `having` | Filter aggregation results | `|> having: total > 100` |
-| `map` | Transform output structure | `|> map: { val = total }` |
+| `deduplicate` | Drop duplicates by key within TTL | `|> deduplicate msg.id within 5 s` |
+| `filter` | Drop messages by condition | `|> filter msg.val > 10` |
+| `rate` | Limit message frequency | `|> rate 100 per 1 s` |
+| `flatten` | Expand array field into messages | `|> flatten msg.items` |
+| `distinct` | Drop duplicate values within TTL | `|> distinct msg.val within 1 m` |
+| `throttle` | Token-bucket rate limiting | `|> throttle 10 per 1 s` |
+| `sample` | Probabilistic sampling | `|> sample 10 %` |
+| `group_by` | Partition for aggregation | `|> group_by msg.region` |
+| `window` | Define aggregation buffer | `|> window tumbling(1 m)` |
+| `aggregate` | Perform window calculations | `|> aggregate { total = sum(msg.v) }` |
+| `accumulate` | Running accumulators across windows | `|> accumulate { s = ema(msg.v, 0.3) }` |
+| `having` | Filter aggregation results | `|> having total > 100` |
+| `map` | Transform output structure | `|> map { val = total }` |
 | `sink` | Define message destination | `|> sink to broker :: "topic"` |
 
 ## Docker

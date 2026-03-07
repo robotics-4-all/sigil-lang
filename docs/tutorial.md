@@ -77,7 +77,7 @@ end
 
 pipeline high_temp_filter
     source from local :: "sensors/temp"
-    |> filter: msg.value > 25.0 and msg.status == "active"
+    |> filter msg.value > 25.0 and msg.status == "active"
     |> sink to local :: "alerts/high_temp"
 end
 ```
@@ -109,8 +109,8 @@ end
 
 pipeline hourly_stats
     source from local :: "power/usage"
-    |> window: tumbling(1 h)
-    |> aggregate: {
+    |> window tumbling(1 h)
+    |> aggregate {
         average_load = avg(msg.load)
         peak_load = max(msg.load)
         total_readings = count()
@@ -148,13 +148,13 @@ end
 
 pipeline device_metrics
     source from local :: "devices/data"
-    |> group_by: msg.device_id
-    |> window: tumbling(5 m)
-    |> aggregate: {
+    |> group_by msg.device_id
+    |> window tumbling(5 m)
+    |> aggregate {
         val_sum = sum(msg.value)
         val_count = count()
     }
-    |> map: {
+    |> map {
         id = msg.device_id;
         average = val_sum / val_count;
         source = "device_metrics"
@@ -190,8 +190,8 @@ end
 
 pipeline rolling_average
     source from local :: "stock/prices"
-    |> window: sliding(10 m, step: 1 m)
-    |> aggregate: {
+    |> window sliding(10 m, step: 1 m)
+    |> aggregate {
         moving_avg = avg(msg.price)
         volatility = stddev(msg.price)
         opening = first(msg.price)
@@ -228,7 +228,7 @@ end
 
 pipeline smart_alerts
     source from local :: "system/load"
-    |> map: {
+    |> map {
         status = case {
             when msg.value > THRESHOLD => "CRITICAL"
             when msg.value > THRESHOLD * 0.8 => "WARNING"
@@ -266,7 +266,7 @@ end
 
 pipeline raw_processor
     source from local :: "raw/data"
-    |> filter: msg.valid == true
+    |> filter msg.valid == true
     |> sink to local :: "processed/data"
 end
 
@@ -308,7 +308,7 @@ pipeline enriched_telemetry
        within 5 s 
        type: left
     end
-    |> map: {
+    |> map {
         sensor = msg.sensor_id;
         reading = msg.value;
         location = other.loc ?? "unknown"
@@ -356,7 +356,7 @@ pipeline production_pipeline
     source from local :: "prod/input"
     
     @warn("Filtering out low values might hide sensor drift")
-    |> filter: msg.value > 0.1
+    |> filter msg.value > 0.1
     
     |> sink to local :: "prod/output"
     on_error: sink to local :: "prod/dlq"
@@ -392,26 +392,26 @@ end
 pipeline advanced_analytics
     source from local :: "factory/sensors"
     
-    |> deduplicate: msg.msg_id within 1 m
+    |> deduplicate msg.msg_id within 1 m
     
-    |> window fast: tumbling(10 s)
-    |> window slow: tumbling(1 m)
+    |> window fast tumbling(10 s)
+    |> window slow tumbling(1 m)
     
-    |> aggregate: {
+    |> aggregate {
         short_avg = avg(msg.temp) over fast
         long_avg = avg(msg.temp) over slow
     }
     
-    |> accumulate: {
+    |> accumulate {
         trend = ema(short_avg, 0.1)
         total_energy = cumsum(msg.power)
     }
     
-    |> filter: changed(msg.status) or exists(x in msg.errors => x.code > 500)
+    |> filter changed(msg.status) or exists(x in msg.errors => x.code > 500)
     
-    |> throttle: 1 per 1 s
+    |> throttle 1 per 1 s
     
-    |> map: {
+    |> map {
         is_stable = forall(m => abs(m.temp - trend) < 5.0);
         energy = total_energy;
         prev_status = old(msg.status)
