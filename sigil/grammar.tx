@@ -202,19 +202,21 @@ Stage:
 ;
 
 DeduplicateStage:
-    'deduplicate' ':' key=FieldRef 'within' ttl=Duration
+    'deduplicate' key=FieldRef 'within' ttl=Duration
 ;
 
 FilterStage:
-    'filter' ':' condition=Expression
+    'filter' condition=Expression
 ;
 
 GroupByStage:
-    'group_by' ':' fields+=FieldRef[',']
+    'group_by' fields+=FieldRef[',']
 ;
 
 WindowStage:
-    'window' (wname=ID)? ':' type=WindowType
+    'window' wname=ID type=WindowType
+        '(' size=Duration (',' 'step' '=' step=Duration)? ')'
+    | 'window' type=WindowType
         '(' size=Duration (',' 'step' '=' step=Duration)? ')'
 ;
 
@@ -227,7 +229,7 @@ Duration:
 ;
 
 AggregateStage:
-    'aggregate' ':' '{'
+    'aggregate' '{'
         assignments+=AggAssignment
     '}'
 ;
@@ -246,7 +248,7 @@ AggFunc:
 ;
 
 AccumulateStage:
-    'accumulate' ':' '{'
+    'accumulate' '{'
         assignments+=AccumAssignment
     '}'
 ;
@@ -260,7 +262,7 @@ AccumFunc:
 ;
 
 RateStage:
-    'rate' ':' limit=INT 'per' period=Duration
+    'rate' limit=INT 'per' period=Duration
     ('on_excess' ':' on_excess=ExcessBehavior)?
 ;
 
@@ -269,15 +271,15 @@ ExcessBehavior:
 ;
 
 FlattenStage:
-    'flatten' ':' field=FieldRef
+    'flatten' field=FieldRef
 ;
 
 DistinctStage:
-    'distinct' ':' field=FieldRef 'within' ttl=Duration
+    'distinct' field=FieldRef 'within' ttl=Duration
 ;
 
 ThrottleStage:
-    'throttle' ':' limit=INT 'per' period=Duration
+    'throttle' limit=INT 'per' period=Duration
     ('overflow' ':' overflow=OverflowBehavior)?
     ('buffer' ':' buffer_size=INT)?
 ;
@@ -287,15 +289,15 @@ OverflowBehavior:
 ;
 
 SampleStage:
-    'sample' ':' percentage=INT '%'
+    'sample' percentage=INT '%'
 ;
 
 HavingStage:
-    'having' ':' condition=Expression
+    'having' condition=Expression
 ;
 
 MapStage:
-    'map' ':' '{'
+    'map' '{'
         (bindings+=LetBinding[';'] ';')?
         mappings+=MapAssignment[';']
     '}'

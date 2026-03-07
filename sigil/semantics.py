@@ -533,7 +533,7 @@ def _check_multi_window(pipeline):
                 SemanticError(
                     f"Pipeline '{pipeline.name}': when using multiple windows, "
                     f"all windows must have names. "
-                    f"Example: window short: tumbling(1 m)"
+                    f"Example: window short tumbling(1 m)"
                 )
             )
         elif w.wname in window_names:
