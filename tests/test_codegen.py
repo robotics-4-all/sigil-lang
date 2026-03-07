@@ -3623,3 +3623,168 @@ class TestExpressionCompilerCoverage:
         assert "any(" in code
         assert "for x in" in code
         assert "or [])" in code
+
+
+PREDICT_SRC = """
+broker local host: "localhost" port: 1883 end
+
+model anomaly_detector
+    source: "models/anomaly.onnx"
+    runtime: onnx
+    features: [msg.temperature, msg.humidity]
+    returns: [anomaly_score, is_anomaly]
+end
+
+pipeline sensor_check
+    source from local :: "sensors/data"
+    |> filter msg.temperature is not null
+    |> predict anomaly_detector
+    |> sink to local :: "alerts/out"
+end
+"""
+
+
+def test_predict_pipeline_ctx_fields():
+    model = parse_string(PREDICT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        assert "import numpy as np" in code
+        assert "import onnxruntime as ort" in code
+
+
+def test_predict_model_loading_onnx():
+    model = parse_string(PREDICT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        assert "ort.InferenceSession" in code
+        assert "_model_anomaly_detector" in code
+
+
+def test_predict_inference_block_onnx():
+    model = parse_string(PREDICT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        assert "_feat_anomaly_detector" in code
+        assert 'msg["anomaly_score"]' in code
+        assert 'msg["is_anomaly"]' in code
+
+
+def test_predict_generated_compiles_onnx():
+    model = parse_string(PREDICT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        compile(code, "sensor_check.py", "exec")
+
+
+def test_predict_generated_compiles_sklearn():
+    src = """
+    broker b host: "localhost" port: 1883 end
+    model m source: "m.pkl" runtime: sklearn features: [msg.x, msg.y] returns: [pred] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "p.py", "exec")
+        assert "import joblib" in code
+        assert "joblib.load" in code
+
+
+def test_predict_generated_compiles_torch():
+    src = """
+    broker b host: "localhost" port: 1883 end
+    model m source: "m.pt" runtime: torch features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "p.py", "exec")
+        assert "import torch" in code
+        assert "torch.jit.load" in code
+
+
+def test_predict_generated_compiles_tflite():
+    src = """
+    broker b host: "localhost" port: 1883 end
+    model m source: "m.tflite" runtime: tflite features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "p.py", "exec")
+        assert "import tflite_runtime" in code
+
+
+def test_predict_generated_compiles_custom():
+    src = """
+    broker b host: "localhost" port: 1883 end
+    model m source: "my_module.py" runtime: custom features: [msg.x] returns: [y] end
+    pipeline p
+        source from b :: "in"
+        |> predict m
+        |> sink to b :: "out"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        compile(code, "p.py", "exec")
+        assert "importlib.util" in code
+
+
+def test_requirements_includes_ml_deps():
+    model = parse_string(PREDICT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        reqs = open(os.path.join(tmpdir, "requirements.txt")).read()
+        assert "numpy" in reqs
+        assert "onnxruntime" in reqs
+
+
+def test_requirements_no_ml_deps_without_predict():
+    src = """
+    broker b host: "localhost" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> filter msg.v > 0
+        |> sink to b :: "out"
+    end
+    """
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        reqs = open(os.path.join(tmpdir, "requirements.txt")).read()
+        assert "numpy" not in reqs
+        assert "onnxruntime" not in reqs
+
+
+def test_explain_includes_predict():
+    model = parse_string(PREDICT_SRC)
+    text = explain_model(model)
+    assert "Models:" in text
+    assert "anomaly_detector" in text
+    assert "onnx" in text
+    assert "predict" in text
+    assert "anomaly_detector" in text
