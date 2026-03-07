@@ -15,10 +15,10 @@ VALID = """
 broker b host: "h" port: 1883 end
 pipeline p
     source from b :: "in" qos: 1
-    |> filter: msg.v > 0
-    |> window: tumbling(5 m)
-    |> aggregate: { a = avg(msg.v)  n = count() }
-    |> map: { result = a;  total = n }
+    |> filter msg.v > 0
+    |> window tumbling(5 m)
+    |> aggregate { a = avg(msg.v)  n = count() }
+    |> map { result = a;  total = n }
     |> sink to b :: "out" qos: 1
 end
 """
@@ -86,8 +86,8 @@ def test_stage_order_violation():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { n = count() }
-        |> filter: msg.v > 0
+        |> aggregate { n = count() }
+        |> filter msg.v > 0
         |> sink to b :: "y"
     end
     """
@@ -100,7 +100,7 @@ def test_aggregate_func_missing_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { a = avg() }
+        |> aggregate { a = avg() }
         |> sink to b :: "y"
     end
     """
@@ -113,7 +113,7 @@ def test_count_with_field_is_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { n = count(msg.v) }
+        |> aggregate { n = count(msg.v) }
         |> sink to b :: "y"
     end
     """
@@ -126,8 +126,8 @@ def test_map_references_undefined_aggregation():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { a = avg(msg.v) }
-        |> map: { out = nonexistent }
+        |> aggregate { a = avg(msg.v) }
+        |> map { out = nonexistent }
         |> sink to b :: "y"
     end
     """
@@ -140,7 +140,7 @@ def test_sliding_window_requires_step():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: sliding(10 m)
+        |> window sliding(10 m)
         |> sink to b :: "y"
     end
     """
@@ -153,7 +153,7 @@ def test_sliding_window_step_too_large():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: sliding(5 m, step = 10 m)
+        |> window sliding(5 m, step = 10 m)
         |> sink to b :: "y"
     end
     """
@@ -182,8 +182,8 @@ def test_duplicate_filter_stage():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> filter: msg.v > 0
-        |> filter: msg.v < 100
+        |> filter msg.v > 0
+        |> filter msg.v < 100
         |> sink to b :: "y"
     end
     """
@@ -196,8 +196,8 @@ def test_duplicate_window_stage():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: tumbling(5 m)
-        |> window: tumbling(10 m)
+        |> window tumbling(5 m)
+        |> window tumbling(10 m)
         |> sink to b :: "y"
     end
     """
@@ -210,9 +210,9 @@ def test_no_duplicate_error_on_distinct_stages():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> filter: msg.v > 0
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count() }
+        |> filter msg.v > 0
+        |> window tumbling(5 m)
+        |> aggregate { n = count() }
         |> sink to b :: "y"
     end
     """
@@ -225,8 +225,8 @@ def test_unused_aggregation_warning():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { a = avg(msg.v)  b_val = sum(msg.v)  n = count() }
-        |> map: { result = a }
+        |> aggregate { a = avg(msg.v)  b_val = sum(msg.v)  n = count() }
+        |> map { result = a }
         |> sink to b :: "y"
     end
     """
@@ -243,7 +243,7 @@ def test_no_unused_warning_without_map():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { a = avg(msg.v)  n = count() }
+        |> aggregate { a = avg(msg.v)  n = count() }
         |> sink to b :: "y"
     end
     """
@@ -257,8 +257,8 @@ def test_no_unused_warning_when_all_referenced():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { a = avg(msg.v)  n = count() }
-        |> map: { average = a;  total = n }
+        |> aggregate { a = avg(msg.v)  n = count() }
+        |> map { average = a;  total = n }
         |> sink to b :: "y"
     end
     """
@@ -272,7 +272,7 @@ def test_millisecond_window_validation():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: sliding(500 ms, step = 100 ms)
+        |> window sliding(500 ms, step = 100 ms)
         |> sink to b :: "y"
     end
     """
@@ -285,7 +285,7 @@ def test_millisecond_step_exceeds_size():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: sliding(100 ms, step = 500 ms)
+        |> window sliding(100 ms, step = 500 ms)
         |> sink to b :: "y"
     end
     """
@@ -298,7 +298,7 @@ def test_scalar_func_abs_too_many_args():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> filter: abs(msg.x, msg.y) > 10
+        |> filter abs(msg.x, msg.y) > 10
         |> sink to b :: "y"
     end
     """
@@ -311,8 +311,8 @@ def test_scalar_func_round_too_many_args():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { r = round(v, 2, 1) }
+        |> aggregate { v = avg(msg.x) }
+        |> map { r = round(v, 2, 1) }
         |> sink to b :: "y"
     end
     """
@@ -325,8 +325,8 @@ def test_duplicate_let_binding_names():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: {
+        |> aggregate { v = avg(msg.x) }
+        |> map {
             let a = v * 2;
             let a = v * 3;
             result = a
@@ -345,8 +345,8 @@ def test_let_binding_shadows_aggregation():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: {
+        |> aggregate { v = avg(msg.x) }
+        |> map {
             let v = 42;
             result = v
         }
@@ -362,8 +362,8 @@ def test_let_binding_references_undefined():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: {
+        |> aggregate { v = avg(msg.x) }
+        |> map {
             let a = nonexistent;
             result = a
         }
@@ -379,9 +379,9 @@ def test_valid_let_bindings_no_errors():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "x"
-        |> window: tumbling(5 m)
-        |> aggregate: { v = avg(msg.x) }
-        |> map: {
+        |> window tumbling(5 m)
+        |> aggregate { v = avg(msg.x) }
+        |> map {
             let ratio = v * 100;
             let doubled = ratio * 2;
             result = doubled
@@ -398,8 +398,8 @@ def test_duplicate_aggregate_names():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(5 m)
-        |> aggregate: { a = avg(msg.x)  a = sum(msg.y) }
+        |> window tumbling(5 m)
+        |> aggregate { a = avg(msg.x)  a = sum(msg.y) }
         |> sink to b :: "out"
     end
     """
@@ -414,9 +414,9 @@ def test_duplicate_map_targets():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(5 m)
-        |> aggregate: { x = avg(msg.v)  y = sum(msg.v) }
-        |> map: { result = x;  result = y }
+        |> window tumbling(5 m)
+        |> aggregate { x = avg(msg.v)  y = sum(msg.v) }
+        |> map { result = x;  result = y }
         |> sink to b :: "out"
     end
     """
@@ -455,7 +455,7 @@ def test_aggregate_without_window():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> aggregate: { a = avg(msg.v) }
+        |> aggregate { a = avg(msg.v) }
         |> sink to b :: "out"
     end
     """
@@ -483,7 +483,7 @@ def test_window_without_aggregate_warning():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(5 m)
+        |> window tumbling(5 m)
         |> sink to b :: "out"
     end
     """
@@ -501,7 +501,7 @@ def test_group_by_without_window_warning():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> group_by: msg.sensor_id
+        |> group_by msg.sensor_id
         |> sink to b :: "out"
     end
     """
@@ -519,8 +519,8 @@ def test_aggregate_bare_msg_warning():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(5 m)
-        |> aggregate: { a = avg(msg) }
+        |> window tumbling(5 m)
+        |> aggregate { a = avg(msg) }
         |> sink to b :: "out"
     end
     """
@@ -534,9 +534,9 @@ def test_map_undefined_ref_inside_if_then_else():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(5 m)
-        |> aggregate: { a = avg(msg.v) }
-        |> map: { result = if undefined_var > 0 then 1 else 0 }
+        |> window tumbling(5 m)
+        |> aggregate { a = avg(msg.v) }
+        |> map { result = if undefined_var > 0 then 1 else 0 }
         |> sink to b :: "out"
     end
     """
@@ -549,11 +549,11 @@ def test_complete_valid_pipeline_no_errors():
     broker b host: "h" port: 1883 end
     pipeline p
         source from b :: "in" qos: 1
-        |> filter: msg.v > 0
-        |> group_by: msg.sensor_id
-        |> window: tumbling(5 m)
-        |> aggregate: { a = avg(msg.v)  n = count() }
-        |> map: { result = a;  total = n }
+        |> filter msg.v > 0
+        |> group_by msg.sensor_id
+        |> window tumbling(5 m)
+        |> aggregate { a = avg(msg.v)  n = count() }
+        |> map { result = a;  total = n }
         |> sink to b :: "out" qos: 1
     end
     """
@@ -585,7 +585,7 @@ def test_const_in_filter_expression():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.v > THRESHOLD
+        |> filter msg.v > THRESHOLD
         |> sink to b :: "b"
     end
     """
@@ -600,9 +600,9 @@ def test_const_in_map_expression():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { result = v * FACTOR }
+        |> window tumbling(5 m)
+        |> aggregate { v = avg(msg.x) }
+        |> map { result = v * FACTOR }
         |> sink to b :: "b"
     end
     """
@@ -619,7 +619,7 @@ def test_env_ref_empty_key():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.x > env("")
+        |> filter msg.x > env("")
         |> sink to b :: "b"
     end
     """
@@ -635,8 +635,8 @@ def test_case_no_else_warning():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { out = case { when v > 0 => "pos" } }
+        |> aggregate { v = avg(msg.x) }
+        |> map { out = case { when v > 0 => "pos" } }
         |> sink to b :: "b"
     end
     """
@@ -650,9 +650,9 @@ def test_case_valid_no_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { out = case { when v > 0 => "pos" else => "neg" } }
+        |> window tumbling(5 m)
+        |> aggregate { v = avg(msg.x) }
+        |> map { out = case { when v > 0 => "pos" else => "neg" } }
         |> sink to b :: "b"
     end
     """
@@ -671,8 +671,8 @@ def test_having_without_aggregate_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> having: msg.v > 10
+        |> window tumbling(5 m)
+        |> having msg.v > 10
         |> sink to b :: "b"
     end
     """
@@ -687,9 +687,9 @@ def test_having_undefined_ref():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count() }
-        |> having: nonexistent > 10
+        |> window tumbling(5 m)
+        |> aggregate { n = count() }
+        |> having nonexistent > 10
         |> sink to b :: "b"
     end
     """
@@ -702,10 +702,10 @@ def test_having_after_map_order_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count() }
-        |> map: { result = n }
-        |> having: n > 10
+        |> window tumbling(5 m)
+        |> aggregate { n = count() }
+        |> map { result = n }
+        |> having n > 10
         |> sink to b :: "b"
     end
     """
@@ -718,10 +718,10 @@ def test_having_valid_no_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(5 m)
-        |> aggregate: { n = count()  a = avg(msg.v) }
-        |> having: n > 5
-        |> map: { result = a }
+        |> window tumbling(5 m)
+        |> aggregate { n = count()  a = avg(msg.v) }
+        |> having n > 5
+        |> map { result = a }
         |> sink to b :: "b"
     end
     """
@@ -738,7 +738,7 @@ def test_dedup_key_not_msg_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> deduplicate: event_id within 30 s
+        |> deduplicate event_id within 30 s
         |> sink to b :: "b"
     end
     """
@@ -751,8 +751,8 @@ def test_dedup_after_filter_order_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.v > 0
-        |> deduplicate: msg.event_id within 30 s
+        |> filter msg.v > 0
+        |> deduplicate msg.event_id within 30 s
         |> sink to b :: "b"
     end
     """
@@ -765,8 +765,8 @@ def test_dedup_valid_no_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> deduplicate: msg.event_id within 30 s
-        |> filter: msg.v > 0
+        |> deduplicate msg.event_id within 30 s
+        |> filter msg.v > 0
         |> sink to b :: "b"
     end
     """
@@ -783,8 +783,8 @@ def test_old_in_map_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { result = old(msg.x) }
+        |> aggregate { v = avg(msg.x) }
+        |> map { result = old(msg.x) }
         |> sink to b :: "b"
     end
     """
@@ -797,8 +797,8 @@ def test_changed_in_map_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> aggregate: { v = avg(msg.x) }
-        |> map: { result = if changed(msg.x) then v else 0 }
+        |> aggregate { v = avg(msg.x) }
+        |> map { result = if changed(msg.x) then v else 0 }
         |> sink to b :: "b"
     end
     """
@@ -811,7 +811,7 @@ def test_old_in_filter_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: old(msg.status) != msg.status
+        |> filter old(msg.status) != msg.status
         |> sink to b :: "b"
     end
     """
@@ -825,7 +825,7 @@ def test_changed_in_filter_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: changed(msg.value)
+        |> filter changed(msg.value)
         |> sink to b :: "b"
     end
     """
@@ -841,7 +841,7 @@ def test_old_ref_bare_msg_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: old(msg) != msg
+        |> filter old(msg) != msg
         |> sink to b :: "b"
     end
     """
@@ -854,7 +854,7 @@ def test_temporal_in_filter_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: old(msg.status) != msg.status and changed(msg.value)
+        |> filter old(msg.status) != msg.status and changed(msg.value)
         |> sink to b :: "b"
     end
     """
@@ -871,7 +871,7 @@ def test_forall_without_collection_not_in_having():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: forall(m => m > 0)
+        |> filter forall(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -884,7 +884,7 @@ def test_exists_without_collection_not_in_having():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: exists(m => m > 0)
+        |> filter exists(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -897,8 +897,8 @@ def test_forall_without_window():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> aggregate: { n = count() }
-        |> having: forall(m => m > 0)
+        |> aggregate { n = count() }
+        |> having forall(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -911,7 +911,7 @@ def test_quantifier_invalid_collection():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: forall(x in tags => x > 0)
+        |> filter forall(x in tags => x > 0)
         |> sink to b :: "b"
     end
     """
@@ -924,7 +924,7 @@ def test_exists_with_valid_collection_no_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: exists(x in msg.tags => x == "critical")
+        |> filter exists(x in msg.tags => x == "critical")
         |> sink to b :: "b"
     end
     """
@@ -938,9 +938,9 @@ def test_forall_in_having_with_window_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { n = count() }
-        |> having: forall(m => m > 0)
+        |> window tumbling(10s)
+        |> aggregate { n = count() }
+        |> having forall(m => m > 0)
         |> sink to b :: "b"
     end
     """
@@ -954,9 +954,9 @@ def test_quantifier_var_not_flagged_as_undefined_agg():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { n = count()  avg_val = avg(msg.value) }
-        |> having: forall(m => m > 0) and n >= 5
+        |> window tumbling(10s)
+        |> aggregate { n = count()  avg_val = avg(msg.value) }
+        |> having forall(m => m > 0) and n >= 5
         |> sink to b :: "b"
     end
     """
@@ -1209,7 +1209,7 @@ def test_warn_annotation_emits_warning():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> @warn("slow stage") filter: msg.x > 0
+        |> @warn("slow stage") filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -1223,7 +1223,7 @@ def test_error_annotation_emits_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> @error("deprecated") filter: msg.x > 0
+        |> @error("deprecated") filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -1237,7 +1237,7 @@ def test_annotation_message_in_error():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> @warn("custom message here") filter: msg.x > 0
+        |> @warn("custom message here") filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -1250,7 +1250,7 @@ def test_no_annotation_no_extra_errors():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> filter: msg.x > 0
+        |> filter msg.x > 0
         |> sink to b :: "b"
     end
     """
@@ -1264,7 +1264,7 @@ def test_rate_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> rate: 100 per 1s
+        |> rate 100 per 1s
         |> sink to b :: "b"
     end
     """
@@ -1278,7 +1278,7 @@ def test_rate_with_on_excess_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> rate: 50 per 5s on_excess: warn
+        |> rate 50 per 5s on_excess: warn
         |> sink to b :: "b"
     end
     """
@@ -1292,10 +1292,10 @@ def test_rate_stage_order_before_group_by():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> group_by: msg.k
-        |> rate: 100 per 1s
-        |> window: tumbling(5s)
-        |> aggregate: { n = count() }
+        |> group_by msg.k
+        |> rate 100 per 1s
+        |> window tumbling(5s)
+        |> aggregate { n = count() }
         |> sink to b :: "b"
     end
     """
@@ -1308,12 +1308,12 @@ def test_accumulate_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { avg_val = avg(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { avg_val = avg(msg.v) }
+        |> accumulate {
             smooth = ema(avg_val, 0.3)
         }
-        |> map: { result = smooth }
+        |> map { result = smooth }
         |> sink to b :: "b"
     end
     """
@@ -1327,8 +1327,8 @@ def test_accumulate_requires_aggregate():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> accumulate {
             smooth = ema(avg_val, 0.3)
         }
         |> sink to b :: "b"
@@ -1343,9 +1343,9 @@ def test_accumulate_undefined_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { total = sum(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { total = sum(msg.v) }
+        |> accumulate {
             smooth = ema(nonexistent, 0.3)
         }
         |> sink to b :: "b"
@@ -1360,9 +1360,9 @@ def test_accumulate_ema_requires_param():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { avg_val = avg(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { avg_val = avg(msg.v) }
+        |> accumulate {
             smooth = ema(avg_val)
         }
         |> sink to b :: "b"
@@ -1377,9 +1377,9 @@ def test_accumulate_cumsum_no_extra_param():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { total = sum(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { total = sum(msg.v) }
+        |> accumulate {
             running = cumsum(total, 0.5)
         }
         |> sink to b :: "b"
@@ -1394,9 +1394,9 @@ def test_accumulate_duplicate_name():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { total = sum(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { total = sum(msg.v) }
+        |> accumulate {
             x = cumsum(total)
             x = delta(total)
         }
@@ -1412,9 +1412,9 @@ def test_accumulate_name_conflicts_with_agg():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { total = sum(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { total = sum(msg.v) }
+        |> accumulate {
             total = cumsum(total)
         }
         |> sink to b :: "b"
@@ -1429,12 +1429,12 @@ def test_having_can_reference_accumulate_names():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { avg_val = avg(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { avg_val = avg(msg.v) }
+        |> accumulate {
             smooth = ema(avg_val, 0.3)
         }
-        |> having: smooth > 10
+        |> having smooth > 10
         |> sink to b :: "b"
     end
     """
@@ -1448,13 +1448,13 @@ def test_map_can_reference_accumulate_names():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { avg_val = avg(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { avg_val = avg(msg.v) }
+        |> accumulate {
             smooth = ema(avg_val, 0.3)
             running = cumsum(avg_val)
         }
-        |> map: { result = smooth; total = running }
+        |> map { result = smooth; total = running }
         |> sink to b :: "b"
     end
     """
@@ -1468,12 +1468,12 @@ def test_accumulate_used_suppresses_unused_agg_warning():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { avg_val = avg(msg.v) }
-        |> accumulate: {
+        |> window tumbling(10s)
+        |> aggregate { avg_val = avg(msg.v) }
+        |> accumulate {
             smooth = ema(avg_val, 0.3)
         }
-        |> map: { result = smooth }
+        |> map { result = smooth }
         |> sink to b :: "b"
     end
     """
@@ -1487,8 +1487,8 @@ def test_duplicate_rate_stage():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> rate: 100 per 1s
-        |> rate: 50 per 2s
+        |> rate 100 per 1s
+        |> rate 50 per 2s
         |> sink to b :: "b"
     end
     """
@@ -1501,10 +1501,10 @@ def test_duplicate_accumulate_stage():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "a"
-        |> window: tumbling(10s)
-        |> aggregate: { v = avg(msg.v) }
-        |> accumulate: { s = ema(v, 0.3) }
-        |> accumulate: { r = cumsum(v) }
+        |> window tumbling(10s)
+        |> aggregate { v = avg(msg.v) }
+        |> accumulate { s = ema(v, 0.3) }
+        |> accumulate { r = cumsum(v) }
         |> sink to b :: "b"
     end
     """
@@ -1622,7 +1622,7 @@ def test_fmt_valid_with_args():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> map: {
+        |> map {
             label = fmt("Value: {}", msg.value)
         }
         |> sink to b :: "out"
@@ -1637,7 +1637,7 @@ def test_fmt_valid_single_arg():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> map: {
+        |> map {
             label = fmt("static text")
         }
         |> sink to b :: "out"
@@ -1652,8 +1652,8 @@ def test_type_annotation_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(10 s)
-        |> aggregate: {
+        |> window tumbling(10 s)
+        |> aggregate {
             total: float = sum(msg.value)
             n: int = count()
         }
@@ -1669,8 +1669,8 @@ def test_type_annotation_mixed():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> window: tumbling(10 s)
-        |> aggregate: {
+        |> window tumbling(10 s)
+        |> aggregate {
             total: float = sum(msg.value)
             n = count()
         }
@@ -1695,7 +1695,7 @@ def test_schema_valid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> filter: msg.temp > 30.0
+        |> filter msg.temp > 30.0
         |> sink to b :: "out"
     end
     """
@@ -1780,7 +1780,7 @@ def test_schema_ref_valid_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> filter: msg.temp > 30.0
+        |> filter msg.temp > 30.0
         |> sink to b :: "out"
     end
     """
@@ -1797,7 +1797,7 @@ def test_schema_ref_unknown_field_strict():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> filter: msg.unknown > 0
+        |> filter msg.unknown > 0
         |> sink to b :: "out"
     end
     """
@@ -1815,7 +1815,7 @@ def test_schema_ref_unknown_field_lenient():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> filter: msg.unknown > 0
+        |> filter msg.unknown > 0
         |> sink to b :: "out"
     end
     """
@@ -1837,7 +1837,7 @@ def test_schema_ref_nested_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Reading
-        |> filter: msg.location.lat > 0
+        |> filter msg.location.lat > 0
         |> sink to b :: "out"
     end
     """
@@ -1858,7 +1858,7 @@ def test_schema_ref_nested_field_invalid():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Reading
-        |> filter: msg.location.xyz > 0
+        |> filter msg.location.xyz > 0
         |> sink to b :: "out"
     end
     """
@@ -1876,8 +1876,8 @@ def test_schema_type_mismatch_sum_string():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> window: tumbling(5 m)
-        |> aggregate: { total = sum(msg.sensor_id) }
+        |> window tumbling(5 m)
+        |> aggregate { total = sum(msg.sensor_id) }
         |> sink to b :: "out"
     end
     """
@@ -1895,8 +1895,8 @@ def test_schema_type_mismatch_abs_string():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> window: tumbling(5 m)
-        |> aggregate: { total = sum(msg.sensor_id) }
+        |> window tumbling(5 m)
+        |> aggregate { total = sum(msg.sensor_id) }
         |> sink to b :: "out"
     end
     """
@@ -1913,7 +1913,7 @@ def test_schema_no_binding_no_validation():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in"
-        |> filter: msg.nonexistent > 0
+        |> filter msg.nonexistent > 0
         |> sink to b :: "out"
     end
     """
@@ -1972,7 +1972,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> flatten: msg
+            |> flatten msg
             |> sink to b :: "b"
         end
         """
@@ -1984,7 +1984,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> flatten: data.items
+            |> flatten data.items
             |> sink to b :: "b"
         end
         """
@@ -1996,7 +1996,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> flatten: msg.items
+            |> flatten msg.items
             |> sink to b :: "b"
         end
         """
@@ -2011,7 +2011,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> distinct: msg within 5 m
+            |> distinct msg within 5 m
             |> sink to b :: "b"
         end
         """
@@ -2023,7 +2023,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> distinct: msg.id within 0 s
+            |> distinct msg.id within 0 s
             |> sink to b :: "b"
         end
         """
@@ -2035,7 +2035,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> distinct: msg.id within 10 s
+            |> distinct msg.id within 10 s
             |> sink to b :: "b"
         end
         """
@@ -2050,7 +2050,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> throttle: 0 per 1 s
+            |> throttle 0 per 1 s
             |> sink to b :: "b"
         end
         """
@@ -2062,7 +2062,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> throttle: 10 per 0 s
+            |> throttle 10 per 0 s
             |> sink to b :: "b"
         end
         """
@@ -2074,7 +2074,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> throttle: 10 per 1 s
+            |> throttle 10 per 1 s
             |> sink to b :: "b"
         end
         """
@@ -2089,7 +2089,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> throttle: 10 per 1 s overflow: buffer buffer: 100
+            |> throttle 10 per 1 s overflow: buffer buffer: 100
             |> sink to b :: "b"
         end
         """
@@ -2104,7 +2104,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> sample: 0 %
+            |> sample 0 %
             |> sink to b :: "b"
         end
         """
@@ -2116,7 +2116,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> sample: 101 %
+            |> sample 101 %
             |> sink to b :: "b"
         end
         """
@@ -2128,7 +2128,7 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> sample: 50 %
+            |> sample 50 %
             |> sink to b :: "b"
         end
         """
@@ -2143,8 +2143,8 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> window: tumbling(1 m)
-            |> flatten: msg.items
+            |> window tumbling(1 m)
+            |> flatten msg.items
             |> sink to b :: "b"
         end
         """
@@ -2156,9 +2156,9 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> window: tumbling(1 m)
-            |> aggregate: { n = count() }
-            |> distinct: msg.id within 5 m
+            |> window tumbling(1 m)
+            |> aggregate { n = count() }
+            |> distinct msg.id within 5 m
             |> sink to b :: "b"
         end
         """
@@ -2170,8 +2170,8 @@ class TestNewStagesSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "a"
-            |> flatten: msg.items
-            |> flatten: msg.data
+            |> flatten msg.items
+            |> flatten msg.data
             |> sink to b :: "b"
         end
         """
@@ -2256,8 +2256,8 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { n = count() }
+            |> window tumbling(1 m)
+            |> aggregate { n = count() }
             |> sink to b :: "y"
         end
         """
@@ -2272,8 +2272,8 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> aggregate: { n = count() over short }
+            |> window short tumbling(1 m)
+            |> aggregate { n = count() over short }
             |> sink to b :: "y"
         end
         """
@@ -2286,8 +2286,8 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { n = count() over mywin }
+            |> window tumbling(1 m)
+            |> aggregate { n = count() over mywin }
             |> sink to b :: "y"
         end
         """
@@ -2299,9 +2299,9 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
                 avg_5m = avg(msg.value) over long
             }
@@ -2317,9 +2317,9 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> window: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
             }
             |> sink to b :: "y"
@@ -2333,9 +2333,9 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value)
             }
             |> sink to b :: "y"
@@ -2349,9 +2349,9 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> window long: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window long tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over nonexistent
             }
             |> sink to b :: "y"
@@ -2365,9 +2365,9 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> window short: tumbling(5 m)
-            |> aggregate: {
+            |> window short tumbling(1 m)
+            |> window short tumbling(5 m)
+            |> aggregate {
                 avg_1m = avg(msg.value) over short
             }
             |> sink to b :: "y"
@@ -2381,7 +2381,7 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> aggregate: { n = count() over mywin }
+            |> aggregate { n = count() over mywin }
             |> sink to b :: "y"
         end
         """
@@ -2393,8 +2393,8 @@ class TestMultiWindowSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window short: tumbling(1 m)
-            |> aggregate: { n = count() over wrong }
+            |> window short tumbling(1 m)
+            |> aggregate { n = count() over wrong }
             |> sink to b :: "y"
         end
         """
@@ -2412,7 +2412,7 @@ class TestFuncDefsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: double(msg.value) > 10
+            |> filter double(msg.value) > 10
             |> sink to b :: "y"
         end
         """
@@ -2425,7 +2425,7 @@ class TestFuncDefsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: add(msg.x, msg.y) > 0
+            |> filter add(msg.x, msg.y) > 0
             |> sink to b :: "y"
         end
         """
@@ -2523,7 +2523,7 @@ class TestFuncDefsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: negate(msg.value) > 0
+            |> filter negate(msg.value) > 0
             |> sink to b :: "y"
         end
         """
@@ -2541,7 +2541,7 @@ class TestPipelineLetBindingsSemantics:
         pipeline p
             source from b :: "x"
             let threshold = 42
-            |> filter: msg.value > threshold
+            |> filter msg.value > threshold
             |> sink to b :: "y"
         end
         """
@@ -2555,7 +2555,7 @@ class TestPipelineLetBindingsSemantics:
             source from b :: "x"
             let low = 10
             let high = 100
-            |> filter: msg.value > low and msg.value < high
+            |> filter msg.value > low and msg.value < high
             |> sink to b :: "y"
         end
         """
@@ -2569,7 +2569,7 @@ class TestPipelineLetBindingsSemantics:
             source from b :: "x"
             let threshold = 42
             let threshold = 99
-            |> filter: msg.value > threshold
+            |> filter msg.value > threshold
             |> sink to b :: "y"
         end
         """
@@ -2583,7 +2583,7 @@ class TestPipelineLetBindingsSemantics:
         pipeline p
             source from b :: "x"
             let LIMIT = 99
-            |> filter: msg.value > LIMIT
+            |> filter msg.value > LIMIT
             |> sink to b :: "y"
         end
         """
@@ -2597,7 +2597,7 @@ class TestPipelineLetBindingsSemantics:
         pipeline p
             source from b :: "x"
             let threshold = 42
-            |> filter: msg.value > threshold
+            |> filter msg.value > threshold
             |> sink to b :: "y"
         end
         """
@@ -2614,9 +2614,9 @@ class TestMatchExprsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: {
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map {
                 label = match total {
                     case 0 => "zero"
                     case 1 => "one"
@@ -2635,9 +2635,9 @@ class TestMatchExprsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: {
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map {
                 label = match total {
                     case 0 => "zero"
                     case 1 => "one"
@@ -2655,7 +2655,7 @@ class TestMatchExprsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: match msg.status {
+            |> filter match msg.status {
                 case "active" => true
                 case "pending" => true
             } == true
@@ -2671,7 +2671,7 @@ class TestMatchExprsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: match msg.status {
+            |> filter match msg.status {
                 case "active" => true
                 else => false
             } == true
@@ -2694,7 +2694,7 @@ class TestUserFuncCallsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: double(msg.value) > 10
+            |> filter double(msg.value) > 10
             |> sink to b :: "y"
         end
         """
@@ -2706,7 +2706,7 @@ class TestUserFuncCallsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> filter: unknown(msg.value) > 10
+            |> filter unknown(msg.value) > 10
             |> sink to b :: "y"
         end
         """
@@ -2718,9 +2718,9 @@ class TestUserFuncCallsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: { result = transform(total) }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map { result = transform(total) }
             |> sink to b :: "y"
         end
         """
@@ -2733,9 +2733,9 @@ class TestUserFuncCallsSemantics:
         broker b host: "h" port: 1 end
         pipeline p
             source from b :: "x"
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: { result = scale(total) }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map { result = scale(total) }
             |> sink to b :: "y"
         end
         """
@@ -2748,7 +2748,7 @@ class TestUserFuncCallsSemantics:
         pipeline p
             source from b :: "x"
             let val = missing_fn(42)
-            |> filter: msg.value > val
+            |> filter msg.value > val
             |> sink to b :: "y"
         end
         """
@@ -2762,7 +2762,7 @@ class TestUserFuncCallsSemantics:
         pipeline p
             source from b :: "x"
             let val = double(21)
-            |> filter: msg.value > val
+            |> filter msg.value > val
             |> sink to b :: "y"
         end
         """
@@ -2780,9 +2780,9 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let factor = 10
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: { result = total * factor }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map { result = total * factor }
             |> sink to b :: "y"
         end
         """
@@ -2796,10 +2796,10 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let min_total = 100
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> having: total > min_total
-            |> map: { result = total }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> having total > min_total
+            |> map { result = total }
             |> sink to b :: "y"
         end
         """
@@ -2813,9 +2813,9 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let ratio = 0
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: { result = ratio }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map { result = ratio }
             |> sink to b :: "y"
         end
         """
@@ -2831,10 +2831,10 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let limit = 50
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> having: total > limit
-            |> map: { result = total }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> having total > limit
+            |> map { result = total }
             |> sink to b :: "y"
         end
         """
@@ -2850,9 +2850,9 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let factor = 10
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> map: { result = nonexistent }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> map { result = nonexistent }
             |> sink to b :: "y"
         end
         """
@@ -2867,10 +2867,10 @@ class TestPipelineLetsInReferences:
         pipeline p
             source from b :: "x"
             let factor = 10
-            |> window: tumbling(1 m)
-            |> aggregate: { total = sum(msg.value) }
-            |> having: nonexistent > 0
-            |> map: { result = total }
+            |> window tumbling(1 m)
+            |> aggregate { total = sum(msg.value) }
+            |> having nonexistent > 0
+            |> map { result = total }
             |> sink to b :: "y"
         end
         """
@@ -2889,9 +2889,9 @@ def test_map_with_forall_expr():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "t"
-        |> window: tumbling(1 m)
-        |> aggregate: { total = sum(msg.v) }
-        |> map: { all_positive = forall(x => x > 0) }
+        |> window tumbling(1 m)
+        |> aggregate { total = sum(msg.v) }
+        |> map { all_positive = forall(x => x > 0) }
         |> sink to b :: "o"
     end
     """
@@ -2910,7 +2910,7 @@ def test_map_with_exists_collection():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "t"
-        |> map: { has_big = exists(x in msg.items => x > 100) }
+        |> map { has_big = exists(x in msg.items => x > 100) }
         |> sink to b :: "o"
     end
     """
@@ -2930,10 +2930,10 @@ def test_having_with_exists_collection():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "t"
-        |> window: tumbling(1 m)
-        |> aggregate: { total = sum(msg.v) }
-        |> having: exists(x in msg.tags => x > 0)
-        |> map: { result = total }
+        |> window tumbling(1 m)
+        |> aggregate { total = sum(msg.v) }
+        |> having exists(x in msg.tags => x > 0)
+        |> map { result = total }
         |> sink to b :: "o"
     end
     """
@@ -2951,10 +2951,10 @@ def test_having_with_pipeline_let():
     pipeline p
         source from b :: "t"
         let threshold = 50
-        |> window: tumbling(1 m)
-        |> aggregate: { total = sum(msg.v) }
-        |> having: total > threshold
-        |> map: { result = total }
+        |> window tumbling(1 m)
+        |> aggregate { total = sum(msg.v) }
+        |> having total > threshold
+        |> map { result = total }
         |> sink to b :: "o"
     end
     """
@@ -2979,7 +2979,7 @@ def test_schema_object_field_type_name():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Reading
-        |> filter: msg.meta.source == "sensor"
+        |> filter msg.meta.source == "sensor"
         |> sink to b :: "out"
     end
     """
@@ -2999,7 +2999,7 @@ def test_schema_list_field_traversal():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Reading
-        |> filter: msg.tags.first > 0
+        |> filter msg.tags.first > 0
         |> sink to b :: "out"
     end
     """
@@ -3023,8 +3023,8 @@ def test_schema_agg_numeric_func_on_string_field():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Sensor
-        |> window: tumbling(5 m)
-        |> aggregate: { total = avg(msg.label) }
+        |> window tumbling(5 m)
+        |> aggregate { total = avg(msg.label) }
         |> sink to b :: "out"
     end
     """
@@ -3047,7 +3047,7 @@ def test_schema_object_field_not_traversable_as_scalar():
     broker b host: "h" port: 1 end
     pipeline p
         source from b :: "in" schema: Reading
-        |> filter: msg.value.nested > 0
+        |> filter msg.value.nested > 0
         |> sink to b :: "out"
     end
     """
