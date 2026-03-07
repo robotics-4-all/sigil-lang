@@ -42,6 +42,7 @@ SCALAR_FUNC_ARGS = {
 STAGE_ORDER = {
     "DeduplicateStage": -1,
     "FilterStage": 0,
+    "PredictStage": 0,
     "RateStage": 1,
     "FlattenStage": 2,
     "DistinctStage": 3,
@@ -76,6 +77,7 @@ def validate(model) -> list[SemanticError]:
     errors.extend(_check_schema_fields(model))
     errors.extend(_check_brokers(model))
     errors.extend(_check_func_defs(model))
+    errors.extend(_check_models(model))
     for pipeline in model.pipelines:
         errors.extend(_check_source(pipeline, model))
         errors.extend(_check_sink_or_route(pipeline))
@@ -116,6 +118,7 @@ def validate(model) -> list[SemanticError]:
         errors.extend(_check_on_error(pipeline))
         errors.extend(_check_retry(pipeline))
         errors.extend(_check_schema_references(pipeline, model))
+        errors.extend(_check_predict_stages(pipeline, model))
     return errors
 
 
@@ -370,6 +373,7 @@ def _check_duplicate_stages(pipeline):
                 "AccumulateStage": "accumulate",
                 "HavingStage": "having",
                 "MapStage": "map",
+                "PredictStage": "predict",
             }.get(cls, cls)
             errors.append(
                 SemanticError(
@@ -1881,3 +1885,71 @@ def _walk_expr_for_schema(node, pipeline_name, schema, is_strict, errors):
                     )
         elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
             _walk_expr_for_schema(child, pipeline_name, schema, is_strict, errors)
+
+
+# ─── ML model validation ────────────────────────────────────────────
+
+
+def _check_models(model):
+    errors = []
+    seen = set()
+    for m in model.models:
+        if m.name in seen:
+            errors.append(
+                SemanticError(
+                    f"Duplicate model name '{m.name}'. Model names must be unique."
+                )
+            )
+        seen.add(m.name)
+
+        if m.returns:
+            output_seen = set()
+            for o in m.returns:
+                if o in output_seen:
+                    errors.append(
+                        SemanticError(f"Model '{m.name}': duplicate output name '{o}'.")
+                    )
+                output_seen.add(o)
+
+        if m.runtime != "custom":
+            if not m.features:
+                errors.append(
+                    SemanticError(
+                        f"Model '{m.name}': runtime '{m.runtime}' requires "
+                        f"'features' specification.",
+                        severity="warning",
+                    )
+                )
+            if not m.returns:
+                errors.append(
+                    SemanticError(
+                        f"Model '{m.name}': runtime '{m.runtime}' requires "
+                        f"'returns' specification.",
+                        severity="warning",
+                    )
+                )
+    return errors
+
+
+def _check_predict_stages(pipeline, model):
+    errors = []
+    model_names = {m.name for m in model.models}
+    for stage in _unwrap_stages(pipeline):
+        if stage.__class__.__name__ != "PredictStage":
+            continue
+        if stage.model is None:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': predict stage references "
+                    f"unknown model."
+                )
+            )
+            continue
+        if stage.model.name not in model_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': predict references model "
+                    f"'{stage.model.name}' which is not defined."
+                )
+            )
+    return errors

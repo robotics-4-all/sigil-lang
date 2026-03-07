@@ -13,6 +13,22 @@ import logging
 import statistics
 import random
 from collections import defaultdict
+{% if p.has_predict %}
+import numpy as np
+{% for pred in p.predictions %}
+{% if pred.model.runtime == "onnx" %}
+import onnxruntime as ort
+{% elif pred.model.runtime == "sklearn" %}
+import joblib
+{% elif pred.model.runtime == "torch" %}
+import torch
+{% elif pred.model.runtime == "tflite" %}
+import tflite_runtime.interpreter as tflite
+{% elif pred.model.runtime == "custom" %}
+import importlib.util
+{% endif %}
+{% endfor %}
+{% endif %}
 
 {% if not p.has_pipe_source %}
 from commlib.transports.{{ p.source_broker.transport }} import (
@@ -257,6 +273,39 @@ class {{ p.class_name }}Pipeline:
             topic="{{ p.on_error_topic }}",
             conn_params=dlq_conn,
         )
+{% endif %}
+{% if p.has_predict %}
+{% for pred in p.predictions %}
+{% if pred.model.runtime == "onnx" %}
+        self._model_{{ pred.model.name }} = ort.InferenceSession({{ pred.model.source_code }})
+        _warmup_input = np.zeros(
+            [1, {{ pred.model.input_key_strs | length }}], dtype=np.float32
+        )
+        self._model_{{ pred.model.name }}.run(
+            None,
+            {self._model_{{ pred.model.name }}.get_inputs()[0].name: _warmup_input},
+        )
+{% elif pred.model.runtime == "sklearn" %}
+        self._model_{{ pred.model.name }} = joblib.load({{ pred.model.source_code }})
+{% elif pred.model.runtime == "torch" %}
+        self._model_{{ pred.model.name }} = torch.jit.load({{ pred.model.source_code }})
+        self._model_{{ pred.model.name }}.eval()
+{% elif pred.model.runtime == "tflite" %}
+        self._model_{{ pred.model.name }} = tflite.Interpreter(
+            model_path={{ pred.model.source_code }}
+        )
+        self._model_{{ pred.model.name }}.allocate_tensors()
+{% elif pred.model.runtime == "custom" %}
+        _spec_{{ pred.model.name }} = importlib.util.spec_from_file_location(
+            "{{ pred.model.name }}", {{ pred.model.source_code }}
+        )
+        _mod_{{ pred.model.name }} = importlib.util.module_from_spec(
+            _spec_{{ pred.model.name }}
+        )
+        _spec_{{ pred.model.name }}.loader.exec_module(_mod_{{ pred.model.name }})
+        self._model_{{ pred.model.name }} = _mod_{{ pred.model.name }}
+{% endif %}
+{% endfor %}
 {% endif %}
 
     def start(self):
@@ -521,6 +570,87 @@ class {{ p.class_name }}Pipeline:
 
 {% if p.has_old_ref %}
         self._prev_msg = dict(msg) if isinstance(msg, dict) else {}
+{% endif %}
+
+{% if p.has_predict %}
+{% for pred in p.predictions %}
+        try:
+{% if pred.model.runtime == "onnx" %}
+            _feat_{{ pred.model.name }} = np.array([[
+{% for ks in pred.model.input_key_strs %}
+                float(_get_nested(msg, {{ ks }}) or 0),
+{% endfor %}
+            ]], dtype=np.float32)
+            _ort_in = {
+                self._model_{{ pred.model.name }}.get_inputs()[0].name:
+                    _feat_{{ pred.model.name }}
+            }
+            _ort_out = self._model_{{ pred.model.name }}.run(None, _ort_in)
+            _pvals = _ort_out[0][0]
+            _pvals = list(_pvals) if hasattr(_pvals, '__len__') else [_pvals]
+{% elif pred.model.runtime == "sklearn" %}
+            _feat_{{ pred.model.name }} = [[
+{% for ks in pred.model.input_key_strs %}
+                float(_get_nested(msg, {{ ks }}) or 0),
+{% endfor %}
+            ]]
+            _sk_out = self._model_{{ pred.model.name }}.predict(
+                _feat_{{ pred.model.name }}
+            )
+            _pvals = (
+                list(_sk_out[0]) if hasattr(_sk_out[0], '__len__') else [_sk_out[0]]
+            )
+{% elif pred.model.runtime == "torch" %}
+            _feat_{{ pred.model.name }} = torch.tensor([[
+{% for ks in pred.model.input_key_strs %}
+                float(_get_nested(msg, {{ ks }}) or 0),
+{% endfor %}
+            ]], dtype=torch.float32)
+            with torch.no_grad():
+                _torch_out = self._model_{{ pred.model.name }}(
+                    _feat_{{ pred.model.name }}
+                )
+            _pvals = (
+                _torch_out[0].tolist()
+                if hasattr(_torch_out[0], 'tolist')
+                else [_torch_out[0].item()]
+            )
+{% elif pred.model.runtime == "tflite" %}
+            _feat_{{ pred.model.name }} = np.array([[
+{% for ks in pred.model.input_key_strs %}
+                float(_get_nested(msg, {{ ks }}) or 0),
+{% endfor %}
+            ]], dtype=np.float32)
+            _tfl = self._model_{{ pred.model.name }}
+            _tfl_inp = _tfl.get_input_details()
+            _tfl_outp = _tfl.get_output_details()
+            _tfl.set_tensor(_tfl_inp[0]['index'], _feat_{{ pred.model.name }})
+            _tfl.invoke()
+            _tfl_raw = _tfl.get_tensor(_tfl_outp[0]['index'])
+            _pvals = (
+                list(_tfl_raw[0]) if hasattr(_tfl_raw[0], '__len__') else [_tfl_raw[0]]
+            )
+{% elif pred.model.runtime == "custom" %}
+            _custom_input = {
+{% for ks in pred.model.input_key_strs %}
+                {{ ks }}: _get_nested(msg, {{ ks }}),
+{% endfor %}
+            }
+            _custom_out = self._model_{{ pred.model.name }}.predict(_custom_input)
+            _pvals = (
+                list(_custom_out)
+                if hasattr(_custom_out, '__len__')
+                else [_custom_out]
+            )
+{% endif %}
+{% for out_name in pred.model.returns %}
+            msg["{{ out_name }}"] = (
+                _pvals[{{ loop.index0 }}] if len(_pvals) > {{ loop.index0 }} else None
+            )
+{% endfor %}
+        except Exception as _pred_exc:
+            logger.warning("Predict '%s' failed: %s", "{{ pred.model.name }}", _pred_exc)
+{% endfor %}
 {% endif %}
 
 {% if p.has_window %}
