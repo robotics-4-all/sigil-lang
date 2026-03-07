@@ -239,6 +239,7 @@ def _run_redis_subprocess(
         [sys.executable, "-c", runner_script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
 
     try:
@@ -268,11 +269,78 @@ def _run_redis_subprocess(
 def _redis_runner_preamble(tmpdir: str, alarm_secs: int = 15) -> str:
     """Return the common preamble for Redis subprocess runner scripts."""
     return f"""\
-import sys, time, json, os, signal
+import sys, time, json, os, signal, logging
 sys.path.insert(0, "{tmpdir}")
+
+# Suppress commlib-py internal logging to work around broken format strings
+# in commlib-py 0.13.1 Kafka transport (crashes subscriber/publisher threads).
+logging.disable(logging.CRITICAL)
 
 signal.signal(signal.SIGALRM, lambda s, f: os._exit(0))
 signal.alarm({alarm_secs})
+"""
+
+
+def _kafka_preamble(topics: list[str]) -> str:
+    """Patch commlib-py 0.13.1 Kafka transport and pre-create topics.
+
+    commlib-py 0.13.1 has several bugs affecting Kafka integration:
+    1. run_forever raises on UNKNOWN_TOPIC_OR_PART instead of retrying
+    2. _on_assign / _on_delivery have broken logging format strings
+    3. auto.offset.reset is "end" — consumers miss messages on new topics
+    4. producer.flush() is never called — messages may not be delivered
+    Pre-creating topics and patching these avoids all issues.  Each
+    subscriber also gets a unique group.id to prevent consumer-group
+    conflicts between consecutive test runs.
+    """
+    topics_str = repr(topics)
+    return f"""\
+import uuid as _uuid
+from confluent_kafka import KafkaError, KafkaException
+from confluent_kafka.admin import AdminClient, NewTopic
+import commlib.transports.kafka as _kafka_mod
+
+_admin = AdminClient({{"bootstrap.servers": "kafka:9092"}})
+_futures = _admin.create_topics([NewTopic(t, num_partitions=1, replication_factor=1) for t in {topics_str}])
+for t, f in _futures.items():
+    try:
+        f.result()
+    except Exception:
+        pass
+time.sleep(1)
+
+_orig_create_conf = _kafka_mod.Subscriber._create_kafka_conf
+def _patched_create_conf(self):
+    _orig_create_conf(self)
+    self._kafka_cfg["auto.offset.reset"] = "earliest"
+    self._kafka_cfg["group.id"] = self._kafka_cfg.get("group.id", "main") + "-" + _uuid.uuid4().hex[:8]
+_kafka_mod.Subscriber._create_kafka_conf = _patched_create_conf
+
+_orig_run_forever = _kafka_mod.Subscriber.run_forever
+def _patched_run_forever(self):
+    self._consumer = self._transport.create_consumer(self._kafka_cfg)
+    try:
+        self._consumer.subscribe([self._topic], on_assign=lambda c, p: None)
+        while True:
+            msg = self._consumer.poll(timeout=1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                if msg.error().code() in (KafkaError._PARTITION_EOF,
+                                          KafkaError.UNKNOWN_TOPIC_OR_PART):
+                    continue
+                raise KafkaException(msg.error())
+            else:
+                self._on_message(msg)
+    finally:
+        self._consumer.close()
+_kafka_mod.Subscriber.run_forever = _patched_run_forever
+
+_orig_publish_data = _kafka_mod.KafkaTransport.publish_data
+def _patched_publish_data(self, producer, data, topic, key="", on_delivery=None):
+    _orig_publish_data(self, producer, data, topic, key, on_delivery)
+    producer.flush(timeout=5)
+_kafka_mod.KafkaTransport.publish_data = _patched_publish_data
 """
 
 
@@ -1448,7 +1516,8 @@ class TestKafkaPassthrough:
         result_file = os.path.join(tmpdir, "results.json")
 
         runner_script = (
-            _redis_runner_preamble(tmpdir)
+            _redis_runner_preamble(tmpdir, alarm_secs=25)
+            + _kafka_preamble([src_topic, snk_topic])
             + f"""
 from commlib.transports.kafka import ConnectionParameters, Subscriber as KSub, Publisher as KPub
 
@@ -1520,7 +1589,8 @@ class TestKafkaFilter:
         result_file = os.path.join(tmpdir, "results.json")
 
         runner_script = (
-            _redis_runner_preamble(tmpdir)
+            _redis_runner_preamble(tmpdir, alarm_secs=30)
+            + _kafka_preamble([src_topic, snk_topic])
             + f"""
 from commlib.transports.kafka import ConnectionParameters, Subscriber as KSub, Publisher as KPub
 
@@ -1539,26 +1609,26 @@ def on_sink(msg):
 sink_conn = ConnectionParameters(host="{KAFKA_HOST}", port=9092, group="{group_id}")
 sink_sub = KSub(topic="{snk_topic}", on_message=on_sink, conn_params=sink_conn)
 sink_sub.run()
-time.sleep(1.0)
+time.sleep(2.0)
 
 pipeline.start()
-time.sleep(1.0)
+time.sleep(3.0)
 
 src_pub = KPub(topic="{src_topic}", conn_params=conn)
 src_pub.run()
-time.sleep(0.5)
+time.sleep(1.0)
 
 src_pub.publish({{"sensor": "s1", "value": 30}})
 src_pub.publish({{"sensor": "s2", "value": 80}})
 src_pub.publish({{"sensor": "s3", "value": 10}})
 src_pub.publish({{"sensor": "s4", "value": 99}})
-time.sleep(5)
+time.sleep(10)
 
 """
             + _redis_runner_epilogue(result_file)
         )
 
-        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=20)
+        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=30)
 
         assert len(received) >= 2, f"Expected 2 filtered messages, got {len(received)}"
         values = [m["value"] for m in received]
