@@ -1,30 +1,33 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-06
+**Generated:** 2026-03-15
 
 ## OVERVIEW
 
-`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, and pipeline explanation/visualization.
+`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, ML inference (predict stage), tee/fanout output, and pipeline explanation/visualization. Includes a React/TypeScript visual designer (`designer/`).
 
 ## STRUCTURE
 
 ```
 sigil-lang/
 +-- sigil/                 # Core package (see sigil/AGENTS.md)
-|   +-- grammar.tx         # textX grammar (IS the metamodel, 495 lines)
-|   +-- language.py        # Metamodel builder + parse + import resolution (67 lines)
-|   +-- semantics.py       # Semantic validation (1883 lines, 50 _check_* fns)
+|   +-- grammar.tx         # textX grammar (IS the metamodel, 537 lines)
+|   +-- language.py        # Metamodel builder + parse + import resolution (69 lines)
+|   +-- semantics.py       # Semantic validation (2169 lines, 50+ _check_* fns)
 |   +-- expressions.py     # AST -> Python expression compiler (327 lines)
-|   +-- codegen.py         # Model -> generated app (11 context dataclasses, 694 lines)
-|   +-- explain.py         # Human-readable pipeline explanation (215 lines)
-|   +-- visualize.py       # DOT/Mermaid diagram generation (644 lines)
+|   +-- codegen.py         # Model -> generated app (14 context dataclasses, 868 lines)
+|   +-- explain.py         # Human-readable pipeline explanation (244 lines)
+|   +-- visualize.py       # DOT/Mermaid diagram generation (742 lines)
 |   +-- cli.py             # CLI: check / generate / explain / visualize (132 lines)
 |   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2, requirements.txt.j2)
-+-- examples/              # 27 progressive .sigil examples (01-25 + simple + multi_pipeline)
++-- designer/              # React/TypeScript visual designer (see designer/AGENTS.md)
+|   +-- src/               # React app source (components, store, codegen, types)
+|   +-- Dockerfile         # Designer container
++-- examples/              # 32 progressive .sigil examples (01-30 + simple + multi_pipeline)
 +-- tests/                 # pytest suite (~718 unit + ~26 integration tests)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
 +-- setup.py               # Package config, console_scripts entry point
-+-- Makefile               # Docker-based build/test/run targets
++-- Makefile               # Docker-based build/test/run targets (+ validate-examples)
 +-- Dockerfile             # App container (python:3.12-slim)
 +-- docker-compose.yml     # Full dev stack (EMQX, Redis, RabbitMQ, Kafka)
 +-- .github/workflows/     # CI: unit tests on 3.10/3.11/3.12, integration via Docker
@@ -41,10 +44,14 @@ sigil-lang/
 | Add new CLI subcommand | `sigil/cli.py` | argparse, entry point: `sigil` |
 | Explain pipeline logic | `sigil/explain.py` | `explain_model()` returns human-readable text |
 | Visualize pipeline diagrams | `sigil/visualize.py` | `visualize_dot(model)`, `visualize_mermaid(model)` |
-| Add codegen context fields | `sigil/codegen.py` | 11 dataclasses: `BrokerCtx`, `PipelineCtx`, etc |
+| Add codegen context fields | `sigil/codegen.py` | 14 dataclasses: `BrokerCtx`, `PipelineCtx`, etc |
 | Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` + `explain.py` + `visualize.py` |
 | Add new aggregation function | `grammar.tx` (AggFunc) + `semantics.py` (FUNCS_* sets) + `templates/pipeline.py.j2` |
-| See DSL syntax examples | `examples/*.sigil` | Progressive 01-25 |
+| Add ML model runtime support | `sigil/grammar.tx` (Runtime rule) + `codegen.py` (ModelCtx/PredictCtx) + `templates/pipeline.py.j2` + `templates/requirements.txt.j2` |
+| Visual designer (UI) | `designer/src/` | React + React Flow + Zustand (see designer/AGENTS.md) |
+| Designer → .sigil codegen | `designer/src/codegen/generateSigil.ts` | `generateSigil(model)` |
+| Designer model types | `designer/src/types/model.ts` | `SigilModel`, `PipelineDef`, `StageKind` |
+| See DSL syntax examples | `examples/*.sigil` | Progressive 01-30 (26-30 are ML predict examples) |
 | Language reference | `docs/language-reference.md` | Full syntax documentation |
 
 ## CONVENTIONS
@@ -73,7 +80,9 @@ sigil-lang/
 
 ## PIPELINE ARCHITECTURE
 
-Fixed processing pipeline order: `source -> [join] -> [let bindings] -> deduplicate -> filter -> rate -> flatten -> distinct -> throttle -> sample -> group_by -> window -> aggregate -> accumulate -> having -> map -> sink`.
+Fixed processing pipeline order: `source -> [join] -> [let bindings] -> deduplicate -> filter -> predict -> rate -> flatten -> distinct -> throttle -> sample -> group_by -> window -> aggregate -> accumulate -> having -> map -> sink`.
+
+`PredictStage` runs at phase 0 (same as FilterStage). Output goes to `sink` (single), `route` (conditional fan-out), `tee` (broadcast copy), or `fanout` (parallel branches). Never more than one output type.
 
 Pipeline-level let bindings (`let name = expr`) appear between join and stages. Computed per-message, available in all downstream stage expressions.
 
@@ -81,7 +90,7 @@ Stage order enforced by `STAGE_ORDER` dict in `semantics.py` (maps stage class n
 
 Stages wrapped in `AnnotatedStage` (optional `@warn`/`@error` annotations). Use `_unwrap_stages(pipeline)` for raw stage objects.
 
-Pipeline output: `sink` (single destination) OR `route` (conditional fan-out). Never both.
+Pipeline output: `sink` (single destination) OR `route` (conditional fan-out) OR `tee`/`fanout`. Never more than one.
 
 Source: broker subscription (`source from BROKER :: "topic"`) or pipeline chain (`source from pipe NAME`). Pipe sources use in-memory `_downstream_listeners`.
 
@@ -139,9 +148,10 @@ Retry: `retry: N with backoff DURATION`.
 ## CODE GENERATION FLOW
 
 1. `parse(path)` -> textX AST model (with imports resolved)
-2. `validate(model)` -> `list[SemanticError]` (50 checks)
+2. `validate(model)` -> `list[SemanticError]` (50+ checks)
 3. `generate(model, output_dir)`:
    - `_build_const_map(model)` + `_build_func_defs(model)` -> lookup tables
+   - `_build_model_map(model, const_map, func_defs)` -> `dict[str, ModelCtx]` (ML models)
    - Per pipeline: `_build_pipeline_ctx(pipeline, const_map, func_defs)` -> `PipelineCtx`
    - Stage dispatch via `stage.__class__.__name__` populates ctx fields
    - Expressions compiled via `compile_expr()` into Python code strings
@@ -162,10 +172,10 @@ Generated app structure: `app.py` (imports, signal handling, event loop), `pipel
 | `test_visualize.py` | 1202 | 103 | DOT and Mermaid diagram output |
 
 Conventions:
-- No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py.
+- No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py; `_stages(pipeline)` in test_codegen.py and test_visualize.py.
 - All tests use inline multi-line DSL strings (no external fixture files).
 - Tests invoke Python functions directly (`parse_string`, `validate`, `generate`, `compile_expr`). No CLI testing.
-- Integration tests: `pytest.mark.skipif` for broker availability. Docker required.
+- Integration tests: `pytest.mark.skipif` for broker availability (`mqtt_available`, `redis_available`, `amqp_available`, `kafka_available`). Docker required.
 - Codegen tests: `tempfile.TemporaryDirectory()` + Python `compile()` for syntax verification.
 
 ## COMMANDS
@@ -183,6 +193,7 @@ make up                 # Start services (EMQX, Redis, RabbitMQ, Kafka)
 make test               # Full test suite in Docker
 make test-unit          # Unit tests only
 make test-integration   # Integration tests (real brokers)
+make validate-examples  # Validate all examples/*.sigil
 make clean              # Remove containers, images, caches
 
 # CLI
@@ -215,6 +226,9 @@ GitHub Actions (`.github/workflows/ci.yml`):
 - Duplicate broker names caught by textX (`not unique`) before semantic validation.
 - Named multi-window `|> window NAME tumbling(...)` with `over NAME` in aggregations. Each window gets own buffer, flush thread, `_process_window_<name>` method.
 - Root-level utility scripts (`replace_colons.py`, `replace_colons_script.py`) are one-off migration scripts, not part of the core package.
-- 27 examples in `examples/` progress from basic (01_hello_passthrough) to advanced (25_retry_and_multi_window).
-- `pipeline.py.j2` is the largest template at 1053 lines.
+- 32 examples in `examples/` progress from basic (01_hello_passthrough) to advanced (30_ml_custom_runtime). Examples 26-30 cover ML predict stage.
+- `pipeline.py.j2` is the largest template at 1254 lines.
+- 14 codegen context dataclasses (was 11): added `FanoutBranchCtx`, `ModelCtx`, `PredictCtx`.
+- ML predict stage: `|> predict using MODEL_NAME`. Runtimes: `onnx`, `sklearn`, `torch`, `tflite`, custom Python module. ML deps conditionally included in `requirements.txt.j2`.
 - Version: `0.1.0` (defined in both `setup.py` and `sigil/__init__.py`).
+- Designer (`designer/`) is a standalone React/Vite app. Run separately via `designer/run.sh` or `designer/Dockerfile`. Does NOT currently support predict stage in UI.
