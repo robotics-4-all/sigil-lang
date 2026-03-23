@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, ML inference (predict stage), tee/fanout output, and pipeline explanation/visualization. Includes a React/TypeScript visual designer (`designer/`).
+`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, ML inference (predict stage), tee/fanout output, and pipeline explanation/visualization. The visual designer lives in the separate `sigil-designer` repository.
 
 ## STRUCTURE
 
@@ -20,9 +20,6 @@ sigil-lang/
 |   +-- visualize.py       # DOT/Mermaid diagram generation (742 lines)
 |   +-- cli.py             # CLI: check / generate / explain / visualize (132 lines)
 |   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2, requirements.txt.j2)
-+-- designer/              # React/TypeScript visual designer (see designer/AGENTS.md)
-|   +-- src/               # React app source (components, store, codegen, types)
-|   +-- Dockerfile         # Designer container
 +-- examples/              # 32 progressive .sigil examples (01-30 + simple + multi_pipeline)
 +-- tests/                 # pytest suite (~718 unit + ~26 integration tests)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
@@ -48,9 +45,7 @@ sigil-lang/
 | Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` + `explain.py` + `visualize.py` |
 | Add new aggregation function | `grammar.tx` (AggFunc) + `semantics.py` (FUNCS_* sets) + `templates/pipeline.py.j2` |
 | Add ML model runtime support | `sigil/grammar.tx` (Runtime rule) + `codegen.py` (ModelCtx/PredictCtx) + `templates/pipeline.py.j2` + `templates/requirements.txt.j2` |
-| Visual designer (UI) | `designer/src/` | React + React Flow + Zustand (see designer/AGENTS.md) |
-| Designer → .sigil codegen | `designer/src/codegen/generateSigil.ts` | `generateSigil(model)` |
-| Designer model types | `designer/src/types/model.ts` | `SigilModel`, `PipelineDef`, `StageKind` |
+| Visual designer (UI) | `sigil-designer` repo | Separate repository: React + React Flow + Zustand |
 | See DSL syntax examples | `examples/*.sigil` | Progressive 01-30 (26-30 are ML predict examples) |
 | Language reference | `docs/language-reference.md` | Full syntax documentation |
 
@@ -231,4 +226,4 @@ GitHub Actions (`.github/workflows/ci.yml`):
 - 14 codegen context dataclasses (was 11): added `FanoutBranchCtx`, `ModelCtx`, `PredictCtx`.
 - ML predict stage: `|> predict using MODEL_NAME`. Runtimes: `onnx`, `sklearn`, `torch`, `tflite`, custom Python module. ML deps conditionally included in `requirements.txt.j2`.
 - Version: `0.1.0` (defined in both `setup.py` and `sigil/__init__.py`).
-- Designer (`designer/`) is a standalone React/Vite app. Run separately via `designer/run.sh` or `designer/Dockerfile`. Does NOT currently support predict stage in UI.
+- Visual designer lives in the separate `sigil-designer` repository (React/Vite). Does NOT currently support predict stage in UI.
