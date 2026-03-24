@@ -88,19 +88,6 @@ class RouteArmCtx:
 
 
 @dataclass
-class FanoutBranchCtx:
-    condition_code: str | None
-    broker: "BrokerCtx"
-    topic: str
-    qos: int
-    has_filter: bool
-    filter_code: str
-    has_map: bool
-    let_bindings: list["LetBindingCtx"]
-    mappings: list["MappingCtx"]
-
-
-@dataclass
 class ModelCtx:
     name: str
     source_code: str
@@ -168,10 +155,7 @@ class PipelineCtx:
     has_route: bool = False
     route_arms: list[RouteArmCtx] = dc_field(default_factory=list)
     route_default: RouteArmCtx | None = None
-    has_tee: bool = False
-    tee_targets: list[str] = dc_field(default_factory=list)
-    has_fanout: bool = False
-    fanout_branches: list[FanoutBranchCtx] = dc_field(default_factory=list)
+    has_sink: bool = False
     has_pipe_source: bool = False
     pipe_source_name: str = ""
     has_join: bool = False
@@ -372,18 +356,8 @@ def _build_pipeline_ctx(
                 qos=route.default.qos if route.default.qos else 0,
             )
 
-    if pipeline.tee:
-        ctx.has_tee = True
-        ctx.tee_targets = list(pipeline.tee.targets)
-
-    if pipeline.fanout:
-        ctx.has_fanout = True
-        for branch in pipeline.fanout.branches:
-            ctx.fanout_branches.append(
-                _build_fanout_branch_ctx(
-                    branch, const_map, func_defs, pipeline_let_names
-                )
-            )
+    if snk:
+        ctx.has_sink = True
 
     if snk and snk.batch:
         ctx.has_batch = True
@@ -616,92 +590,6 @@ def _build_pipeline_ctx(
                 ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(m.value)
 
     return ctx
-
-
-def _build_fanout_branch_ctx(
-    branch,
-    const_map: dict[str, str] | None,
-    func_defs: dict | None,
-    pipeline_let_names: set[str] | None = None,
-) -> FanoutBranchCtx:
-    local_names: set[str] = set(pipeline_let_names or set())
-
-    condition_code: str | None = None
-    if branch.condition is not None:
-        condition_code = compile_expr(
-            branch.condition,
-            ExprContext.FILTER,
-            local_names=local_names,
-            const_map=const_map,
-            func_defs=func_defs,
-        )
-
-    has_filter = False
-    filter_code = ""
-    has_map = False
-    let_bindings: list[LetBindingCtx] = []
-    mappings: list[MappingCtx] = []
-
-    for annotated in branch.stages:
-        if annotated.__class__.__name__ == "AnnotatedStage":
-            stage = annotated.stage
-        else:
-            stage = annotated
-        cls = stage.__class__.__name__
-
-        if cls == "FilterStage":
-            has_filter = True
-            filter_code = compile_expr(
-                stage.condition,
-                ExprContext.FILTER,
-                local_names=local_names,
-                const_map=const_map,
-                func_defs=func_defs,
-            )
-
-        elif cls == "MapStage":
-            has_map = True
-            map_local: set[str] = set(local_names)
-            for lb in stage.bindings:
-                let_bindings.append(
-                    LetBindingCtx(
-                        name=lb.name,
-                        value_code=compile_expr(
-                            lb.value,
-                            ExprContext.MAP,
-                            local_names=map_local,
-                            const_map=const_map,
-                            func_defs=func_defs,
-                        ),
-                    )
-                )
-                map_local.add(lb.name)
-            for m in stage.mappings:
-                mappings.append(
-                    MappingCtx(
-                        target=m.target,
-                        value_code=compile_expr(
-                            m.value,
-                            ExprContext.MAP,
-                            local_names=map_local,
-                            const_map=const_map,
-                            func_defs=func_defs,
-                        ),
-                    )
-                )
-
-    snk = branch.sink
-    return FanoutBranchCtx(
-        condition_code=condition_code,
-        broker=_build_broker_ctx(snk.broker),
-        topic=snk.topic,
-        qos=snk.qos if snk.qos else 0,
-        has_filter=has_filter,
-        filter_code=filter_code,
-        has_map=has_map,
-        let_bindings=let_bindings,
-        mappings=mappings,
-    )
 
 
 def _build_broker_ctx(broker) -> BrokerCtx:

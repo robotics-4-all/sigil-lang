@@ -77,20 +77,6 @@ def explain_model(model) -> str:
                 lines.append(
                     f"      default → publish to '{p.route.default.topic}' via {p.route.default.broker.name}"
                 )
-        if p.tee:
-            targets = ", ".join(p.tee.targets)
-            lines.append(
-                f"  → Tee: broadcasts to pipelines [{targets}] via in-memory fan-out (no broker)"
-            )
-        if p.fanout:
-            lines.append(f"  → Fanout: {len(p.fanout.branches)} branches (broadcast)")
-            for i, branch in enumerate(p.fanout.branches):
-                cond = f" when <condition>" if branch.condition else " (always)"
-                stage_count = len(branch.stages)
-                lines.append(
-                    f"  Branch {i + 1}:{cond}, {stage_count} stage(s)"
-                    f' → sink to {branch.sink.broker.name} :: "{branch.sink.topic}"'
-                )
         if p.retry:
             base = _format_duration(p.retry.base)
             lines.append(
