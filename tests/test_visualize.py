@@ -1267,3 +1267,184 @@ def test_dot_and_mermaid_both_include_predict():
     assert "predict" in mmd
     assert "model_det" in dot
     assert "model_det" in mmd
+
+
+TEE_VIS_SRC = """
+broker local host: "localhost" port: 1883 end
+
+pipeline source_pipe
+    source from local :: "input"
+    |> filter msg.value > 0
+    |> tee branch_a, branch_b
+end
+pipeline branch_a
+    source from pipe source_pipe
+    |> sink to local :: "output/a"
+end
+pipeline branch_b
+    source from pipe source_pipe
+    |> sink to local :: "output/b"
+end
+"""
+
+
+def test_dot_tee_node_present():
+    model = parse_string(TEE_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "tee" in dot
+
+
+def test_dot_tee_targets_in_label():
+    model = parse_string(TEE_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "branch_a" in dot
+    assert "branch_b" in dot
+
+
+def test_dot_tee_node_shape():
+    model = parse_string(TEE_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "p_source_pipe_tee" in dot
+    assert "diamond" in dot
+
+
+def test_dot_tee_pipe_edge():
+    model = parse_string(TEE_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "p_source_pipe_tee" in dot
+    assert "p_branch_a_source" in dot
+    assert "p_branch_b_source" in dot
+
+
+def test_mermaid_tee_node_present():
+    model = parse_string(TEE_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "tee" in mmd
+
+
+def test_mermaid_tee_targets_in_label():
+    model = parse_string(TEE_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "branch_a" in mmd
+    assert "branch_b" in mmd
+
+
+def test_mermaid_tee_node_id():
+    model = parse_string(TEE_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "p_source_pipe_tee" in mmd
+
+
+def test_mermaid_tee_pipe_edge():
+    model = parse_string(TEE_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "p_source_pipe_tee" in mmd
+    assert "p_branch_a_source" in mmd
+    assert "p_branch_b_source" in mmd
+
+
+def test_dot_tee_single_target():
+    src = """
+broker b host: "localhost" port: 1883 end
+pipeline up
+    source from b :: "in"
+    |> tee down
+end
+pipeline down
+    source from pipe up
+    |> sink to b :: "out"
+end
+"""
+    model = parse_string(src)
+    dot = visualize_dot(model)
+    assert "p_up_tee" in dot
+    assert "down" in dot
+
+
+def test_mermaid_tee_single_target():
+    src = """
+broker b host: "localhost" port: 1883 end
+pipeline up
+    source from b :: "in"
+    |> tee down
+end
+pipeline down
+    source from pipe up
+    |> sink to b :: "out"
+end
+"""
+    model = parse_string(src)
+    mmd = visualize_mermaid(model)
+    assert "p_up_tee" in mmd
+    assert "down" in mmd
+
+
+FANOUT_VIS_SRC = """
+broker local host: "localhost" port: 1883 end
+
+pipeline ingest
+    source from local :: "sensors/data"
+    |> filter msg.value > 0
+    |> fanout {
+        branch {
+            when msg.value > 500
+            |> sink to local :: "alerts"
+        }
+        branch {
+            |> sink to local :: "archive"
+        }
+    }
+end
+"""
+
+
+def test_dot_fanout_node_present():
+    model = parse_string(FANOUT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "fanout" in dot
+
+
+def test_dot_fanout_node_shape():
+    model = parse_string(FANOUT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "p_ingest_fanout" in dot
+    assert "diamond" in dot
+    assert "c084fc" in dot
+
+
+def test_dot_fanout_branch_sinks():
+    model = parse_string(FANOUT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "alerts" in dot
+    assert "archive" in dot
+    assert "p_ingest_fanout_branch0" in dot
+    assert "p_ingest_fanout_branch1" in dot
+
+
+def test_dot_fanout_condition_edge_label():
+    model = parse_string(FANOUT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert 'label="when"' in dot
+    assert 'label="always"' in dot
+
+
+def test_mermaid_fanout_node_present():
+    model = parse_string(FANOUT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "fanout" in mmd
+
+
+def test_mermaid_fanout_branch_sinks():
+    model = parse_string(FANOUT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "alerts" in mmd
+    assert "archive" in mmd
+    assert "p_ingest_fanout_branch0" in mmd
+    assert "p_ingest_fanout_branch1" in mmd
+
+
+def test_mermaid_fanout_condition_edge_label():
+    model = parse_string(FANOUT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert '"when"' in mmd
+    assert '"always"' in mmd

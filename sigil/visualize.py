@@ -167,6 +167,31 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
             lines.append(f'        {def_id} [shape=cds label="{def_label}"];')
             lines.append(f'        {route_id} -> {def_id} [label="default"];')
 
+    if pipeline.tee:
+        tee_id = f"{prefix}_tee"
+        tee_label = "tee\\n" + ", ".join(pipeline.tee.targets)
+        lines.append(
+            f'        {tee_id} [shape=diamond style=filled fillcolor="#e8d5f5" label="{tee_label}"];'
+        )
+        node_chain.append(tee_id)
+
+    if pipeline.fanout:
+        fanout_id = f"{prefix}_fanout"
+        lines.append(
+            f'        {fanout_id} [shape=diamond style=filled fillcolor="#c084fc" label="fanout"];'
+        )
+        node_chain.append(fanout_id)
+        for j, branch in enumerate(pipeline.fanout.branches):
+            branch_sink_id = f"{prefix}_fanout_branch{j}"
+            branch_label = f"sink\\n{branch.sink.topic}"
+            lines.append(
+                f'        {branch_sink_id} [shape=cds label="{branch_label}"];'
+            )
+            edge_label = "when" if branch.condition else "always"
+            lines.append(
+                f'        {fanout_id} -> {branch_sink_id} [label="{edge_label}"];'
+            )
+
     # @finally hook
     finally_id = None
     if pipeline.finally_:
@@ -241,6 +266,14 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
                 f"    {dlq_id} -> {broker_ids[pipeline.on_error.broker.name]};"
             )
 
+    if pipeline.fanout:
+        for j, branch in enumerate(pipeline.fanout.branches):
+            branch_sink_id = f"{prefix}_fanout_branch{j}"
+            if branch.sink.broker.name in broker_ids:
+                lines.append(
+                    f"    {branch_sink_id} -> {broker_ids[branch.sink.broker.name]};"
+                )
+
     # Pipe source: dashed edge from upstream pipeline
     if src.pipe:
         upstream_pipelines = [up for up in model.pipelines if up.name == src.pipe]
@@ -255,6 +288,16 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
                 upstream_route = f"p_{upstream.name}_route"
                 lines.append(
                     f'    {upstream_route} -> {src_id} [style=dashed label="pipe"];'
+                )
+            elif upstream.tee:
+                upstream_tee = f"p_{upstream.name}_tee"
+                lines.append(
+                    f'    {upstream_tee} -> {src_id} [style=dashed label="tee" color=purple];'
+                )
+            elif upstream.fanout:
+                upstream_fanout = f"p_{upstream.name}_fanout"
+                lines.append(
+                    f'    {upstream_fanout} -> {src_id} [style=dashed label="fanout" color=purple];'
                 )
 
     lines.append("")
@@ -503,6 +546,25 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
             lines.append(f'        {def_id}[/"{_mermaid_escape(def_label)}"/]')
             lines.append(f'        {route_id} -->|"default"| {def_id}')
 
+    if pipeline.tee:
+        tee_id = f"{prefix}_tee"
+        tee_label = "tee\n" + ", ".join(pipeline.tee.targets)
+        lines.append(f'        {tee_id}{{{{"{_mermaid_escape(tee_label)}"}}}}')
+        node_chain.append(tee_id)
+
+    if pipeline.fanout:
+        fanout_id = f"{prefix}_fanout"
+        lines.append(f'        {fanout_id}{{"fanout"}}')
+        node_chain.append(fanout_id)
+        for j, branch in enumerate(pipeline.fanout.branches):
+            branch_sink_id = f"{prefix}_fanout_branch{j}"
+            branch_label = f"sink\n{branch.sink.topic}"
+            lines.append(
+                f'        {branch_sink_id}[/"{_mermaid_escape(branch_label)}"/]'
+            )
+            edge_label = "when" if branch.condition else "always"
+            lines.append(f'        {fanout_id} -->|"{edge_label}"| {branch_sink_id}')
+
     # @finally hook
     finally_id = None
     if pipeline.finally_:
@@ -571,6 +633,14 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
                 f"    {dlq_id} --> {broker_ids[pipeline.on_error.broker.name]}"
             )
 
+    if pipeline.fanout:
+        for j, branch in enumerate(pipeline.fanout.branches):
+            branch_sink_id = f"{prefix}_fanout_branch{j}"
+            if branch.sink.broker.name in broker_ids:
+                lines.append(
+                    f"    {branch_sink_id} --> {broker_ids[branch.sink.broker.name]}"
+                )
+
     # Pipe source: dotted edge from upstream pipeline
     if src.pipe:
         upstream_pipelines = [up for up in model.pipelines if up.name == src.pipe]
@@ -582,6 +652,12 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
             elif upstream.route:
                 upstream_route = f"p_{upstream.name}_route"
                 lines.append(f'    {upstream_route} -.->|"pipe"| {src_id}')
+            elif upstream.tee:
+                upstream_tee = f"p_{upstream.name}_tee"
+                lines.append(f'    {upstream_tee} -.->|"tee"| {src_id}')
+            elif upstream.fanout:
+                upstream_fanout = f"p_{upstream.name}_fanout"
+                lines.append(f'    {upstream_fanout} -.->|"fanout"| {src_id}')
 
     lines.append("")
 

@@ -3788,3 +3788,192 @@ def test_explain_includes_predict():
     assert "onnx" in text
     assert "predict" in text
     assert "anomaly_detector" in text
+
+
+TEE_SRC = """
+broker local host: "localhost" port: 1883 end
+
+pipeline source_pipe
+    source from local :: "input/data"
+    |> filter msg.value > 0
+    |> tee branch_a, branch_b
+end
+pipeline branch_a
+    source from pipe source_pipe
+    |> sink to local :: "output/a"
+end
+pipeline branch_b
+    source from pipe source_pipe
+    |> sink to local :: "output/b"
+end
+"""
+
+
+def test_tee_pipeline_ctx_has_tee():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "source_pipe.py")).read()
+        assert "_notify_downstream" in code
+
+
+def test_tee_pipeline_no_broker_publisher():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "source_pipe.py")).read()
+        assert "SinkConnParams" not in code
+        assert "self._publisher" not in code
+
+
+def test_tee_pipeline_publish_message_only_notifies():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "source_pipe.py")).read()
+        assert "_notify_downstream(msg)" in code
+        assert (
+            "_publish_with_retry"
+            not in code.split("def _publish_message")[1].split("def ")[0]
+        )
+
+
+def test_tee_pipeline_compiles():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "source_pipe.py")).read()
+        compile(code, "source_pipe.py", "exec")
+
+
+def test_tee_branch_pipeline_compiles():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "branch_a.py")).read()
+        compile(code, "branch_a.py", "exec")
+
+
+def test_tee_app_registers_downstream_listeners():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        app_code = open(os.path.join(tmpdir, "app.py")).read()
+        assert "_downstream_listeners" in app_code
+        assert "branch_a" in app_code
+        assert "branch_b" in app_code
+
+
+def test_tee_explain_output():
+    model = parse_string(TEE_SRC)
+    text = explain_model(model)
+    assert "Tee" in text
+    assert "branch_a" in text
+    assert "branch_b" in text
+    assert "in-memory fan-out" in text
+
+
+def test_tee_pipeline_no_import_sink_publisher():
+    model = parse_string(TEE_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "source_pipe.py")).read()
+        assert "Publisher" not in code.split("class ")[0]
+
+
+FANOUT_SRC = """
+broker local
+    host: "localhost"
+    port: 1883
+end
+
+pipeline ingest
+    source from local :: "sensors/data"
+    |> filter msg.value > 0
+    |> fanout {
+        branch {
+            when msg.value > 500
+            |> map { level = "critical" }
+            |> sink to local :: "alerts"
+        }
+        branch {
+            |> sink to local :: "archive"
+        }
+    }
+end
+"""
+
+
+def test_fanout_pipeline_ctx_has_fanout():
+    model = parse_string(FANOUT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "ingest.py")).read()
+        assert "_fanout_pub_1" in code
+        assert "_fanout_pub_2" in code
+
+
+def test_fanout_pipeline_no_sink_publisher():
+    model = parse_string(FANOUT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "ingest.py")).read()
+        assert "SinkConnParams" not in code
+        assert "self._publisher" not in code
+
+
+def test_fanout_pipeline_publish_message_calls_fanout_pubs():
+    model = parse_string(FANOUT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "ingest.py")).read()
+        publish_method = code.split("def _publish_message")[1].split("def ")[0]
+        assert "_fanout_pub_1" in publish_method
+        assert "_fanout_pub_2" in publish_method
+
+
+def test_fanout_pipeline_condition_in_publish():
+    model = parse_string(FANOUT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "ingest.py")).read()
+        publish_method = code.split("def _publish_message")[1].split("def ")[0]
+        assert "500" in publish_method
+
+
+def test_fanout_pipeline_compiles():
+    model = parse_string(FANOUT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "ingest.py")).read()
+        compile(code, "ingest.py", "exec")
+
+
+def test_fanout_explain_output():
+    model = parse_string(FANOUT_SRC)
+    text = explain_model(model)
+    assert "Fanout" in text
+    assert "2 branches" in text
+    assert "alerts" in text
+    assert "archive" in text
+
+
+def test_fanout_no_condition_branch_always_publishes():
+    src = """
+broker b host: "localhost" port: 1883 end
+pipeline p
+    source from b :: "in"
+    |> fanout {
+        branch {
+            |> sink to b :: "out"
+        }
+    }
+end
+"""
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        publish_method = code.split("def _publish_message")[1].split("def ")[0]
+        assert "_fanout_pub_1" in publish_method
+        assert "if " not in publish_method.strip().split("\n")[1]

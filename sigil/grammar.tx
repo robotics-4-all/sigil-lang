@@ -29,7 +29,9 @@
  *   int, float, str, bool,
  *   func, match,
  *   model, predict, runtime, features, returns,
- *   onnx, sklearn, torch, tflite, custom
+ *   onnx, sklearn, torch, tflite, custom,
+ *   tee,
+ *   fanout, branch
  */
 
 Model:
@@ -81,7 +83,7 @@ Pipeline:
         ('|>' join=JoinStage)?
         (pipeline_lets+=PipelineLetBinding)*
         ('|>' stages+=AnnotatedStage)*
-        ('|>' (sink=Sink | route=RouteBlock))?
+        ('|>' (sink=Sink | route=RouteBlock | tee=TeeBlock | fanout=FanoutBlock))?
         (on_error=OnErrorClause)?
         (retry=RetryPolicy)?
         (finally_=FinallyHook)?
@@ -120,6 +122,26 @@ RouteArm:
 RouteSink:
     'sink' 'to' broker=[Broker] '::' topic=STRING
     ('qos' ':' qos=INT)?
+;
+
+// ─── Tee (in-memory fan-out to named pipelines) ─────────────────────
+TeeBlock:
+    'tee' targets+=ID[',']
+;
+
+// ─── Fanout (broadcast with per-branch processing) ───────────────────
+FanoutBlock:
+    'fanout' '{'
+        branches+=FanoutBranch+
+    '}'
+;
+
+FanoutBranch:
+    'branch' '{'
+        ('when' condition=Expression)?
+        ('|>' stages+=AnnotatedStage)*
+        '|>' sink=Sink
+    '}'
 ;
 
 // ─── Join (second stream) ───────────────────────────────────────────
