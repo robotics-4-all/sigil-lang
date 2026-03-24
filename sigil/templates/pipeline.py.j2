@@ -42,7 +42,7 @@ from commlib.transports.{{ p.join.broker.transport }} import (
     Subscriber as JoinSubscriber,
 )
 {% endif %}
-{% if not p.has_route and not p.has_tee and not p.has_fanout %}
+{% if not p.has_route and p.has_sink %}
 from commlib.transports.{{ p.sink_broker.transport }} import (
     ConnectionParameters as SinkConnParams,
     Publisher,
@@ -60,12 +60,6 @@ from commlib.transports.{{ p.route_default.broker.transport }} import (
     Publisher as RouteDefaultPublisher,
 )
 {% endif %}
-{% for branch in p.fanout_branches %}
-from commlib.transports.{{ branch.broker.transport }} import (
-    ConnectionParameters as Fanout{{ loop.index }}ConnParams,
-    Publisher as Fanout{{ loop.index }}Publisher,
-)
-{% endfor %}
 {% endif %}
 {% if p.has_on_error and not p.on_error_drop %}
 from commlib.transports.{{ p.on_error_broker.transport }} import (
@@ -216,7 +210,7 @@ class {{ p.class_name }}Pipeline:
         )
 {% endif %}
 
-{% if not p.has_route and not p.has_tee and not p.has_fanout %}
+{% if not p.has_route and p.has_sink %}
         sink_conn = SinkConnParams(
             host="{{ p.sink_broker.host }}",
             port={{ p.sink_broker.port }},
@@ -262,20 +256,6 @@ class {{ p.class_name }}Pipeline:
             ),
         )
 {% endif %}
-{% for branch in p.fanout_branches %}
-        self._fanout_pub_{{ loop.index }} = Fanout{{ loop.index }}Publisher(
-            topic="{{ branch.topic }}",
-            conn_params=Fanout{{ loop.index }}ConnParams(
-                host="{{ branch.broker.host }}", port={{ branch.broker.port }},
-{% if branch.broker.ssl %}
-                ssl=True,
-{% endif %}
-{% if branch.broker.username %}
-                username="{{ branch.broker.username }}", password="{{ branch.broker.password }}",
-{% endif %}
-            ),
-        )
-{% endfor %}
 {% endif %}
 {% if p.has_on_error and not p.on_error_drop %}
         dlq_conn = DlqConnParams(
@@ -336,7 +316,7 @@ class {{ p.class_name }}Pipeline:
 {% if p.has_join %}
         self._join_subscriber.run()
 {% endif %}
-{% if not p.has_route and not p.has_tee and not p.has_fanout %}
+{% if not p.has_route and p.has_sink %}
         self._publisher.run()
 {% else %}
 {% for arm in p.route_arms %}
@@ -345,9 +325,6 @@ class {{ p.class_name }}Pipeline:
 {% if p.route_default %}
         self._route_pub_default.run()
 {% endif %}
-{% for branch in p.fanout_branches %}
-        self._fanout_pub_{{ loop.index }}.run()
-{% endfor %}
 {% endif %}
 {% if p.has_on_error and not p.on_error_drop %}
         self._dlq_publisher.run()
@@ -417,7 +394,7 @@ class {{ p.class_name }}Pipeline:
 {% if p.has_join %}
         _endpoints.append(self._join_subscriber)
 {% endif %}
-{% if not p.has_route and not p.has_tee and not p.has_fanout %}
+{% if not p.has_route and p.has_sink %}
         _endpoints.append(self._publisher)
 {% else %}
 {% for arm in p.route_arms %}
@@ -426,9 +403,6 @@ class {{ p.class_name }}Pipeline:
 {% if p.route_default %}
         _endpoints.append(self._route_pub_default)
 {% endif %}
-{% for branch in p.fanout_branches %}
-        _endpoints.append(self._fanout_pub_{{ loop.index }})
-{% endfor %}
 {% endif %}
 {% if p.has_on_error and not p.on_error_drop %}
         _endpoints.append(self._dlq_publisher)
@@ -1180,52 +1154,7 @@ class {{ p.class_name }}Pipeline:
             self._flush_batch()
 {% endif %}
 {% else %}
-{% if p.has_tee %}
-    def _publish_message(self, msg):
-        self._notify_downstream(msg)
-{% elif p.has_fanout %}
-    def _publish_message(self, msg):
-{% for branch in p.fanout_branches %}
-        _branch_msg_{{ loop.index }} = dict(msg)
-{% if branch.has_filter %}
-        if {{ branch.filter_code }}:
-{% if branch.has_map %}
-{% for lb in branch.let_bindings %}
-            {{ lb.name }} = {{ lb.value_code }}
-{% endfor %}
-            _branch_msg_{{ loop.index }} = {
-{% for m in branch.mappings %}
-                "{{ m.target }}": {{ m.value_code }},
-{% endfor %}
-            }
-{% endif %}
-{% if branch.condition_code %}
-            if {{ branch.condition_code }}:
-                self._publish_with_retry(self._fanout_pub_{{ loop.index }}, _branch_msg_{{ loop.index }})
-{% else %}
-            self._publish_with_retry(self._fanout_pub_{{ loop.index }}, _branch_msg_{{ loop.index }})
-{% endif %}
-{% else %}
-{% if branch.has_map %}
-{% for lb in branch.let_bindings %}
-        {{ lb.name }} = {{ lb.value_code }}
-{% endfor %}
-        _branch_msg_{{ loop.index }} = {
-{% for m in branch.mappings %}
-            "{{ m.target }}": {{ m.value_code }},
-{% endfor %}
-        }
-{% endif %}
-{% if branch.condition_code %}
-        if {{ branch.condition_code }}:
-            self._publish_with_retry(self._fanout_pub_{{ loop.index }}, _branch_msg_{{ loop.index }})
-{% else %}
-        self._publish_with_retry(self._fanout_pub_{{ loop.index }}, _branch_msg_{{ loop.index }})
-{% endif %}
-{% endif %}
-{% endfor %}
-        self._notify_downstream(msg)
-{% elif p.has_route %}
+{% if p.has_route %}
     def _publish_message(self, msg):
 {% for arm in p.route_arms %}
 {% if loop.first %}
@@ -1240,7 +1169,7 @@ class {{ p.class_name }}Pipeline:
             self._publish_with_retry(self._route_pub_default, msg)
 {% endif %}
         self._notify_downstream(msg)
-{% else %}
+{% elif p.has_sink %}
     def _publish_message(self, msg):
 {% if p.sink_format == "csv" %}
         self._publish_with_retry(self._publisher, self._format_message(msg))
@@ -1249,6 +1178,9 @@ class {{ p.class_name }}Pipeline:
 {% else %}
         self._publish_with_retry(self._publisher, msg)
 {% endif %}
+        self._notify_downstream(msg)
+{% else %}
+    def _publish_message(self, msg):
         self._notify_downstream(msg)
 {% endif %}
 {% endif %}
