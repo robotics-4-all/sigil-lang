@@ -1,0 +1,14 @@
+/*
+ * shared/constants.sigil — Shared constants
+ *
+ * Imported by examples/35_imports.sigil.
+ * Constants defined here are merged into the importing model and
+ * available in all pipelines of that file.
+ */
+
+const TEMP_MIN      = -40
+const TEMP_MAX      = 125
+const HUMIDITY_MIN  = 0
+const HUMIDITY_MAX  = 100
+const ALERT_TEMP    = 80
+const WINDOW_MIN    = 5

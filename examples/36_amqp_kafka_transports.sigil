@@ -1,0 +1,137 @@
+/*
+ * Example 36 — AMQP and Kafka Transports
+ * ========================================
+ * Demonstrates broker definitions using the `amqp` and `kafka`
+ * transports alongside `mqtt` and `redis`. All four transports are
+ * shown in a single multi-pipeline file.
+ *
+ * SUPPORTED TRANSPORTS:
+ *   mqtt   — MQTT 3.1.1/5.0 (Mosquitto, EMQX, HiveMQ, AWS IoT, …)
+ *   redis  — Redis Pub/Sub (single-node or cluster)
+ *   amqp   — AMQP 0.9.1 (RabbitMQ, Azure Service Bus, …)
+ *   kafka  — Apache Kafka (KRaft or ZooKeeper mode)
+ *
+ * TRANSPORT SELECTION GUIDELINES:
+ *   mqtt   → IoT / edge devices, constrained bandwidth, QoS 0/1/2
+ *   redis  → in-process caching, low-latency pub/sub, ephemeral data
+ *   amqp   → enterprise messaging, reliable delivery, routing keys
+ *   kafka  → high-throughput event streaming, durable log, replay
+ *
+ * SCENARIO:
+ *   A payment processing hub that receives transactions from a Kafka
+ *   topic, validates them, routes high-value transactions to an AMQP
+ *   queue for manual review, stores per-merchant summaries in Redis,
+ *   and broadcasts lightweight notifications over MQTT.
+ *
+ * PIPELINE TOPOLOGY:
+ *
+ *   [Kafka: payments.raw]
+ *       ├── validate_and_route → AMQP (high-value review)
+ *       │                     → MQTT (push notification)
+ *       └── merchant_summary  → Redis (dashboard cache)
+ *
+ * INPUT:  {"tx_id": "TX-9912", "merchant_id": "M-42",
+ *           "amount_usd": 5400.00, "currency": "USD",
+ *           "status": "pending", "risk_score": 0.73}
+ */
+
+// ── Kafka: high-throughput transaction event log ────────────────────────────
+broker kafka_payments
+    transport: kafka
+    host: "kafka.payments.internal"
+    port: 9092
+end
+
+// ── AMQP: reliable delivery for compliance review queue ────────────────────
+broker amqp_compliance
+    transport: amqp
+    host: "rabbit.compliance.internal"
+    port: 5672
+    auth: {
+        username: "compliance_svc"
+        password: "amqp-s3cr3t"
+    }
+end
+
+// ── Redis: low-latency merchant dashboard cache ─────────────────────────────
+broker redis_dashboard
+    transport: redis
+    host: "redis.dashboard.internal"
+    port: 6379
+end
+
+// ── MQTT: mobile push notification broker ──────────────────────────────────
+broker mqtt_notify
+    transport: mqtt
+    host: "notify.example.com"
+    port: 1883
+    ssl: true
+end
+
+const HIGH_VALUE_USD  = 5000
+const HIGH_RISK_SCORE = 0.7
+const WINDOW_SECONDS  = 5
+
+// ── Pipeline 1: Validate and route transactions ─────────────────────────────
+pipeline validate_and_route
+    source from kafka_payments :: "payments.raw" format: json
+
+    // Drop messages missing required fields or with impossible amounts
+    |> filter msg.tx_id is not null and
+              msg.amount_usd > 0 and
+              msg.merchant_id is not null
+
+    // Annotate with a risk flag before routing
+    |> map {
+        let flagged = msg.amount_usd > HIGH_VALUE_USD or
+                      msg.risk_score > HIGH_RISK_SCORE;
+
+        tx_id       = msg.tx_id;
+        merchant_id = msg.merchant_id;
+        amount_usd  = msg.amount_usd;
+        currency    = msg.currency ?? "USD";
+        risk_score  = msg.risk_score ?? 0.0;
+        flagged     = flagged
+    }
+
+    // High-value or high-risk → AMQP compliance queue
+    // All others             → MQTT push notification
+    |> route
+        when msg.flagged == true => sink to amqp_compliance :: "payments.review"
+        default                  => sink to mqtt_notify :: "payments/notify"
+    end
+end
+
+// ── Pipeline 2: Per-merchant 5-minute aggregate → Redis dashboard ──────────
+pipeline merchant_summary
+    source from kafka_payments :: "payments.raw" format: json
+
+    |> filter msg.merchant_id is not null and msg.amount_usd > 0
+
+    |> group_by msg.merchant_id
+
+    |> window tumbling(5 m)
+
+    |> aggregate {
+        tx_count    = count()
+        total_usd   = sum(msg.amount_usd)
+        avg_usd     = avg(msg.amount_usd)
+        max_usd     = max(msg.amount_usd)
+        avg_risk    = avg(msg.risk_score)
+    }
+
+    |> having tx_count >= 1
+
+    |> map {
+        merchant    = msg.merchant_id;
+        volume_usd  = total_usd;
+        average_usd = avg_usd;
+        peak_usd    = max_usd;
+        tx_count    = tx_count;
+        avg_risk    = avg_risk;
+        alert_risk  = if avg_risk > HIGH_RISK_SCORE then true else false
+    }
+
+    // Publish summary to Redis for dashboard consumption
+    |> sink to redis_dashboard :: "merchants:summary:5m"
+end

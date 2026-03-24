@@ -1,0 +1,98 @@
+/*
+ * Example 32 — Match Expressions and If/Then/Else
+ * ==================================================
+ * Demonstrates two forms of conditional expression introduced in Sigil:
+ *   1. `match` — pattern match against a single subject value
+ *   2. `if … then … else` — inline conditional (boolean branch)
+ *
+ * NEW FEATURES:
+ *   match subject {
+ *       case pattern => result
+ *       ...
+ *       else         => default
+ *   }
+ *       — evaluates to the first arm where subject == pattern
+ *       — `else` is optional; without it the expression returns null
+ *         if no arm matches
+ *
+ *   if condition then thenExpr else elseExpr
+ *       — equivalent to Python's  `thenExpr if condition else elseExpr`
+ *       — inline, no separate statement needed
+ *
+ * COMPARISON WITH `case`:
+ *   case { when cond => val }    — each arm has an independent boolean condition
+ *   match subject { case p => v} — each arm compares subject to a literal pattern
+ *
+ * SCENARIO:
+ *   A logistics event router that processes parcel status updates.
+ *   The pipeline:
+ *     1. Translates numeric status codes to human-readable labels (match)
+ *     2. Computes a priority flag using if/then/else based on carrier SLA tier
+ *     3. Aggregates parcel counts per warehouse region
+ *     4. Routes output to region-specific alert topics via route block
+ *
+ * INPUT:  {"parcel_id": "P-001", "status_code": 3, "carrier_tier": "express",
+ *           "weight_kg": 12.5, "region": "EMEA"}
+ * OUTPUT: {"parcel": "P-001", "status": "in_transit",
+ *           "high_priority": true, "region": "EMEA"}
+ */
+
+broker logistics
+    transport: mqtt
+    host: "logistics.example.com"
+    port: 1883
+end
+
+broker alerts
+    transport: amqp
+    host: "rabbit.example.com"
+    port: 5672
+end
+
+pipeline parcel_status
+    source from logistics :: "parcels/+/events" qos: 1 format: json
+
+    // Only process recognised status codes (0-6)
+    |> filter msg.status_code >= 0 and msg.status_code <= 6
+
+    |> map {
+        // match: translate integer status code to a readable label
+        let status_label = match msg.status_code {
+            case 0 => "registered"
+            case 1 => "collected"
+            case 2 => "in_warehouse"
+            case 3 => "in_transit"
+            case 4 => "out_for_delivery"
+            case 5 => "delivered"
+            case 6 => "returned"
+            else   => "unknown"
+        };
+
+        // if/then/else: express delivery or heavy parcel → high priority
+        let high_priority = if msg.carrier_tier == "express" or msg.weight_kg > 30.0
+                            then true
+                            else false;
+
+        // match on string region code → human-readable zone name
+        let zone = match msg.region {
+            case "EMEA" => "Europe, Middle East & Africa"
+            case "APAC" => "Asia-Pacific"
+            case "AMER" => "Americas"
+            else        => msg.region
+        };
+
+        parcel        = msg.parcel_id;
+        status        = status_label;
+        high_priority = high_priority;
+        zone          = zone;
+        weight_kg     = msg.weight_kg;
+        region        = msg.region
+    }
+
+    |> route
+        when msg.region == "EMEA" => sink to alerts :: "logistics/emea/events"
+        when msg.region == "APAC" => sink to alerts :: "logistics/apac/events"
+        when msg.region == "AMER" => sink to alerts :: "logistics/amer/events"
+        default => sink to logistics :: "logistics/other/events"
+    end
+end

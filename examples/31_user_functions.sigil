@@ -1,0 +1,100 @@
+/*
+ * Example 31 — User-Defined Functions
+ * =====================================
+ * Demonstrates the `func` declaration for reusable, inline expressions.
+ * Functions are compiled by inlining their body at every call site —
+ * there is no runtime function call overhead.
+ *
+ * NEW FEATURES:
+ *   func name(param, ...)  = expression
+ *       — define a named expression function at the model level
+ *       — multiple parameters supported, separated by commas
+ *       — body is any valid expression, including nested function calls
+ *       — called in any expression context: filter, map, having, aggregate, etc.
+ *
+ * SCENARIO:
+ *   A fleet telematics pipeline that:
+ *     1. Converts raw GPS speed (m/s) to km/h using a conversion function
+ *     2. Clamps fuel consumption readings to a valid physical range
+ *     3. Computes a driver efficiency score from multiple normalized metrics
+ *     4. Aggregates per-vehicle over 5-minute windows
+ *     5. Classifies overall fleet efficiency via a composite score function
+ *
+ * INPUT:  {"vehicle_id": "V-42", "speed_ms": 22.5, "fuel_lph": 8.1,
+ *           "rpm": 2800, "region": "EU"}
+ * OUTPUT: {"vehicle": "V-42", "avg_speed_kmh": 78.3, "efficiency": "good",
+ *           "score": 0.82, "samples": 60}
+ */
+
+// ── Unit conversion ────────────────────────────────────────────────────────
+func ms_to_kmh(v) = v * 3.6
+
+// ── Clamp a value within [lo, hi] ─────────────────────────────────────────
+func clamp(v, lo, hi) = case {
+    when v < lo => lo
+    when v > hi => hi
+    else        => v
+}
+
+// ── Normalize to [0, 1] from range [min_val, max_val] ──────────────────────
+func normalize(v, min_val, max_val) = (v - min_val) / (max_val - min_val)
+
+// ── Composite efficiency score (higher is better) ─────────────────────────
+// Speed efficiency: optimal around 80 km/h (penalise extremes)
+// Fuel efficiency: lower is better, max physical limit 20 l/h
+func speed_score(kmh) = 1.0 - abs(kmh - 80.0) / 80.0
+func fuel_score(lph)  = 1.0 - normalize(clamp(lph, 0.0, 20.0), 0.0, 20.0)
+
+const RPM_IDLE = 600
+const RPM_RED  = 5000
+
+broker fleet
+    transport: mqtt
+    host: "fleet.example.com"
+    port: 1883
+end
+
+pipeline fleet_efficiency
+    source from fleet :: "vehicles/+/telemetry" qos: 1 format: json
+
+    // Convert speed to km/h and apply sanity bounds before filtering
+    |> filter ms_to_kmh(msg.speed_ms) > 0 and
+              clamp(msg.fuel_lph, 0.0, 20.0) > 0 and
+              msg.rpm >= RPM_IDLE and msg.rpm <= RPM_RED
+
+    |> group_by msg.vehicle_id
+
+    |> window tumbling(5 m)
+
+    |> aggregate {
+        avg_speed_ms  = avg(msg.speed_ms)
+        avg_fuel      = avg(msg.fuel_lph)
+        samples       = count()
+    }
+
+    // Require enough data points for a meaningful window
+    |> having samples >= 10
+
+    |> map {
+        // Apply conversion functions to aggregate results
+        let speed_kmh = ms_to_kmh(avg_speed_ms);
+        let fuel_safe = clamp(avg_fuel, 0.0, 20.0);
+
+        // Compose per-metric scores into an overall efficiency score
+        let score = (speed_score(speed_kmh) + fuel_score(fuel_safe)) / 2.0;
+
+        vehicle       = msg.vehicle_id;
+        avg_speed_kmh = speed_kmh;
+        avg_fuel_lph  = fuel_safe;
+        efficiency    = case {
+            when score > 0.8 => "excellent"
+            when score > 0.6 => "good"
+            when score > 0.4 => "fair"
+            else             => "poor"
+        };
+        score         = score;
+        window_samples = samples
+    }
+
+    |> sink to fleet :: "analytics/fleet/efficiency"
+end

@@ -1,0 +1,126 @@
+/*
+ * Example 33 — Pipeline-Level Let Bindings
+ * ==========================================
+ * Demonstrates `let` bindings declared at the pipeline level, between
+ * the source (or join) and the stage chain.
+ *
+ * NEW FEATURES:
+ *   let name = expression   (at pipeline level, before `|>` stages)
+ *       — computed once per incoming message, BEFORE any stage runs
+ *       — result is available by name in ALL downstream stage expressions:
+ *         filter, map, having, aggregate, route, etc.
+ *       — multiple bindings allowed; they are evaluated in declaration order
+ *       — useful for: extracting nested fields, normalising units,
+ *         computing derived flags once and reusing them many times
+ *
+ * DIFFERENCE FROM MAP-STAGE LET:
+ *   Map-stage `let name = expr`  — scoped to a single map stage only
+ *   Pipeline `let name = expr`   — visible in all stages of the pipeline
+ *
+ * SCENARIO:
+ *   A building energy management system. Raw sensor messages carry
+ *   deeply nested fields and raw SI units. Pipeline lets extract and
+ *   convert them once; all downstream stages use the clean names.
+ *
+ *   Two pipelines share the same broker but differ in what they emit:
+ *     1. `room_comfort`  — filter by comfort bounds, publish per-room status
+ *     2. `floor_summary` — aggregate room data per floor over 10-minute windows
+ *
+ * INPUT:  {"room": {"id": "3-B14", "floor": 3},
+ *           "env": {"temp_k": 296.15, "rh_pct": 55, "co2_ppm": 820},
+ *           "ts": 1711234567}
+ * OUTPUT (room_comfort):   {"room_id": "3-B14", "floor": 3,
+ *                            "temp_c": 23.0, "humidity": 55,
+ *                            "co2": 820, "comfort": "ok"}
+ * OUTPUT (floor_summary):  {"floor": 3, "avg_temp_c": 22.8,
+ *                            "avg_co2": 810, "rooms": 12}
+ */
+
+const TEMP_LOW  = 18.0
+const TEMP_HIGH = 27.0
+const CO2_WARN  = 1000
+const CO2_HIGH  = 1500
+
+broker bems
+    transport: mqtt
+    host: "bems.example.com"
+    port: 1883
+end
+
+// ── Pipeline 1: Per-room comfort assessment ─────────────────────────────────
+pipeline room_comfort
+    source from bems :: "building/+/+/env" qos: 1 format: json
+
+    // Pipeline-level lets: extract nested fields and convert units once.
+    // These names are available in every stage below (filter, map, route).
+    let room_id   = msg.room.id
+    let floor     = msg.room.floor
+    let temp_c    = msg.env.temp_k - 273.15
+    let humidity  = msg.env.rh_pct
+    let co2       = msg.env.co2_ppm
+
+    // Use pipeline-let names directly in filter — no msg.env.temp_k repetition
+    |> filter temp_c >= TEMP_LOW and temp_c <= TEMP_HIGH and
+              humidity >= 20 and humidity <= 80
+
+    |> map {
+        // Classify comfort using the pipeline-let values
+        let comfort_label = case {
+            when co2 > CO2_HIGH                  => "poor"
+            when co2 > CO2_WARN                  => "fair"
+            when temp_c < TEMP_LOW + 1.0         => "cool"
+            when temp_c > TEMP_HIGH - 1.0        => "warm"
+            else                                 => "ok"
+        };
+
+        room_id  = room_id;
+        floor    = floor;
+        temp_c   = temp_c;
+        humidity = humidity;
+        co2      = co2;
+        comfort  = comfort_label
+    }
+
+    |> route
+        when co2 > CO2_HIGH  => sink to bems :: "alerts/air_quality/critical"
+        when co2 > CO2_WARN  => sink to bems :: "alerts/air_quality/warning"
+        default              => sink to bems :: "rooms/comfort/status"
+    end
+end
+
+// ── Pipeline 2: Per-floor 10-minute aggregate ──────────────────────────────
+pipeline floor_summary
+    source from bems :: "building/+/+/env" qos: 1 format: json
+
+    // Same pipeline-level lets — extract and convert for this pipeline too
+    let floor    = msg.room.floor
+    let temp_c   = msg.env.temp_k - 273.15
+    let co2      = msg.env.co2_ppm
+
+    // Only include rooms with valid sensor data
+    |> filter temp_c >= TEMP_LOW and temp_c <= TEMP_HIGH and co2 > 0
+
+    // Group per floor using the pipeline-let binding
+    |> group_by floor
+
+    |> window tumbling(10 m)
+
+    |> aggregate {
+        avg_temp  = avg(temp_c)
+        avg_co2   = avg(co2)
+        max_co2   = max(co2)
+        rooms     = count()
+    }
+
+    |> having rooms >= 2
+
+    |> map {
+        floor       = msg.room.floor;
+        avg_temp_c  = avg_temp;
+        avg_co2     = avg_co2;
+        peak_co2    = max_co2;
+        room_count  = rooms
+    }
+
+    |> sink to bems :: "analytics/floor/summary"
+end
