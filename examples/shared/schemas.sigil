@@ -1,0 +1,22 @@
+/*
+ * shared/schemas.sigil — Shared schema declarations
+ *
+ * Imported by examples/35_imports.sigil.
+ * Schemas defined here are merged into the importing model and can
+ * be referenced in `source … schema: NAME` clauses.
+ */
+
+schema SensorReading strict
+    device_id : str
+    value     : float
+    unit      : str
+    ts        : int
+    tags      : [str]?
+end
+
+schema AlertPayload lenient
+    device_id : str
+    value     : float
+    threshold : float
+    severity  : str
+end

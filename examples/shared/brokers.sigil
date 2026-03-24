@@ -1,0 +1,24 @@
+/*
+ * shared/brokers.sigil — Shared broker definitions
+ *
+ * Imported by examples/35_imports.sigil.
+ * Defines the three brokers used across the multi-file pipeline.
+ */
+
+broker edge
+    transport: mqtt
+    host: "10.0.1.1"
+    port: 1883
+end
+
+broker analytics
+    transport: redis
+    host: "redis.internal"
+    port: 6379
+end
+
+broker events
+    transport: amqp
+    host: "rabbit.example.com"
+    port: 5672
+end
