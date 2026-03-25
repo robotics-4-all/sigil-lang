@@ -68,14 +68,26 @@ def explain_model(model) -> str:
                 f"  → Sink: publish to '{p.sink.topic}' via {p.sink.broker.name}"
             )
         if p.route:
-            lines.append("  → Route:")
+            via_part = f" via {p.route.via_broker.name}" if p.route.via_broker else ""
+            lines.append(f"  → Route{via_part}:")
             for arm in p.route.arms:
+                if arm.sink:
+                    lines.append(
+                        f"      when <condition> → publish to '{arm.sink.topic}' via {arm.sink.broker.name}"
+                    )
+                else:
+                    broker_name = p.route.via_broker.name if p.route.via_broker else "?"
+                    lines.append(
+                        f"      when <condition> → publish to '{arm.topic}' via {broker_name}"
+                    )
+            if p.route.default_sink:
                 lines.append(
-                    f"      when <condition> → publish to '{arm.sink.topic}' via {arm.sink.broker.name}"
+                    f"      default → publish to '{p.route.default_sink.topic}' via {p.route.default_sink.broker.name}"
                 )
-            if p.route.default:
+            elif p.route.default_topic:
+                broker_name = p.route.via_broker.name if p.route.via_broker else "?"
                 lines.append(
-                    f"      default → publish to '{p.route.default.topic}' via {p.route.default.broker.name}"
+                    f"      default → publish to '{p.route.default_topic}' via {broker_name}"
                 )
         if p.retry:
             base = _format_duration(p.retry.base)
@@ -196,6 +208,15 @@ def _explain_stage(stage, index):
             parts.append(f"let {', '.join(bindings)}")
         parts.append(f"emit {', '.join(targets)}")
         return f"{prefix} [map]: {'; '.join(parts)}"
+
+    if cls == "SelectStage":
+        parts = []
+        for f in stage.fields:
+            if f.alias:
+                parts.append(f"{f.alias} (from {f.source})")
+            else:
+                parts.append(f.name)
+        return f"{prefix} [select]: emit {', '.join(parts)}"
 
     if cls == "PredictStage":
         return f"{prefix} [predict]: apply model '{stage.model.name}'"

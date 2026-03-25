@@ -80,6 +80,12 @@ class ObjectFieldCtx:
 
 
 @dataclass
+class SelectFieldCtx:
+    output_name: str
+    source_name: str
+
+
+@dataclass
 class RouteArmCtx:
     condition_code: str
     broker: "BrokerCtx"
@@ -182,6 +188,8 @@ class PipelineCtx:
     retry_backoff_seconds: float = 0.1
     has_predict: bool = False
     predictions: list[PredictCtx] = dc_field(default_factory=list)
+    has_select: bool = False
+    select_fields: list[SelectFieldCtx] = dc_field(default_factory=list)
 
 
 def generate(model, output_dir: str):
@@ -334,6 +342,14 @@ def _build_pipeline_ctx(
         route = pipeline.route
         ctx.has_route = True
         for arm in route.arms:
+            if arm.sink:
+                arm_broker = _build_broker_ctx(arm.sink.broker)
+                arm_topic = arm.sink.topic
+                arm_qos = arm.sink.qos if arm.sink.qos else 0
+            else:
+                arm_broker = _build_broker_ctx(route.via_broker)
+                arm_topic = arm.topic
+                arm_qos = 0
             ctx.route_arms.append(
                 RouteArmCtx(
                     condition_code=compile_expr(
@@ -343,17 +359,24 @@ def _build_pipeline_ctx(
                         const_map=const_map,
                         func_defs=func_defs,
                     ),
-                    broker=_build_broker_ctx(arm.sink.broker),
-                    topic=arm.sink.topic,
-                    qos=arm.sink.qos if arm.sink.qos else 0,
+                    broker=arm_broker,
+                    topic=arm_topic,
+                    qos=arm_qos,
                 )
             )
-        if route.default:
+        if route.default_sink:
             ctx.route_default = RouteArmCtx(
                 condition_code="",
-                broker=_build_broker_ctx(route.default.broker),
-                topic=route.default.topic,
-                qos=route.default.qos if route.default.qos else 0,
+                broker=_build_broker_ctx(route.default_sink.broker),
+                topic=route.default_sink.topic,
+                qos=route.default_sink.qos if route.default_sink.qos else 0,
+            )
+        elif route.default_topic:
+            ctx.route_default = RouteArmCtx(
+                condition_code="",
+                broker=_build_broker_ctx(route.via_broker),
+                topic=route.default_topic,
+                qos=0,
             )
 
     if snk:
@@ -588,6 +611,18 @@ def _build_pipeline_ctx(
                     )
                 )
                 ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(m.value)
+
+        elif cls == "SelectStage":
+            ctx.has_select = True
+            for f in stage.fields:
+                if f.alias:
+                    ctx.select_fields.append(
+                        SelectFieldCtx(output_name=f.alias, source_name=f.source)
+                    )
+                else:
+                    ctx.select_fields.append(
+                        SelectFieldCtx(output_name=f.name, source_name=f.name)
+                    )
 
     return ctx
 
