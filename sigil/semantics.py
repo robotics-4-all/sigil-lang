@@ -54,6 +54,7 @@ STAGE_ORDER = {
     "AccumulateStage": 9,
     "HavingStage": 10,
     "MapStage": 11,
+    "SelectStage": 11,
 }
 
 ACCUM_FUNCS_REQUIRING_PARAM = {"ema"}
@@ -119,6 +120,7 @@ def validate(model) -> list[SemanticError]:
         errors.extend(_check_retry(pipeline))
         errors.extend(_check_schema_references(pipeline, model))
         errors.extend(_check_predict_stages(pipeline, model))
+        errors.extend(_check_select_stage(pipeline))
     return errors
 
 
@@ -373,6 +375,7 @@ def _check_duplicate_stages(pipeline):
                 "AccumulateStage": "accumulate",
                 "HavingStage": "having",
                 "MapStage": "map",
+                "SelectStage": "select",
                 "PredictStage": "predict",
             }.get(cls, cls)
             errors.append(
@@ -1256,12 +1259,28 @@ def _check_route_block(pipeline):
                 f"one 'when' arm."
             )
         )
-    if not route.default:
+    has_default = route.default_sink or route.default_topic
+    if not has_default:
         errors.append(
             SemanticError(
                 f"Pipeline '{pipeline.name}': route block requires a "
                 f"'default' arm to handle unmatched messages.",
                 severity="warning",
+            )
+        )
+    for arm in route.arms:
+        if arm.topic and not route.via_broker:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': route arm uses bare topic "
+                    f"string but no 'via' broker is specified."
+                )
+            )
+    if route.default_topic and not route.via_broker:
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline.name}': route default uses bare topic "
+                f"string but no 'via' broker is specified."
             )
         )
     return errors
@@ -1952,4 +1971,19 @@ def _check_predict_stages(pipeline, model):
                     f"'{stage.model.name}' which is not defined."
                 )
             )
+    return errors
+
+
+def _check_select_stage(pipeline):
+    errors = []
+    stage_names = {s.__class__.__name__ for s in _unwrap_stages(pipeline)}
+    has_map = "MapStage" in stage_names
+    has_select = "SelectStage" in stage_names
+    if has_map and has_select:
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline.name}': cannot use both 'map' and 'select' "
+                f"stages in the same pipeline."
+            )
+        )
     return errors

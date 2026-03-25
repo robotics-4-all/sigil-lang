@@ -1,4 +1,5 @@
 import os
+import re
 from functools import lru_cache
 from textx import metamodel_from_file
 
@@ -15,10 +16,63 @@ def build_metamodel():
 
 
 def parse(source_path: str):
-    mm = build_metamodel()
-    model = mm.model_from_file(source_path)
-    _resolve_imports(model, source_path, mm)
-    return model
+    source_abs = os.path.abspath(source_path)
+    if not os.path.isfile(source_abs):
+        raise FileNotFoundError(f"Import error: file not found: '{source_path}'.")
+
+    ordered_paths = _topo_sort_imports(source_abs)
+
+    brokers: dict = {}
+    schemas: dict = {}
+    models_map: dict = {}
+
+    from textx.scoping.providers import PlainName as _PlainName
+
+    _plain = _PlainName()
+
+    def _broker_scope(obj, attr, attr_ref):
+        found = brokers.get(attr_ref.obj_name)
+        return found if found is not None else _plain(obj, attr, attr_ref)
+
+    def _schema_scope(obj, attr, attr_ref):
+        found = schemas.get(attr_ref.obj_name)
+        return found if found is not None else _plain(obj, attr, attr_ref)
+
+    def _model_scope(obj, attr, attr_ref):
+        found = models_map.get(attr_ref.obj_name)
+        return found if found is not None else _plain(obj, attr, attr_ref)
+
+    mm = metamodel_from_file(
+        _GRAMMAR_PATH,
+        auto_init_attributes=True,
+        use_regexp_group=True,
+    )
+    mm.register_scope_providers(
+        {
+            "Source.broker": _broker_scope,
+            "Sink.broker": _broker_scope,
+            "JoinStage.broker": _broker_scope,
+            "RouteSink.broker": _broker_scope,
+            "OnErrorClause.broker": _broker_scope,
+            "Source.schema": _schema_scope,
+            "PredictStage.model": _model_scope,
+        }
+    )
+
+    parsed_models: dict = {}
+    for path in ordered_paths:
+        model = mm.model_from_file(path)
+        parsed_models[path] = model
+        for b in model.brokers:
+            brokers[b.name] = b
+        for s in model.schemas:
+            schemas[s.name] = s
+        for md in model.models:
+            models_map[md.name] = md
+
+    main_model = parsed_models[source_abs]
+    _merge_imports(main_model, source_abs, parsed_models)
+    return main_model
 
 
 def parse_string(source: str):
@@ -30,40 +84,81 @@ class CircularImportError(Exception):
     pass
 
 
-def _resolve_imports(model, source_path: str, mm, _seen: set | None = None):
-    """Recursively resolve import declarations, merging brokers/constants/pipelines."""
-    if _seen is None:
-        _seen = set()
+def _topo_sort_imports(
+    abs_path: str,
+    visited: set | None = None,
+    stack: set | None = None,
+) -> list[str]:
+    if visited is None:
+        visited = set()
+    if stack is None:
+        stack = set()
 
-    source_abs = os.path.abspath(source_path)
-    if source_abs in _seen:
+    if abs_path in stack:
         raise CircularImportError(
-            f"Circular import detected: '{source_path}' is already being imported."
+            f"Circular import detected: '{abs_path}' is already being imported."
         )
-    _seen.add(source_abs)
+    if abs_path in visited:
+        return []
 
-    base_dir = os.path.dirname(source_abs)
-    for imp in model.imports:
-        imp_path = os.path.normpath(os.path.join(base_dir, imp.path))
-        if not os.path.isfile(imp_path):
+    stack.add(abs_path)
+    result: list[str] = []
+
+    import_paths = _scan_import_paths(abs_path)
+    for imp_abs in import_paths:
+        result.extend(_topo_sort_imports(imp_abs, visited, stack))
+
+    stack.remove(abs_path)
+    visited.add(abs_path)
+    result.append(abs_path)
+    return result
+
+
+def _scan_import_paths(abs_path: str) -> list[str]:
+    try:
+        with open(abs_path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Import error: file not found: '{abs_path}'.")
+
+    content_stripped = re.sub(r"//[^\n]*", "", content)
+    content_stripped = re.sub(r"/\*.*?\*/", "", content_stripped, flags=re.DOTALL)
+
+    base_dir = os.path.dirname(abs_path)
+    result: list[str] = []
+    for m in re.finditer(r'import\s+"([^"]+)"', content_stripped):
+        imp_rel = m.group(1)
+        imp_abs = os.path.normpath(os.path.join(base_dir, imp_rel))
+        if not os.path.isfile(imp_abs):
             raise FileNotFoundError(
-                f"Import error: file '{imp.path}' not found (resolved to '{imp_path}')."
+                f"Import error: file '{imp_rel}' not found (resolved to '{imp_abs}')."
             )
-        if os.path.abspath(imp_path) in _seen:
-            raise CircularImportError(
-                f"Circular import detected: '{imp.path}' (resolved to '{imp_path}')."
-            )
+        result.append(imp_abs)
+    return result
 
-        imported = mm.model_from_file(imp_path)
-        _resolve_imports(imported, imp_path, mm, _seen)
 
-        for b in imported.brokers:
-            model.brokers.append(b)
-        for c in imported.constants:
-            model.constants.append(c)
-        for p in imported.pipelines:
-            model.pipelines.append(p)
-        for s in imported.schemas:
-            model.schemas.append(s)
-        for md in imported.models:
-            model.models.append(md)
+def _merge_imports(
+    main_model,
+    main_abs: str,
+    parsed_models: dict,
+    _merged: set | None = None,
+) -> None:
+    if _merged is None:
+        _merged = set()
+    main_import_paths = _scan_import_paths(main_abs)
+    for imp_abs in main_import_paths:
+        if imp_abs not in parsed_models or imp_abs in _merged:
+            continue
+        _merged.add(imp_abs)
+        imp_model = parsed_models[imp_abs]
+        _merge_imports(imp_model, imp_abs, parsed_models, _merged)
+        for b in imp_model.brokers:
+            main_model.brokers.append(b)
+        for c in imp_model.constants:
+            main_model.constants.append(c)
+        for p in imp_model.pipelines:
+            main_model.pipelines.append(p)
+        for s in imp_model.schemas:
+            main_model.schemas.append(s)
+        for md in imp_model.models:
+            main_model.models.append(md)

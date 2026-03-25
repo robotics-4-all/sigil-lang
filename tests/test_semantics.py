@@ -3247,3 +3247,55 @@ def test_predict_with_downstream_map():
     end
     """
     assert _errors(src) == []
+
+
+def test_select_stage_valid():
+    src = """
+    broker b host: "h" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> select [id, value, ts]
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_select_stage_with_rename_valid():
+    src = """
+    broker b host: "h" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> select [out_id: raw_id, value]
+        |> sink to b :: "out"
+    end
+    """
+    assert _errors(src) == []
+
+
+def test_select_and_map_conflict():
+    src = """
+    broker b host: "h" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> select [id, value]
+        |> map { result = msg.value }
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert any("cannot use both" in str(e) for e in errs)
+
+
+def test_select_duplicate_stage():
+    src = """
+    broker b host: "h" port: 1883 end
+    pipeline p
+        source from b :: "in"
+        |> select [id]
+        |> select [value]
+        |> sink to b :: "out"
+    end
+    """
+    errs = _errors(src)
+    assert any("select" in str(e).lower() for e in errs)

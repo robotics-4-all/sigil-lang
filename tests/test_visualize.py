@@ -1297,3 +1297,27 @@ end
     assert "p_hub_source" in mmd
     assert "p_hub_stage0" in mmd
     assert "p_hub_sink" not in mmd
+
+
+SELECT_VIS_SRC = """
+broker b host: "localhost" port: 1883 end
+pipeline sel
+    source from b :: "in"
+    |> select [id, value: raw_value]
+    |> sink to b :: "out"
+end
+"""
+
+
+def test_dot_select_stage_label():
+    model = parse_string(SELECT_VIS_SRC)
+    dot = visualize_dot(model)
+    assert "select" in dot
+    assert "p_sel_stage0" in dot
+
+
+def test_mermaid_select_stage_label():
+    model = parse_string(SELECT_VIS_SRC)
+    mmd = visualize_mermaid(model)
+    assert "select" in mmd
+    assert "p_sel_stage0" in mmd

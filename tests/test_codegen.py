@@ -3825,3 +3825,41 @@ def test_no_sink_pipeline_no_publisher_import():
         code = open(os.path.join(tmpdir, "pipelines", "hub.py")).read()
         assert "SinkConnParams" not in code
         assert "self._publisher" not in code
+
+
+SELECT_SRC = """
+broker b host: "localhost" port: 1883 end
+pipeline sel
+    source from b :: "in"
+    |> select [id, value: raw_value, ts]
+    |> sink to b :: "out"
+end
+"""
+
+
+def test_select_stage_codegen_has_select():
+    model = parse_string(SELECT_SRC)
+    p = model.pipelines[0]
+    from sigil.codegen import _build_pipeline_ctx
+
+    ctx = _build_pipeline_ctx(p)
+    assert ctx.has_select is True
+    assert len(ctx.select_fields) == 3
+    assert ctx.select_fields[0].output_name == "id"
+    assert ctx.select_fields[0].source_name == "id"
+    assert ctx.select_fields[1].output_name == "value"
+    assert ctx.select_fields[1].source_name == "raw_value"
+    assert ctx.select_fields[2].output_name == "ts"
+    assert ctx.select_fields[2].source_name == "ts"
+
+
+def test_select_stage_generated_code():
+    model = parse_string(SELECT_SRC)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        generate(model, tmpdir)
+        code = open(os.path.join(tmpdir, "pipelines", "sel.py")).read()
+        compile(code, "sel.py", "exec")
+        assert '"id"' in code
+        assert '"value"' in code
+        assert '"raw_value"' in code
+        assert '"ts"' in code

@@ -818,6 +818,12 @@ class {{ p.class_name }}Pipeline:
 {% for m in p.mappings %}
             result["{{ m.target }}"] = {{ m.value_code }}
 {% endfor %}
+{% elif p.has_select %}
+            result = {
+{% for f in p.select_fields %}
+                "{{ f.output_name }}": aggregated.get("{{ f.source_name }}") if aggregated and "{{ f.source_name }}" in aggregated else _get_nested(messages[0] if messages else {}, "{{ f.source_name }}"),
+{% endfor %}
+            }
 {% else %}
             result = aggregated
 {% endif %}
@@ -1005,6 +1011,13 @@ class {{ p.class_name }}Pipeline:
 {% for m in p.mappings %}
             result["{{ m.target }}"] = {{ m.value_code }}
 {% endfor %}
+{% elif p.has_select %}
+            aggregated = None
+            result = {
+{% for f in p.select_fields %}
+                "{{ f.output_name }}": aggregated.get("{{ f.source_name }}") if aggregated and "{{ f.source_name }}" in aggregated else _get_nested(msg, "{{ f.source_name }}"),
+{% endfor %}
+            }
 {% else %}
             result = msg
 {% endif %}

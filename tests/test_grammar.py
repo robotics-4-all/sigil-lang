@@ -1304,7 +1304,7 @@ def test_route_single_arm():
     p = model.pipelines[0]
     assert p.route is not None
     assert len(p.route.arms) == 1
-    assert p.route.default is None
+    assert p.route.default_sink is None
 
 
 def test_route_multiple_arms():
@@ -1322,8 +1322,8 @@ def test_route_multiple_arms():
     model = parse_string(src)
     p = model.pipelines[0]
     assert len(p.route.arms) == 1
-    assert p.route.default is not None
-    assert p.route.default.topic == "other"
+    assert p.route.default_sink is not None
+    assert p.route.default_sink.topic == "other"
 
 
 def test_route_without_default():
@@ -3821,3 +3821,117 @@ def test_pipeline_no_sink():
     """)
     assert m.pipelines[0].sink is None
     assert m.pipelines[0].route is None
+
+
+def test_cross_file_broker_reference():
+    import tempfile, os
+
+    with tempfile.TemporaryDirectory() as td:
+        brokers_file = os.path.join(td, "brokers.sigil")
+        with open(brokers_file, "w") as f:
+            f.write('broker remote host: "remote.host" port: 1883 end\n')
+
+        main_file = os.path.join(td, "main.sigil")
+        with open(main_file, "w") as f:
+            f.write(
+                'import "brokers.sigil"\n'
+                'broker local host: "localhost" port: 1883 end\n'
+                "pipeline p\n"
+                '    source from remote :: "input/topic"\n'
+                '    |> sink to local :: "output/topic"\n'
+                "end\n"
+            )
+
+        model = parse(main_file)
+        assert len(model.pipelines) == 1
+        p = model.pipelines[0]
+        assert p.source.broker.name == "remote"
+        assert p.sink.broker.name == "local"
+
+
+SELECT_BASE = """
+broker b host: "localhost" port: 1883 end
+"""
+
+
+def test_parse_select_passthrough_fields():
+    src = (
+        SELECT_BASE
+        + """
+pipeline p
+    source from b :: "in"
+    |> select [field1, field2, field3]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert len(stages) == 1
+    assert stages[0].__class__.__name__ == "SelectStage"
+    fields = stages[0].fields
+    assert len(fields) == 3
+    assert fields[0].name == "field1"
+    assert fields[0].alias == ""
+    assert fields[1].name == "field2"
+    assert fields[2].name == "field3"
+
+
+def test_parse_select_rename_fields():
+    src = (
+        SELECT_BASE
+        + """
+pipeline p
+    source from b :: "in"
+    |> select [out_name: source_name, other: orig]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "SelectStage"
+    fields = stages[0].fields
+    assert len(fields) == 2
+    assert fields[0].alias == "out_name"
+    assert fields[0].source == "source_name"
+    assert fields[1].alias == "other"
+    assert fields[1].source == "orig"
+
+
+def test_parse_select_mixed_fields():
+    src = (
+        SELECT_BASE
+        + """
+pipeline p
+    source from b :: "in"
+    |> select [id, value: raw_value, ts]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    fields = stages[0].fields
+    assert len(fields) == 3
+    assert fields[0].name == "id"
+    assert fields[1].alias == "value"
+    assert fields[1].source == "raw_value"
+    assert fields[2].name == "ts"
+
+
+def test_parse_select_single_field():
+    src = (
+        SELECT_BASE
+        + """
+pipeline p
+    source from b :: "in"
+    |> select [value]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "SelectStage"
+    assert len(stages[0].fields) == 1

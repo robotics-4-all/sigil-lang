@@ -107,14 +107,14 @@ AnnotationSeverity:
 
 // ─── Conditional routing ────────────────────────────────────────────
 RouteBlock:
-    'route'
+    'route' ('via' via_broker=[Broker])?
         arms+=RouteArm
-        ('default' '=>' default=RouteSink)?
+        ('default' '=>' (default_sink=RouteSink | default_topic=STRING))?
     'end'
 ;
 
 RouteArm:
-    'when' condition=Expression '=>' sink=RouteSink
+    'when' condition=Expression '=>' (sink=RouteSink | topic=STRING)
 ;
 
 RouteSink:
@@ -200,7 +200,7 @@ BatchConfig:
 Stage:
     DeduplicateStage | FilterStage | PredictStage | RateStage | FlattenStage
     | DistinctStage | ThrottleStage | SampleStage | GroupByStage | WindowStage
-    | AggregateStage | AccumulateStage | HavingStage | MapStage
+    | AggregateStage | AccumulateStage | HavingStage | MapStage | SelectStage
 ;
 
 DeduplicateStage:
@@ -301,7 +301,7 @@ HavingStage:
 MapStage:
     'map' '{'
         (bindings+=LetBinding[';'] ';')?
-        mappings+=MapAssignment[';']
+        mappings+=MapAssignment[';'] ';'?
     '}'
 ;
 
@@ -311,6 +311,15 @@ LetBinding:
 
 MapAssignment:
     target=ID '=' value=Expression
+;
+
+SelectStage:
+    'select' '[' fields+=SelectField[','] ']'
+;
+
+SelectField:
+    alias=ID ':' source=ID
+  | name=ID
 ;
 
 PredictStage:

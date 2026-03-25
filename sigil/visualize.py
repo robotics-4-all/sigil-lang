@@ -152,18 +152,29 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
 
     if pipeline.route:
         route_id = f"{prefix}_route"
-        lines.append(f'        {route_id} [shape=diamond label="route"];')
+        via_label = (
+            f"\\nvia {pipeline.route.via_broker.name}"
+            if pipeline.route.via_broker
+            else ""
+        )
+        lines.append(f'        {route_id} [shape=diamond label="route{via_label}"];')
         node_chain.append(route_id)
 
         for j, arm in enumerate(pipeline.route.arms):
             arm_id = f"{prefix}_route_arm{j}"
-            arm_label = f"sink\\n{arm.sink.topic}"
+            arm_topic = arm.sink.topic if arm.sink else arm.topic
+            arm_label = f"sink\\n{arm_topic}"
             lines.append(f'        {arm_id} [shape=cds label="{arm_label}"];')
             lines.append(f'        {route_id} -> {arm_id} [label="when"];')
 
-        if pipeline.route.default:
+        if pipeline.route.default_sink:
             def_id = f"{prefix}_route_default"
-            def_label = f"sink\\n{pipeline.route.default.topic}"
+            def_label = f"sink\\n{pipeline.route.default_sink.topic}"
+            lines.append(f'        {def_id} [shape=cds label="{def_label}"];')
+            lines.append(f'        {route_id} -> {def_id} [label="default"];')
+        elif pipeline.route.default_topic:
+            def_id = f"{prefix}_route_default"
+            def_label = f"sink\\n{pipeline.route.default_topic}"
             lines.append(f'        {def_id} [shape=cds label="{def_label}"];')
             lines.append(f'        {route_id} -> {def_id} [label="default"];')
 
@@ -220,17 +231,28 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
         sink_id = f"{prefix}_sink"
         lines.append(f"    {sink_id} -> {broker_ids[pipeline.sink.broker.name]};")
 
-    # Route broker edges
     if pipeline.route:
         for j, arm in enumerate(pipeline.route.arms):
             arm_id = f"{prefix}_route_arm{j}"
-            if arm.sink.broker.name in broker_ids:
-                lines.append(f"    {arm_id} -> {broker_ids[arm.sink.broker.name]};")
-        if pipeline.route.default:
+            if arm.sink:
+                arm_broker_name = arm.sink.broker.name
+            elif pipeline.route.via_broker:
+                arm_broker_name = pipeline.route.via_broker.name
+            else:
+                arm_broker_name = None
+            if arm_broker_name and arm_broker_name in broker_ids:
+                lines.append(f"    {arm_id} -> {broker_ids[arm_broker_name]};")
+        if pipeline.route.default_sink:
             def_id = f"{prefix}_route_default"
-            if pipeline.route.default.broker.name in broker_ids:
+            if pipeline.route.default_sink.broker.name in broker_ids:
                 lines.append(
-                    f"    {def_id} -> {broker_ids[pipeline.route.default.broker.name]};"
+                    f"    {def_id} -> {broker_ids[pipeline.route.default_sink.broker.name]};"
+                )
+        elif pipeline.route.default_topic and pipeline.route.via_broker:
+            def_id = f"{prefix}_route_default"
+            if pipeline.route.via_broker.name in broker_ids:
+                lines.append(
+                    f"    {def_id} -> {broker_ids[pipeline.route.via_broker.name]};"
                 )
 
     # DLQ broker edge
@@ -333,6 +355,12 @@ def _dot_stage_label(stage, cls):
     if cls == "MapStage":
         targets = [m.target for m in stage.mappings]
         return f"map\\n{', '.join(targets)}"
+
+    if cls == "SelectStage":
+        fields = ", ".join(
+            f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields
+        )
+        return f"select\\n[{fields}]"
 
     if cls == "PredictStage":
         return f"predict\\n{stage.model.name}"
@@ -493,18 +521,29 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
 
     if pipeline.route:
         route_id = f"{prefix}_route"
-        lines.append(f'        {route_id}{{"route"}}')
+        via_label = (
+            f"\nvia {pipeline.route.via_broker.name}"
+            if pipeline.route.via_broker
+            else ""
+        )
+        lines.append(f'        {route_id}{{"{_mermaid_escape("route" + via_label)}"}}')
         node_chain.append(route_id)
 
         for j, arm in enumerate(pipeline.route.arms):
             arm_id = f"{prefix}_route_arm{j}"
-            arm_label = f"sink\n{arm.sink.topic}"
+            arm_topic = arm.sink.topic if arm.sink else arm.topic
+            arm_label = f"sink\n{arm_topic}"
             lines.append(f'        {arm_id}[/"{_mermaid_escape(arm_label)}"/]')
             lines.append(f'        {route_id} -->|"when"| {arm_id}')
 
-        if pipeline.route.default:
+        if pipeline.route.default_sink:
             def_id = f"{prefix}_route_default"
-            def_label = f"sink\n{pipeline.route.default.topic}"
+            def_label = f"sink\n{pipeline.route.default_sink.topic}"
+            lines.append(f'        {def_id}[/"{_mermaid_escape(def_label)}"/]')
+            lines.append(f'        {route_id} -->|"default"| {def_id}')
+        elif pipeline.route.default_topic:
+            def_id = f"{prefix}_route_default"
+            def_label = f"sink\n{pipeline.route.default_topic}"
             lines.append(f'        {def_id}[/"{_mermaid_escape(def_label)}"/]')
             lines.append(f'        {route_id} -->|"default"| {def_id}')
 
@@ -555,17 +594,28 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
         sink_id = f"{prefix}_sink"
         lines.append(f"    {sink_id} --> {broker_ids[pipeline.sink.broker.name]}")
 
-    # Route broker edges
     if pipeline.route:
         for j, arm in enumerate(pipeline.route.arms):
             arm_id = f"{prefix}_route_arm{j}"
-            if arm.sink.broker.name in broker_ids:
-                lines.append(f"    {arm_id} --> {broker_ids[arm.sink.broker.name]}")
-        if pipeline.route.default:
+            if arm.sink:
+                arm_broker_name = arm.sink.broker.name
+            elif pipeline.route.via_broker:
+                arm_broker_name = pipeline.route.via_broker.name
+            else:
+                arm_broker_name = None
+            if arm_broker_name and arm_broker_name in broker_ids:
+                lines.append(f"    {arm_id} --> {broker_ids[arm_broker_name]}")
+        if pipeline.route.default_sink:
             def_id = f"{prefix}_route_default"
-            if pipeline.route.default.broker.name in broker_ids:
+            if pipeline.route.default_sink.broker.name in broker_ids:
                 lines.append(
-                    f"    {def_id} --> {broker_ids[pipeline.route.default.broker.name]}"
+                    f"    {def_id} --> {broker_ids[pipeline.route.default_sink.broker.name]}"
+                )
+        elif pipeline.route.default_topic and pipeline.route.via_broker:
+            def_id = f"{prefix}_route_default"
+            if pipeline.route.via_broker.name in broker_ids:
+                lines.append(
+                    f"    {def_id} --> {broker_ids[pipeline.route.via_broker.name]}"
                 )
 
     # DLQ broker edge
@@ -662,6 +712,12 @@ def _mermaid_stage_label(stage, cls):
     if cls == "MapStage":
         targets = [m.target for m in stage.mappings]
         return f"map\n{', '.join(targets)}"
+
+    if cls == "SelectStage":
+        fields = ", ".join(
+            f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields
+        )
+        return f"select\n[{fields}]"
 
     if cls == "PredictStage":
         return f"predict\n{stage.model.name}"
