@@ -9,10 +9,7 @@ from sigil.explain import explain_model
 
 
 def _stages(pipeline):
-    return [
-        s.stage if s.__class__.__name__ == "AnnotatedStage" else s
-        for s in pipeline.stages
-    ]
+    return [s.stage if s.__class__.__name__ == "AnnotatedStage" else s for s in pipeline.stages]
 
 
 SRC = """
@@ -140,6 +137,47 @@ def test_generated_app_compiles():
         generate(model, tmpdir)
         code = open(os.path.join(tmpdir, "app.py")).read()
         compile(code, "<test>", "exec")
+
+
+_FILTER_EXPR_CASES = [
+    ("simple_comparison", "msg.x > 10", ["_get_nested(msg, 'x') > ", "10"]),
+    ("and_expression", "msg.a > 0 and msg.b < 100", ["and"]),
+    ("or_expression", "msg.a > 0 or msg.b < 100", ["or"]),
+    ("not_expression", "not msg.disabled", ["not"]),
+    ("nested_field_ref", "msg.location.lat > 0", ["_get_nested(msg, 'location', 'lat')"]),
+    ("string_literal", 'msg.status == "ok"', ["'ok'"]),
+    ("if_then_else", "if msg.x > 0 then 1 else 0", ["if", "else"]),
+    ("is_null", "msg.x is null", ["is None"]),
+    ("is_not_null", "msg.x is not null", ["is not None"]),
+    ("coalesce", "msg.x ?? 0", ["_coalesce"]),
+    ("in_operator", 'msg.status in ["a", "b"]', ["in ["]),
+    ("not_in_operator", "msg.x not in [1, 2]", ["not in ["]),
+    ("scalar_func_abs", "abs(msg.x)", ["abs("]),
+    ("scalar_func_len", "len(msg.items) > 0", ["len("]),
+    ("scalar_func_lower", 'lower(msg.name) == "a"', ["lower("]),
+    ("scalar_func_upper", 'upper(msg.name) == "A"', ["upper("]),
+]
+
+
+@pytest.mark.parametrize(
+    "expr_src,substrings",
+    [(case[1], case[2]) for case in _FILTER_EXPR_CASES],
+    ids=[case[0] for case in _FILTER_EXPR_CASES],
+)
+def test_filter_expression_compilation_table(expr_src, substrings):
+    src = f"""
+    broker b host: "h" port: 1 end
+    pipeline p
+        source from b :: "t"
+        |> filter {expr_src}
+        |> sink to b :: "t"
+    end
+    """
+    model = parse_string(src)
+    expr = _stages(model.pipelines[0])[0].condition
+    code = compile_expr(expr, ExprContext.FILTER)
+    for needle in substrings:
+        assert needle in code, f"expected {needle!r} in compiled code: {code!r}"
 
 
 class TestExpressionCompiler:
@@ -593,9 +631,7 @@ def test_forall_expression_compiler():
     end
     """
     model = parse_string(src)
-    having = [
-        s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"
-    ][0]
+    having = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"][0]
     code = compile_expr(having.condition, ExprContext.HAVING)
     assert "all(m > 0" in code
     assert "for m in messages" in code
@@ -1408,10 +1444,7 @@ class TestFmtCodegen:
         end
         """
         code = self._gen_pipeline_code(src)
-        assert (
-            "'{} = {}'.format(_get_nested(msg, 'key'), _get_nested(msg, 'value'))"
-            in code
-        )
+        assert "'{} = {}'.format(_get_nested(msg, 'key'), _get_nested(msg, 'value'))" in code
         compile(code, "fmt_multi.py", "exec")
 
 
@@ -2117,9 +2150,7 @@ class TestMatchExprCompilation:
 
     def test_match_subject_is_field_ref(self):
         """match subject compiles to _get_nested for msg.field."""
-        expr = self._parse_map_expr(
-            'out = match msg.status { case "ok" => 1 else => 0 }'
-        )
+        expr = self._parse_map_expr('out = match msg.status { case "ok" => 1 else => 0 }')
         code = compile_expr(expr, ExprContext.MAP)
         assert "_get_nested(msg, 'status')" in code
 
@@ -2223,9 +2254,7 @@ class TestUserFuncCallCompilation:
         """
         model = parse_string(src)
         func_defs = {f.name: f for f in model.functions}
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
+        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
         code = compile_expr(m.mappings[0].value, ExprContext.MAP, func_defs=func_defs)
         assert "_get_nested(msg, 'value')" in code
         assert "* 2" in code

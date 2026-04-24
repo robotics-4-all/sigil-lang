@@ -5,9 +5,56 @@ from dataclasses import dataclass, field
 class SemanticError:
     message: str
     severity: str = "error"
+    code: str | None = None
+    file: str | None = None
+    line: int | None = None
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+    suggestion: str | None = None
+    node: object | None = field(default=None, repr=False, compare=False)
 
     def __str__(self):
-        return f"[{self.severity.upper()}] {self.message}"
+        loc = ""
+        if self.file or self.line:
+            file_part = self.file or "<unknown>"
+            line_part = f":{self.line}" if self.line else ""
+            col_part = f":{self.column}" if self.column else ""
+            loc = f" {file_part}{line_part}{col_part}"
+        code_part = f" [{self.code}]" if self.code else ""
+        head = f"[{self.severity.upper()}]{code_part}{loc} {self.message}"
+        if self.suggestion:
+            return f"{head}\n  hint: {self.suggestion}"
+        return head
+
+
+def _node_position(node):
+    pos = getattr(node, "_tx_position", None)
+    parser = getattr(node, "_tx_parser", None)
+    if pos is None or parser is None:
+        return None, None, None, None
+    line, col = parser.pos_to_linecol(pos)
+    end = getattr(node, "_tx_position_end", None)
+    end_line, end_col = (None, None)
+    if end is not None:
+        end_line, end_col = parser.pos_to_linecol(end)
+    return line, col, end_line, end_col
+
+
+def _err(node, message, *, code=None, suggestion=None, severity="error"):
+    line, col, end_line, end_col = _node_position(node)
+    return SemanticError(
+        message=message,
+        severity=severity,
+        code=code,
+        file=getattr(node, "_tx_filename", None) if node is not None else None,
+        line=line,
+        column=col,
+        end_line=end_line,
+        end_column=end_col,
+        suggestion=suggestion,
+        node=node,
+    )
 
 
 FUNCS_REQUIRING_FIELD = {
@@ -168,9 +215,7 @@ def validate_or_raise(model):
     errors = validate(model)
     real_errors = [e for e in errors if e.severity == "error"]
     if real_errors:
-        msg = "Semantic validation failed:\n" + "\n".join(
-            f"  - {e}" for e in real_errors
-        )
+        msg = "Semantic validation failed:\n" + "\n".join(f"  - {e}" for e in real_errors)
         raise SemanticValidationError(msg, errors=real_errors)
     return errors
 
@@ -187,9 +232,7 @@ def _check_unique_broker_names(model):
     for b in model.brokers:
         if b.name in seen:
             errors.append(
-                SemanticError(
-                    f"Duplicate broker name '{b.name}'. Broker names must be unique."
-                )
+                SemanticError(f"Duplicate broker name '{b.name}'. Broker names must be unique.")
             )
         seen[b.name] = b
     return errors
@@ -201,10 +244,7 @@ def _check_unique_pipeline_names(model):
     for p in model.pipelines:
         if p.name in seen:
             errors.append(
-                SemanticError(
-                    f"Duplicate pipeline name '{p.name}'. "
-                    f"Pipeline names must be unique."
-                )
+                SemanticError(f"Duplicate pipeline name '{p.name}'. Pipeline names must be unique.")
             )
         seen[p.name] = p
     return errors
@@ -215,9 +255,7 @@ def _check_brokers(model):
     for broker in model.brokers:
         if broker.port < 1 or broker.port > 65535:
             errors.append(
-                SemanticError(
-                    f"Broker '{broker.name}': port must be 1-65535, got {broker.port}."
-                )
+                SemanticError(f"Broker '{broker.name}': port must be 1-65535, got {broker.port}.")
             )
         if broker.transport and broker.transport not in VALID_TRANSPORTS:
             errors.append(
@@ -238,16 +276,11 @@ def _check_source(pipeline, model=None):
     if src.qos is not None and src.qos not in VALID_QOS:
         errors.append(
             SemanticError(
-                f"Pipeline '{pipeline.name}': source qos must be 0, 1, or 2, "
-                f"got {src.qos}."
+                f"Pipeline '{pipeline.name}': source qos must be 0, 1, or 2, got {src.qos}."
             )
         )
     if not src.topic:
-        errors.append(
-            SemanticError(
-                f"Pipeline '{pipeline.name}': source topic must not be empty."
-            )
-        )
+        errors.append(SemanticError(f"Pipeline '{pipeline.name}': source topic must not be empty."))
     return errors
 
 
@@ -258,15 +291,12 @@ def _check_sink_or_route(pipeline):
         if snk.qos is not None and snk.qos not in VALID_QOS:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': sink qos must be 0, 1, or 2, "
-                    f"got {snk.qos}."
+                    f"Pipeline '{pipeline.name}': sink qos must be 0, 1, or 2, got {snk.qos}."
                 )
             )
         if not snk.topic:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': sink topic must not be empty."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': sink topic must not be empty.")
             )
     return errors
 
@@ -361,11 +391,7 @@ def _extract_literal_number(expr_node):
             return _extract_literal_number(expr_node.operands[0])
         return None
     if cls == "Comparison":
-        if (
-            expr_node.op is None
-            and expr_node.nullCheck is None
-            and expr_node.inCheck is None
-        ):
+        if expr_node.op is None and expr_node.nullCheck is None and expr_node.inCheck is None:
             return _extract_literal_number(expr_node.left)
         return None
     if cls == "Addition":
@@ -445,15 +471,8 @@ def _check_map_expr_refs(node, agg_names, pipeline_name, errors):
             _check_map_expr_refs(node.collection, agg_names, pipeline_name, errors)
         return
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                _check_map_expr_refs(item, agg_names, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _check_map_expr_refs(child, agg_names, pipeline_name, errors)
+    for child in _iter_expr_children(node):
+        _check_map_expr_refs(child, agg_names, pipeline_name, errors)
 
 
 def _check_duplicate_stages(pipeline):
@@ -549,15 +568,8 @@ def _collect_map_refs(node, refs):
             _collect_map_refs(node.collection, refs)
         return
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                _collect_map_refs(item, refs)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _collect_map_refs(child, refs)
+    for child in _iter_expr_children(node):
+        _collect_map_refs(child, refs)
 
 
 def _check_window_constraints(pipeline):
@@ -567,9 +579,7 @@ def _check_window_constraints(pipeline):
             continue
         if stage.size.value <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': window size must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': window size must be positive.")
             )
         if stage.type == "sliding":
             if stage.step is None:
@@ -583,8 +593,7 @@ def _check_window_constraints(pipeline):
             elif _duration_to_seconds(stage.step) > _duration_to_seconds(stage.size):
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': sliding window step "
-                        f"must be <= window size."
+                        f"Pipeline '{pipeline.name}': sliding window step must be <= window size."
                     )
                 )
     return errors
@@ -592,9 +601,7 @@ def _check_window_constraints(pipeline):
 
 def _check_multi_window(pipeline):
     errors = []
-    windows = [
-        s for s in _unwrap_stages(pipeline) if s.__class__.__name__ == "WindowStage"
-    ]
+    windows = [s for s in _unwrap_stages(pipeline) if s.__class__.__name__ == "WindowStage"]
     if not windows:
         for stage in _unwrap_stages(pipeline):
             if stage.__class__.__name__ != "AggregateStage":
@@ -646,9 +653,7 @@ def _check_multi_window(pipeline):
             )
         elif w.wname in window_names:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': duplicate window name '{w.wname}'."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': duplicate window name '{w.wname}'.")
             )
         else:
             window_names.add(w.wname)
@@ -702,6 +707,34 @@ _EXPR_WALK_ATTRS = (
     "collection",
 )
 
+_EXTRA_BLOCK_ATTRS = (
+    "stages",
+    "assignments",
+    "mappings",
+    "bindings",
+    "list",
+)
+
+_EXTRA_MATCH_ATTRS = ("subject", "pattern")
+
+
+def _iter_expr_children(node, *, extra_attrs=()):
+    for attr_name in _EXPR_WALK_ATTRS + extra_attrs:
+        child = getattr(node, attr_name, None)
+        if child is None:
+            continue
+        if isinstance(child, list):
+            for item in child:
+                if (
+                    item is not None
+                    and hasattr(item, "__class__")
+                    and item.__class__.__module__ != "builtins"
+                ):
+                    yield item
+        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
+            yield child
+
+
 UNIT_MULTIPLIERS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
@@ -734,37 +767,8 @@ def _walk_expr_for_funcs(node, pipeline_name, errors):
                         f"expects {expect} argument(s), got {nargs}."
                     )
                 )
-    for attr_name in (
-        "operands",
-        "left",
-        "right",
-        "rights",
-        "operand",
-        "atom",
-        "expr",
-        "value",
-        "condition",
-        "thenExpr",
-        "elseExpr",
-        "args",
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_funcs(item, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_funcs(child, pipeline_name, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
+        _walk_expr_for_funcs(child, pipeline_name, errors)
 
 
 def _check_let_bindings(pipeline):
@@ -793,8 +797,7 @@ def _check_let_bindings(pipeline):
             if binding.name in seen_let:
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': duplicate let-binding "
-                        f"'{binding.name}'."
+                        f"Pipeline '{pipeline.name}': duplicate let-binding '{binding.name}'."
                     )
                 )
             seen_let.add(binding.name)
@@ -829,8 +832,7 @@ def _check_stage_dependencies(pipeline):
     if has_group_by and not has_window:
         errors.append(
             SemanticError(
-                f"Pipeline '{pipeline.name}': group_by stage has no effect "
-                f"without a window stage.",
+                f"Pipeline '{pipeline.name}': group_by stage has no effect without a window stage.",
                 severity="warning",
             )
         )
@@ -861,8 +863,7 @@ def _check_duplicate_agg_names(pipeline):
             if agg.name in seen:
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': duplicate aggregation "
-                        f"name '{agg.name}'."
+                        f"Pipeline '{pipeline.name}': duplicate aggregation name '{agg.name}'."
                     )
                 )
             seen.add(agg.name)
@@ -879,8 +880,7 @@ def _check_duplicate_map_targets(pipeline):
             if mapping.target in seen:
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': duplicate map target "
-                        f"'{mapping.target}'."
+                        f"Pipeline '{pipeline.name}': duplicate map target '{mapping.target}'."
                     )
                 )
             seen.add(mapping.target)
@@ -893,9 +893,7 @@ def _check_unique_const_names(model):
     for c in model.constants:
         if c.name in seen:
             errors.append(
-                SemanticError(
-                    f"Duplicate const name '{c.name}'. Const names must be unique."
-                )
+                SemanticError(f"Duplicate const name '{c.name}'. Const names must be unique.")
             )
         seen.add(c.name)
     return errors
@@ -949,15 +947,8 @@ def _check_having_expr_refs(node, agg_names, pipeline_name, errors):
             _check_having_expr_refs(node.collection, agg_names, pipeline_name, errors)
         return
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                _check_having_expr_refs(item, agg_names, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _check_having_expr_refs(child, agg_names, pipeline_name, errors)
+    for child in _iter_expr_children(node):
+        _check_having_expr_refs(child, agg_names, pipeline_name, errors)
 
 
 def _check_dedup_constraints(pipeline):
@@ -975,9 +966,7 @@ def _check_dedup_constraints(pipeline):
             )
         if _duration_to_seconds(stage.ttl) <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': deduplicate ttl must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': deduplicate ttl must be positive.")
             )
     return errors
 
@@ -1008,40 +997,8 @@ def _walk_expr_for_case(node, pipeline_name, errors):
                 )
             )
 
-    for attr_name in (
-        "operands",
-        "left",
-        "right",
-        "rights",
-        "operand",
-        "atom",
-        "expr",
-        "value",
-        "condition",
-        "thenExpr",
-        "elseExpr",
-        "args",
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-        "arms",
-        "result",
-        "default",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_case(item, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_case(child, pipeline_name, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
+        _walk_expr_for_case(child, pipeline_name, errors)
 
 
 def _check_temporal_refs(pipeline, model):
@@ -1070,13 +1027,10 @@ def _walk_expr_for_temporal(node, pipeline_name, stage_cls, errors):
         keyword = "old()" if cls == "OldRef" else "changed()"
         errors.append(
             SemanticError(
-                f"Pipeline '{pipeline_name}': {keyword} is only valid in "
-                f"filter or having stages."
+                f"Pipeline '{pipeline_name}': {keyword} is only valid in filter or having stages."
             )
         )
-        if cls == "OldRef" and (
-            node.field.segments[0] != "msg" or len(node.field.segments) < 2
-        ):
+        if cls == "OldRef" and (node.field.segments[0] != "msg" or len(node.field.segments) < 2):
             errors.append(
                 SemanticError(
                     f"Pipeline '{pipeline_name}': old() requires a message "
@@ -1094,19 +1048,8 @@ def _walk_expr_for_temporal(node, pipeline_name, stage_cls, errors):
             )
         return
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_temporal(item, pipeline_name, stage_cls, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_temporal(child, pipeline_name, stage_cls, errors)
+    for child in _iter_expr_children(node):
+        _walk_expr_for_temporal(child, pipeline_name, stage_cls, errors)
 
 
 def _check_temporal_field_validity(pipeline):
@@ -1138,19 +1081,8 @@ def _walk_expr_for_temporal_fields(node, pipeline_name, errors):
                 )
             )
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_temporal_fields(item, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_temporal_fields(child, pipeline_name, errors)
+    for child in _iter_expr_children(node):
+        _walk_expr_for_temporal_fields(child, pipeline_name, errors)
 
 
 def _check_env_refs(pipeline):
@@ -1166,30 +1098,12 @@ def _walk_expr_for_env(node, pipeline_name, errors):
         if not node.key:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline_name}': env() requires a non-empty "
-                    f"string key argument."
+                    f"Pipeline '{pipeline_name}': env() requires a non-empty string key argument."
                 )
             )
 
-    for attr_name in _EXPR_WALK_ATTRS + (
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_env(item, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_env(child, pipeline_name, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
+        _walk_expr_for_env(child, pipeline_name, errors)
 
 
 def _check_quantifier_refs(pipeline):
@@ -1201,22 +1115,14 @@ def _check_quantifier_refs(pipeline):
     for stage in stages:
         cls = stage.__class__.__name__
         if cls == "FilterStage":
-            _walk_expr_for_quantifiers(
-                stage.condition, pipeline.name, "filter", has_window, errors
-            )
+            _walk_expr_for_quantifiers(stage.condition, pipeline.name, "filter", has_window, errors)
         elif cls == "HavingStage":
-            _walk_expr_for_quantifiers(
-                stage.condition, pipeline.name, "having", has_window, errors
-            )
+            _walk_expr_for_quantifiers(stage.condition, pipeline.name, "having", has_window, errors)
         elif cls == "MapStage":
             for binding in stage.bindings:
-                _walk_expr_for_quantifiers(
-                    binding.value, pipeline.name, "map", has_window, errors
-                )
+                _walk_expr_for_quantifiers(binding.value, pipeline.name, "map", has_window, errors)
             for mapping in stage.mappings:
-                _walk_expr_for_quantifiers(
-                    mapping.value, pipeline.name, "map", has_window, errors
-                )
+                _walk_expr_for_quantifiers(mapping.value, pipeline.name, "map", has_window, errors)
     return errors
 
 
@@ -1250,35 +1156,16 @@ def _walk_expr_for_quantifiers(node, pipeline_name, stage_kind, has_window, erro
                     )
                 )
 
-    for attr_name in _EXPR_WALK_ATTRS:
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_quantifiers(
-                        item, pipeline_name, stage_kind, has_window, errors
-                    )
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_quantifiers(
-                child, pipeline_name, stage_kind, has_window, errors
-            )
+    for child in _iter_expr_children(node):
+        _walk_expr_for_quantifiers(child, pipeline_name, stage_kind, has_window, errors)
 
 
 def _check_object_literal_fields(pipeline):
     errors = []
     if pipeline.initially:
-        _check_object_field_uniqueness(
-            pipeline.initially.body, pipeline.name, "@initially", errors
-        )
+        _check_object_field_uniqueness(pipeline.initially.body, pipeline.name, "@initially", errors)
     if pipeline.finally_:
-        _check_object_field_uniqueness(
-            pipeline.finally_.body, pipeline.name, "@finally", errors
-        )
+        _check_object_field_uniqueness(pipeline.finally_.body, pipeline.name, "@finally", errors)
     return errors
 
 
@@ -1311,9 +1198,7 @@ def _check_sink_batch(pipeline):
             )
         if batch.timeout is not None and _duration_to_seconds(batch.timeout) <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': sink batch timeout must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': sink batch timeout must be positive.")
             )
         if batch.size is None and batch.timeout is None:
             errors.append(
@@ -1356,8 +1241,7 @@ def _check_route_block(pipeline):
     if not route.arms:
         errors.append(
             SemanticError(
-                f"Pipeline '{pipeline.name}': route block must have at least "
-                f"one 'when' arm."
+                f"Pipeline '{pipeline.name}': route block must have at least one 'when' arm."
             )
         )
     has_default = route.default_sink or route.default_topic
@@ -1395,15 +1279,12 @@ def _check_rate(pipeline):
         if stage.limit <= 0:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': rate limit must be positive, "
-                    f"got {stage.limit}."
+                    f"Pipeline '{pipeline.name}': rate limit must be positive, got {stage.limit}."
                 )
             )
         if _duration_to_seconds(stage.period) <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': rate period must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': rate period must be positive.")
             )
     return errors
 
@@ -1424,8 +1305,7 @@ def _check_accumulate(pipeline):
             if acc.name in seen:
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': duplicate accumulate "
-                        f"name '{acc.name}'."
+                        f"Pipeline '{pipeline.name}': duplicate accumulate name '{acc.name}'."
                     )
                 )
             seen.add(acc.name)
@@ -1499,9 +1379,7 @@ def _check_distinct(pipeline):
             )
         if _duration_to_seconds(stage.ttl) <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': distinct ttl must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': distinct ttl must be positive.")
             )
     return errors
 
@@ -1520,9 +1398,7 @@ def _check_throttle(pipeline):
             )
         if _duration_to_seconds(stage.period) <= 0:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': throttle period must be positive."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': throttle period must be positive.")
             )
         if stage.overflow == "buffer" and stage.buffer_size and stage.buffer_size <= 0:
             errors.append(
@@ -1565,9 +1441,7 @@ def _check_pipeline_chaining(pipeline, model):
         )
     if src.pipe == pipeline.name:
         errors.append(
-            SemanticError(
-                f"Pipeline '{pipeline.name}': pipe source cannot reference itself."
-            )
+            SemanticError(f"Pipeline '{pipeline.name}': pipe source cannot reference itself.")
         )
     return errors
 
@@ -1608,9 +1482,7 @@ def _check_join(pipeline):
 
     if _duration_to_seconds(join.window) <= 0:
         errors.append(
-            SemanticError(
-                f"Pipeline '{pipeline.name}': join window duration must be positive."
-            )
+            SemanticError(f"Pipeline '{pipeline.name}': join window duration must be positive.")
         )
 
     return errors
@@ -1624,15 +1496,11 @@ def _check_on_error(pipeline):
     if oe.broker:
         if not oe.topic:
             errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline.name}': on_error sink topic must not be empty."
-                )
+                SemanticError(f"Pipeline '{pipeline.name}': on_error sink topic must not be empty.")
             )
     if not oe.broker and oe.topic:
         errors.append(
-            SemanticError(
-                f"Pipeline '{pipeline.name}': on_error has topic but no broker."
-            )
+            SemanticError(f"Pipeline '{pipeline.name}': on_error has topic but no broker.")
         )
     return errors
 
@@ -1651,9 +1519,7 @@ def _check_retry(pipeline):
         )
     if _duration_to_seconds(retry.base) <= 0:
         errors.append(
-            SemanticError(
-                f"Pipeline '{pipeline.name}': retry backoff duration must be positive."
-            )
+            SemanticError(f"Pipeline '{pipeline.name}': retry backoff duration must be positive.")
         )
     return errors
 
@@ -1671,8 +1537,7 @@ def _check_pipeline_let_bindings(pipeline, const_names=None):
         if lb.name in seen:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': duplicate pipeline "
-                    f"let-binding '{lb.name}'."
+                    f"Pipeline '{pipeline.name}': duplicate pipeline let-binding '{lb.name}'."
                 )
             )
         if const_names and lb.name in const_names:
@@ -1701,23 +1566,18 @@ def _check_func_defs(model):
         if func.name in seen:
             errors.append(
                 SemanticError(
-                    f"Duplicate function name '{func.name}'. "
-                    f"Function names must be unique."
+                    f"Duplicate function name '{func.name}'. Function names must be unique."
                 )
             )
         if func.name in _BUILTIN_FUNC_NAMES:
-            errors.append(
-                SemanticError(f"Function '{func.name}' shadows a built-in function.")
-            )
+            errors.append(SemanticError(f"Function '{func.name}' shadows a built-in function."))
         seen.add(func.name)
 
         param_seen = set()
         for param in func.params or []:
             if param in param_seen:
                 errors.append(
-                    SemanticError(
-                        f"Function '{func.name}': duplicate parameter '{param}'."
-                    )
+                    SemanticError(f"Function '{func.name}': duplicate parameter '{param}'.")
                 )
             param_seen.add(param)
     return errors
@@ -1739,34 +1599,12 @@ def _walk_expr_for_user_func_calls(node, pipeline_name, func_names, errors):
         if node.name not in func_names:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline_name}': call to undefined function "
-                    f"'{node.name}'."
+                    f"Pipeline '{pipeline_name}': call to undefined function '{node.name}'."
                 )
             )
 
-    for attr_name in _EXPR_WALK_ATTRS + (
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-        "subject",
-        "pattern",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_user_func_calls(
-                        item, pipeline_name, func_names, errors
-                    )
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_user_func_calls(child, pipeline_name, func_names, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS + _EXTRA_MATCH_ATTRS):
+        _walk_expr_for_user_func_calls(child, pipeline_name, func_names, errors)
 
 
 # ─── Match expression validation ────────────────────────────────────
@@ -1801,27 +1639,8 @@ def _walk_expr_for_match(node, pipeline_name, errors):
                 )
             )
 
-    for attr_name in _EXPR_WALK_ATTRS + (
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-        "subject",
-        "pattern",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_match(item, pipeline_name, errors)
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_match(child, pipeline_name, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS + _EXTRA_MATCH_ATTRS):
+        _walk_expr_for_match(child, pipeline_name, errors)
 
 
 # ─── Schema validation ──────────────────────────────────────────────
@@ -1833,9 +1652,7 @@ def _check_unique_schema_names(model):
     for s in model.schemas:
         if s.name in seen:
             errors.append(
-                SemanticError(
-                    f"Duplicate schema name '{s.name}'. Schema names must be unique."
-                )
+                SemanticError(f"Duplicate schema name '{s.name}'. Schema names must be unique.")
             )
         seen.add(s.name)
     return errors
@@ -1845,9 +1662,7 @@ def _check_schema_fields(model):
     errors = []
     for s in model.schemas:
         if not s.fields:
-            errors.append(
-                SemanticError(f"Schema '{s.name}' must have at least one field.")
-            )
+            errors.append(SemanticError(f"Schema '{s.name}' must have at least one field."))
         _check_schema_field_uniqueness(s.fields, s.name, [], errors)
     return errors
 
@@ -1858,15 +1673,11 @@ def _check_schema_field_uniqueness(fields, schema_name, path, errors):
         if f.name in seen:
             location = ".".join(path + [f.name]) if path else f.name
             errors.append(
-                SemanticError(
-                    f"Schema '{schema_name}': duplicate field name '{location}'."
-                )
+                SemanticError(f"Schema '{schema_name}': duplicate field name '{location}'.")
             )
         seen.add(f.name)
         if f.type.__class__.__name__ == "SchemaObjectType":
-            _check_schema_field_uniqueness(
-                f.type.fields, schema_name, path + [f.name], errors
-            )
+            _check_schema_field_uniqueness(f.type.fields, schema_name, path + [f.name], errors)
 
 
 def _resolve_schema_field(schema, field_segments):
@@ -1984,27 +1795,8 @@ def _walk_expr_for_schema(node, pipeline_name, schema, is_strict, errors):
                 )
         return
 
-    for attr_name in _EXPR_WALK_ATTRS + (
-        "stages",
-        "assignments",
-        "mappings",
-        "bindings",
-        "list",
-    ):
-        child = getattr(node, attr_name, None)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            for item in child:
-                if (
-                    hasattr(item, "__class__")
-                    and item.__class__.__module__ != "builtins"
-                ):
-                    _walk_expr_for_schema(
-                        item, pipeline_name, schema, is_strict, errors
-                    )
-        elif hasattr(child, "__class__") and child.__class__.__module__ != "builtins":
-            _walk_expr_for_schema(child, pipeline_name, schema, is_strict, errors)
+    for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
+        _walk_expr_for_schema(child, pipeline_name, schema, is_strict, errors)
 
 
 # ─── ML model validation ────────────────────────────────────────────
@@ -2016,9 +1808,7 @@ def _check_models(model):
     for m in model.models:
         if m.name in seen:
             errors.append(
-                SemanticError(
-                    f"Duplicate model name '{m.name}'. Model names must be unique."
-                )
+                SemanticError(f"Duplicate model name '{m.name}'. Model names must be unique.")
             )
         seen.add(m.name)
 
@@ -2026,9 +1816,7 @@ def _check_models(model):
             output_seen = set()
             for o in m.returns:
                 if o in output_seen:
-                    errors.append(
-                        SemanticError(f"Model '{m.name}': duplicate output name '{o}'.")
-                    )
+                    errors.append(SemanticError(f"Model '{m.name}': duplicate output name '{o}'."))
                 output_seen.add(o)
 
         if m.runtime != "custom":
@@ -2060,8 +1848,7 @@ def _check_predict_stages(pipeline, model):
         if stage.model is None:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': predict stage references "
-                    f"unknown model."
+                    f"Pipeline '{pipeline.name}': predict stage references unknown model."
                 )
             )
             continue
@@ -2158,8 +1945,7 @@ def _check_validate_stage(pipeline, model):
         if stage.schema is None:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': validate stage references "
-                    f"unknown schema."
+                    f"Pipeline '{pipeline.name}': validate stage references unknown schema."
                 )
             )
             continue
@@ -2193,8 +1979,7 @@ def _check_enrich_stage(pipeline, model):
         if not stage.bind:
             errors.append(
                 SemanticError(
-                    f"Pipeline '{pipeline.name}': enrich stage requires a "
-                    f"'bind' identifier."
+                    f"Pipeline '{pipeline.name}': enrich stage requires a 'bind' identifier."
                 )
             )
         if stage.enrich_err is not None:
@@ -2202,8 +1987,7 @@ def _check_enrich_stage(pipeline, model):
             if ee.broker is not None and not ee.topic:
                 errors.append(
                     SemanticError(
-                        f"Pipeline '{pipeline.name}': enrich on_error sink "
-                        f"topic must not be empty."
+                        f"Pipeline '{pipeline.name}': enrich on_error sink topic must not be empty."
                     )
                 )
     return errors
