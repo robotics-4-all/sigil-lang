@@ -221,6 +221,30 @@ def _explain_stage(stage, index):
     if cls == "PredictStage":
         return f"{prefix} [predict]: apply model '{stage.model.name}'"
 
+    if cls == "ValidateStage":
+        on_err = ""
+        if stage.validate_err is not None:
+            ve = stage.validate_err
+            if ve.broker is not None:
+                on_err = f" (on_error: sink to '{ve.topic}' via {ve.broker.name})"
+            elif ve.action:
+                on_err = f" (on_error: {ve.action})"
+        return f"{prefix} [validate]: validate messages against schema '{stage.schema.name}'{on_err}"
+
+    if cls == "EnrichStage":
+        method = stage.method if stage.method else "GET"
+        timeout_part = (
+            f", timeout: {_format_duration(stage.timeout)}" if stage.timeout else ""
+        )
+        return f"{prefix} [enrich]: HTTP {method} call bound as '{stage.bind}'{timeout_part}"
+
+    if cls == "DebugStage":
+        label = stage.label if stage.label else "debug"
+        if stage.fields:
+            field_strs = [".".join(f.segments) for f in stage.fields]
+            return f"{prefix} [debug]: checkpoint '{label}', log fields: {', '.join(field_strs)}"
+        return f"{prefix} [debug]: checkpoint '{label}', log full message"
+
     return f"{prefix} [{cls}]"
 
 

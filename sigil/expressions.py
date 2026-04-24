@@ -18,6 +18,35 @@ SCALAR_FUNC_MAP = {
     "floor": lambda args: f"math.floor({args[0]})",
     "ceil": lambda args: f"math.ceil({args[0]})",
     "fmt": lambda args: f"{args[0]}.format({', '.join(args[1:])})",
+    "trim": lambda args: f"str({args[0]}).strip()",
+    "contains": lambda args: f"({args[1]} in str({args[0]}))",
+    "starts_with": lambda args: f"str({args[0]}).startswith({args[1]})",
+    "ends_with": lambda args: f"str({args[0]}).endswith({args[1]})",
+    "split": lambda args: f"str({args[0]}).split({args[1]})",
+    "replace": lambda args: f"str({args[0]}).replace({args[1]}, {args[2]})",
+    "substring": lambda args: (
+        f"str({args[0]})[{args[1]}:{args[2]}]"
+        if len(args) == 3
+        else f"str({args[0]})[{args[1]}:]"
+    ),
+    "sqrt": lambda args: f"math.sqrt({args[0]})",
+    "pow": lambda args: f"math.pow({args[0]}, {args[1]})",
+    "log": lambda args: f"math.log({args[0]})",
+    "log10": lambda args: f"math.log10({args[0]})",
+    "exp": lambda args: f"math.exp({args[0]})",
+    "to_int": lambda args: f"int({args[0]})",
+    "to_float": lambda args: f"float({args[0]})",
+    "to_str": lambda args: f"str({args[0]})",
+    "to_bool": lambda args: f"bool({args[0]})",
+    "now": lambda args: "time.time()",
+    "timestamp_ms": lambda args: "int(time.time() * 1000)",
+    "date_format": lambda args: f"datetime.fromtimestamp({args[0]}).strftime({args[1]})",
+    "date_diff": lambda args: f"({args[0]} - {args[1]})",
+    "matches": lambda args: f"(bool(re.search({args[1]}, str({args[0]}))))",
+    "extract": lambda args: (
+        f"((lambda _m: _m.group({args[2]}) if _m else None)"
+        f"(re.search({args[1]}, str({args[0]}))))"
+    ),
 }
 
 
@@ -176,7 +205,13 @@ def compile_expr(
         return repr(node.val)
 
     if cls == "FieldRef":
-        return _compile_field_ref(node.segments, ctx, local_names, const_map)
+        return _compile_field_ref(
+            node.segments,
+            ctx,
+            local_names,
+            const_map,
+            node.subscript if node.subscript else None,
+        )
 
     raise ValueError(f"Unknown expression node: {cls}")
 
@@ -264,6 +299,7 @@ def _compile_field_ref(
     ctx: ExprContext,
     local_names: set[str] | None = None,
     const_map: dict[str, str] | None = None,
+    subscript=None,
 ) -> str:
     # Check if this is a const reference (bare ID matching a const name)
     if const_map and len(segments) == 1 and segments[0] in const_map:
@@ -271,33 +307,77 @@ def _compile_field_ref(
 
     if segments[0] == "other" and len(segments) > 1:
         keys = ", ".join(repr(s) for s in segments[1:])
-        return f"_get_nested(other, {keys})"
+        base = f"_get_nested(other, {keys})"
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx in (ExprContext.FILTER, ExprContext.AGGREGATE, ExprContext.QUANTIFIER):
         if local_names and len(segments) == 1 and segments[0] in local_names:
-            return segments[0]
+            base = segments[0]
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
-        return ".".join(segments)
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = ".".join(segments)
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx == ExprContext.HAVING:
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if len(segments) == 1:
-            return f"aggregated['{segments[0]}']"
-        return ".".join(segments)
+            base = f"aggregated['{segments[0]}']"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = ".".join(segments)
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx == ExprContext.MAP:
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if local_names and len(segments) == 1 and segments[0] in local_names:
-            return segments[0]
-        return f"aggregated['{'.'.join(segments)}']"
+            base = segments[0]
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = f"aggregated['{'.'.join(segments)}']"
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
-    return ".".join(segments)
+    base = ".".join(segments)
+    if subscript:
+        idx = -subscript.index if subscript.neg else subscript.index
+        return f"{base}[{idx}]"
+    return base
 
 
 def _compile_quantifier_expr(
@@ -313,7 +393,11 @@ def _compile_quantifier_expr(
 
     if node.collection:
         collection_code = _compile_field_ref(
-            node.collection.segments, ctx, local_names, const_map
+            node.collection.segments,
+            ctx,
+            local_names,
+            const_map,
+            node.collection.subscript if node.collection.subscript else None,
         )
         return f"{func_name}({predicate_code} for {var} in ({collection_code} or []))"
     else:

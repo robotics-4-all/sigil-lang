@@ -1321,3 +1321,40 @@ def test_mermaid_select_stage_label():
     mmd = visualize_mermaid(model)
     assert "select" in mmd
     assert "p_sel_stage0" in mmd
+
+
+# ── DebugStage ───────────────────────────────────────────────────────────────
+
+BASE_DBG_VIS = """broker b host: "h" port: 1883 end\n"""
+
+
+def test_visualize_dot_debug():
+    src = (
+        BASE_DBG_VIS
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "check"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    dot = visualize_dot(model)
+    assert "debug" in dot.lower() or "check" in dot.lower()
+
+
+def test_visualize_mermaid_debug():
+    src = (
+        BASE_DBG_VIS
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    mermaid = visualize_mermaid(model)
+    assert "debug" in mermaid.lower()

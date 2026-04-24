@@ -3935,3 +3935,362 @@ end
     stages = _stages(model.pipelines[0])
     assert stages[0].__class__.__name__ == "SelectStage"
     assert len(stages[0].fields) == 1
+
+
+# ── Array indexing ──────────────────────────────────────────────────────────
+
+BASE_SUB = """broker b host: "h" port: 1883 end\n"""
+
+
+def test_parse_field_subscript_positive():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.items[0] > 0
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+def test_parse_field_subscript_negative():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.readings[-1] > 0
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+def test_parse_field_subscript_nested():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.data.items[2] > 0
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+def test_parse_field_subscript_in_map():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> map { first = msg.items[0]; last = msg.items[-1] }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+# ── DebugStage ───────────────────────────────────────────────────────────────
+
+BASE_DBG = """broker b host: "h" port: 1883 end\n"""
+
+
+def test_parse_debug_bare():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "DebugStage"
+
+
+def test_parse_debug_with_label():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "checkpoint"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].label == "checkpoint"
+
+
+def test_parse_debug_with_fields():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "arrived", fields: [msg.id, msg.value]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert len(stages[0].fields) == 2
+
+
+def test_parse_multiple_debug_stages():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "pre"
+    |> filter msg.v > 0
+    |> debug label: "post"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    debug_stages = [s for s in stages if s.__class__.__name__ == "DebugStage"]
+    assert len(debug_stages) == 2
+
+
+# ── percentile / distinct_count ──────────────────────────────────────────────
+
+BASE_PCT = """broker b host: "h" port: 1883 end\n"""
+
+
+def test_parse_percentile_aggregation():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { p95 = percentile(msg.value, 95) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+def test_parse_distinct_count_aggregation():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { n = distinct_count(msg.device_id) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+def test_parse_percentile_and_regular_aggs():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate {
+        p95 = percentile(msg.value, 95)
+        p50 = percentile(msg.value, 50)
+        n = distinct_count(msg.device_id)
+        total = sum(msg.value)
+    }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    assert model is not None
+
+
+# ── ValidateStage ─────────────────────────────────────────────────────────────
+
+BASE_VAL = """
+broker b host: "h" port: 1883 end
+schema S strict id: str value: float active: bool? end
+"""
+
+
+def test_parse_validate_drop():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: drop
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "ValidateStage"
+    assert stages[0].schema.name == "S"
+
+
+def test_parse_validate_skip():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: skip
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "ValidateStage"
+
+
+def test_parse_validate_no_on_error():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "ValidateStage"
+
+
+def test_parse_validate_sink_to_broker():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: sink to b :: "dlq/errors"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "ValidateStage"
+
+
+# ── EnrichStage ──────────────────────────────────────────────────────────────
+
+BASE_ENR = """broker b host: "h" port: 1883 end\n"""
+
+
+def test_parse_enrich_minimal():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/data"
+        bind: info
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "EnrichStage"
+    assert stages[0].bind == "info"
+
+
+def test_parse_enrich_with_method_and_timeout():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/data"
+        method: GET
+        timeout: 2 s
+        bind: meta
+        on_error: skip
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "EnrichStage"
+
+
+def test_parse_enrich_on_error_default():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/data"
+        bind: meta
+        on_error: default { name: "unknown" }
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    assert stages[0].__class__.__name__ == "EnrichStage"
+
+
+def test_parse_multiple_enrich_stages():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/a"
+        bind: meta_a
+    end
+    |> enrich via http
+        url: "https://api.example.com/b"
+        bind: meta_b
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    stages = _stages(model.pipelines[0])
+    enrich_stages = [s for s in stages if s.__class__.__name__ == "EnrichStage"]
+    assert len(enrich_stages) == 2

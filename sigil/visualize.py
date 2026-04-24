@@ -365,6 +365,20 @@ def _dot_stage_label(stage, cls):
     if cls == "PredictStage":
         return f"predict\\n{stage.model.name}"
 
+    if cls == "ValidateStage":
+        return f"validate\\nschema: {stage.schema.name}"
+
+    if cls == "EnrichStage":
+        method = stage.method if stage.method else "GET"
+        return f"enrich\\n{method} → '{stage.bind}'"
+
+    if cls == "DebugStage":
+        label = stage.label if stage.label else "debug"
+        if stage.fields:
+            field_strs = ", ".join(".".join(f.segments) for f in stage.fields)
+            return f"debug\\n[{label}]\\n{field_strs}"
+        return f"debug\\n[{label}]"
+
     return cls
 
 
@@ -721,6 +735,20 @@ def _mermaid_stage_label(stage, cls):
 
     if cls == "PredictStage":
         return f"predict\n{stage.model.name}"
+
+    if cls == "ValidateStage":
+        return f"validate\nschema: {stage.schema.name}"
+
+    if cls == "EnrichStage":
+        method = stage.method if stage.method else "GET"
+        return f"enrich\n{method} → '{stage.bind}'"
+
+    if cls == "DebugStage":
+        label = stage.label if stage.label else "debug"
+        if stage.fields:
+            field_strs = ", ".join(".".join(f.segments) for f in stage.fields)
+            return f"debug\n[{label}]\n{field_strs}"
+        return f"debug\n[{label}]"
 
     return cls
 

@@ -10,8 +10,19 @@ class SemanticError:
         return f"[{self.severity.upper()}] {self.message}"
 
 
-FUNCS_REQUIRING_FIELD = {"avg", "sum", "min", "max", "stddev", "first", "last"}
+FUNCS_REQUIRING_FIELD = {
+    "avg",
+    "sum",
+    "min",
+    "max",
+    "stddev",
+    "first",
+    "last",
+    "percentile",
+    "distinct_count",
+}
 FUNCS_NO_FIELD = {"count"}
+FUNCS_REQUIRING_PARAM = {"percentile"}
 VALID_QOS = {0, 1, 2}
 VALID_FORMATS = {"json", "csv", "raw"}
 VALID_TRANSPORTS = {"mqtt", "redis", "amqp", "kafka"}
@@ -37,11 +48,35 @@ SCALAR_FUNC_ARGS = {
     "floor": (1, 1),
     "ceil": (1, 1),
     "fmt": (1, 99),
+    "trim": (1, 1),
+    "contains": (2, 2),
+    "starts_with": (2, 2),
+    "ends_with": (2, 2),
+    "split": (2, 2),
+    "replace": (3, 3),
+    "substring": (2, 3),
+    "sqrt": (1, 1),
+    "pow": (2, 2),
+    "log": (1, 1),
+    "log10": (1, 1),
+    "exp": (1, 1),
+    "to_int": (1, 1),
+    "to_float": (1, 1),
+    "to_str": (1, 1),
+    "to_bool": (1, 1),
+    "now": (0, 0),
+    "timestamp_ms": (0, 0),
+    "date_format": (2, 2),
+    "date_diff": (2, 2),
+    "matches": (2, 2),
+    "extract": (3, 3),
 }
 
 STAGE_ORDER = {
+    "DebugStage": -2,
     "DeduplicateStage": -1,
     "FilterStage": 0,
+    "ValidateStage": 0,
     "PredictStage": 0,
     "RateStage": 1,
     "FlattenStage": 2,
@@ -55,6 +90,7 @@ STAGE_ORDER = {
     "HavingStage": 10,
     "MapStage": 11,
     "SelectStage": 11,
+    "EnrichStage": 11,
 }
 
 ACCUM_FUNCS_REQUIRING_PARAM = {"ema"}
@@ -121,6 +157,10 @@ def validate(model) -> list[SemanticError]:
         errors.extend(_check_schema_references(pipeline, model))
         errors.extend(_check_predict_stages(pipeline, model))
         errors.extend(_check_select_stage(pipeline))
+        errors.extend(_check_debug_stage(pipeline))
+        errors.extend(_check_subscript_keys(pipeline))
+        errors.extend(_check_validate_stage(pipeline, model))
+        errors.extend(_check_enrich_stage(pipeline, model))
     return errors
 
 
@@ -233,9 +273,11 @@ def _check_sink_or_route(pipeline):
 
 def _check_stage_order(pipeline):
     errors = []
-    last_order = -1
+    last_order = -2
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
+        if cls == "DebugStage":
+            continue
         order = STAGE_ORDER.get(cls, -1)
         if order < last_order:
             errors.append(
@@ -286,7 +328,67 @@ def _check_aggregations(pipeline):
                         severity="warning",
                     )
                 )
+            if agg.func in FUNCS_REQUIRING_PARAM and agg.param is None:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': aggregation function "
+                        f"'{agg.func}' requires a quantile parameter (0-100). "
+                        f"Example: {agg.func}(msg.value, 95)"
+                    )
+                )
+            if agg.func == "percentile" and agg.param is not None:
+                quantile_val = _extract_literal_number(agg.param)
+                if quantile_val is not None and not (0 <= quantile_val <= 100):
+                    errors.append(
+                        SemanticError(
+                            f"Pipeline '{pipeline.name}': percentile quantile "
+                            f"must be between 0 and 100, got {quantile_val}.",
+                            severity="warning",
+                        )
+                    )
     return errors
+
+
+def _extract_literal_number(expr_node):
+    """Return the numeric value if expr_node is a simple integer or float literal, else None."""
+    cls = expr_node.__class__.__name__
+    if cls == "Expression":
+        if len(expr_node.operands) == 1:
+            return _extract_literal_number(expr_node.operands[0])
+        return None
+    if cls == "AndExpr":
+        if len(expr_node.operands) == 1:
+            return _extract_literal_number(expr_node.operands[0])
+        return None
+    if cls == "Comparison":
+        if (
+            expr_node.op is None
+            and expr_node.nullCheck is None
+            and expr_node.inCheck is None
+        ):
+            return _extract_literal_number(expr_node.left)
+        return None
+    if cls == "Addition":
+        if expr_node.op is None:
+            return _extract_literal_number(expr_node.left)
+        return None
+    if cls == "Multiplication":
+        if expr_node.op is None:
+            return _extract_literal_number(expr_node.left)
+        return None
+    if cls == "Coalesce":
+        if expr_node.right is None:
+            return _extract_literal_number(expr_node.left)
+        return None
+    if cls == "Unary":
+        if expr_node.op is None:
+            return _extract_literal_number(expr_node.atom)
+        return None
+    if cls == "IntLiteral":
+        return expr_node.val
+    if cls == "FloatLiteral":
+        return expr_node.val
+    return None
 
 
 def _check_map_references(pipeline, const_names=None):
@@ -359,8 +461,7 @@ def _check_duplicate_stages(pipeline):
     seen = set()
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
-        # WindowStage may appear multiple times (named multi-window)
-        if cls in seen and cls != "WindowStage":
+        if cls in seen and cls not in ("WindowStage", "DebugStage", "EnrichStage"):
             # Map class name to DSL keyword for readable error messages
             stage_keyword = {
                 "DeduplicateStage": "deduplicate",
@@ -1986,4 +2087,123 @@ def _check_select_stage(pipeline):
                 f"stages in the same pipeline."
             )
         )
+    return errors
+
+
+def _check_debug_stage(pipeline):
+    errors = []
+    for stage in _unwrap_stages(pipeline):
+        if stage.__class__.__name__ != "DebugStage":
+            continue
+        for field_ref in stage.fields:
+            if field_ref.subscript:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': debug field ref "
+                        f"'{'.'.join(field_ref.segments)}[...]' uses a subscript "
+                        f"which is not usable as a stable key.",
+                        severity="warning",
+                    )
+                )
+    return errors
+
+
+def _check_subscript_keys(pipeline):
+    errors = []
+    for stage in _unwrap_stages(pipeline):
+        cls = stage.__class__.__name__
+        if cls == "DeduplicateStage":
+            if stage.key.subscript:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': deduplicate key "
+                        f"'{'.'.join(stage.key.segments)}[...]' uses a subscript "
+                        f"which is not valid as a deduplication key.",
+                        severity="warning",
+                    )
+                )
+        elif cls == "DistinctStage":
+            if stage.field.subscript:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': distinct field "
+                        f"'{'.'.join(stage.field.segments)}[...]' uses a subscript "
+                        f"which is not valid as a distinct key.",
+                        severity="warning",
+                    )
+                )
+        elif cls == "GroupByStage":
+            for ref in stage.fields:
+                if ref.subscript:
+                    errors.append(
+                        SemanticError(
+                            f"Pipeline '{pipeline.name}': group_by field "
+                            f"'{'.'.join(ref.segments)}[...]' uses a subscript "
+                            f"which is not valid as a grouping key.",
+                            severity="warning",
+                        )
+                    )
+    return errors
+
+
+# ─── ValidateStage validation ────────────────────────────────────────
+
+
+def _check_validate_stage(pipeline, model):
+    errors = []
+    schema_names = {s.name for s in model.schemas}
+    for stage in _unwrap_stages(pipeline):
+        if stage.__class__.__name__ != "ValidateStage":
+            continue
+        if stage.schema is None:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': validate stage references "
+                    f"unknown schema."
+                )
+            )
+            continue
+        if stage.schema.name not in schema_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': validate references schema "
+                    f"'{stage.schema.name}' which is not defined."
+                )
+            )
+        if stage.validate_err is not None:
+            ve = stage.validate_err
+            if ve.broker is not None and not ve.topic:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': validate on_error sink "
+                        f"topic must not be empty."
+                    )
+                )
+    return errors
+
+
+# ─── EnrichStage validation ──────────────────────────────────────────
+
+
+def _check_enrich_stage(pipeline, model):
+    errors = []
+    for stage in _unwrap_stages(pipeline):
+        if stage.__class__.__name__ != "EnrichStage":
+            continue
+        if not stage.bind:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline.name}': enrich stage requires a "
+                    f"'bind' identifier."
+                )
+            )
+        if stage.enrich_err is not None:
+            ee = stage.enrich_err
+            if ee.broker is not None and not ee.topic:
+                errors.append(
+                    SemanticError(
+                        f"Pipeline '{pipeline.name}': enrich on_error sink "
+                        f"topic must not be empty."
+                    )
+                )
     return errors

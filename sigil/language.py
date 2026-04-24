@@ -54,7 +54,10 @@ def parse(source_path: str):
             "JoinStage.broker": _broker_scope,
             "RouteSink.broker": _broker_scope,
             "OnErrorClause.broker": _broker_scope,
+            "ValidateError.broker": _broker_scope,
+            "EnrichError.broker": _broker_scope,
             "Source.schema": _schema_scope,
+            "ValidateStage.schema": _schema_scope,
             "PredictStage.model": _model_scope,
         }
     )

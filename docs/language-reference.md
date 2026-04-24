@@ -487,6 +487,8 @@ If a type annotation is provided, the result of the aggregation function is coer
 - `stddev(field)`: Standard deviation.
 - `first(field)`: First value received in the window.
 - `last(field)`: Last value received in the window.
+- `percentile(field, q)`: Approximate q-th percentile (0–100) using a sorted list. Returns `None` if the window is empty. Example: `p95 = percentile(msg.value, 95)`.
+- `distinct_count(field)`: Exact count of distinct non-null values (Python `set` cardinality). Example: `n_devices = distinct_count(msg.device_id)`.
 
 Requires a `window` stage.
 
@@ -514,6 +516,39 @@ Transforms the output message structure.
 - **assignments**: Define the fields of the output message. Use `;` to separate multiple assignments.
 
 Bare identifiers resolve to aggregation names.
+
+### select
+Projects and optionally renames fields from the current message. Use `select` as a lightweight alternative to `map` when you only need to pick a subset of fields — no expressions, no let bindings.
+
+```sigil
+|> select [field1, alias: source_field, ...]
+```
+
+**Two forms:**
+- `name` — keep the field as-is (pass-through, same name in output):
+  ```sigil
+  |> select [device_id, ts, battery_mv]
+  ```
+- `alias: source` — rename `source` to `alias` in the output message:
+  ```sigil
+  |> select [id: device_id, temp: temperature_celsius, ts: ts]
+  ```
+
+Both forms can be mixed freely in a single `select` stage:
+```sigil
+|> select [
+    id: device_id,
+    ts,
+    temp: temperature_celsius,
+    battery_mv
+]
+```
+
+**Notes:**
+- `select` runs at the same phase as `map` (after aggregation). Only one of `select` or `map` should be used per pipeline.
+- Fields not listed in `select` are dropped from the output message.
+- Field values are taken directly from the incoming message — no expression evaluation.
+- When used after an `aggregate` stage, `select` picks from the aggregated result object, not from individual messages.
 
 ## Expressions
 

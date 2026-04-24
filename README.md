@@ -242,6 +242,15 @@ make clean              # Remove containers, images, caches
 - 28_ml_torch_quality: PyTorch quality scoring with windowed aggregation
 - 29_ml_tflite_edge: TFLite predictive maintenance on edge gateways
 - 30_ml_custom_runtime: Custom Python module for financial signal detection
+- 31_user_functions: User-defined functions inlined at call sites
+- 32_match_and_if: Match expressions and if-then-else in pipelines
+- 33_pipeline_let_bindings: Pipeline-level let bindings for shared values
+- 34_no_sink_hub: Hub pipeline without a sink (route-only output)
+- 35_imports: Multi-file imports and shared broker/constant definitions
+- 36_amqp_kafka_transports: AMQP and Kafka transport configurations
+- 37_left_join: Left join with optional enrichment from a second stream
+- 38_scalar_funcs_and_exists: Scalar functions and collection exists() predicate
+- 39_select_stage: Field projection and renaming with the select stage
 
 ## Documentation
 
