@@ -3863,3 +3863,337 @@ def test_select_stage_generated_code():
         assert '"value"' in code
         assert '"raw_value"' in code
         assert '"ts"' in code
+
+
+# ── Array indexing ──────────────────────────────────────────────────────────
+
+BASE_SUB = """broker b host: "localhost" port: 1883 end\n"""
+
+
+def test_codegen_subscript_positive_index():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.items[0] > 0
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_get_nested(msg, 'items')[0]" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_subscript_negative_index():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.readings[-1] > 10
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_get_nested(msg, 'readings')[-1]" in code
+
+
+def test_codegen_subscript_nested_path():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> map { v = msg.data.items[2] }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_get_nested(msg, 'data', 'items')[2]" in code
+
+
+# ── DebugStage ───────────────────────────────────────────────────────────────
+
+BASE_DBG = """broker b host: "localhost" port: 1883 end\n"""
+
+
+def test_codegen_debug_bare():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "logger.debug" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_debug_with_label_and_fields():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "check", fields: [msg.id, msg.value]
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "check" in code
+        assert "logger.debug" in code
+
+
+def test_codegen_multiple_debug_stages():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "first"
+    |> debug label: "second"
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert code.count("logger.debug") >= 2
+
+
+# ── percentile / distinct_count ──────────────────────────────────────────────
+
+BASE_PCT = """broker b host: "localhost" port: 1883 end\n"""
+
+
+def test_codegen_percentile_template():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { p95 = percentile(msg.value, 95) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "sorted(" in code
+        assert "p95" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_distinct_count_template():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { n_dev = distinct_count(msg.device_id) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "set(" in code
+        assert "n_dev" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_percentile_param_code():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { med = percentile(msg.v, 50) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "50" in code
+
+
+# ── ValidateStage ─────────────────────────────────────────────────────────────
+
+BASE_VAL = """
+broker b host: "localhost" port: 1883 end
+schema S strict id: str value: float active: bool? end
+"""
+
+
+def test_codegen_validate_generates_validate_msg():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: drop
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_validate_msg" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_validate_schema_fields_in_code():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: skip
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "'id'" in code or "id" in code
+        assert "'value'" in code or "value" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_validate_on_error_drop():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: drop
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "drop" in code or "return" in code
+        compile(code, "<string>", "exec")
+
+
+# ── EnrichStage ──────────────────────────────────────────────────────────────
+
+BASE_ENR = """broker b host: "localhost" port: 1883 end\n"""
+
+
+def test_codegen_enrich_generates_method():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/"
+        bind: meta
+        on_error: skip
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_do_enrich_meta" in code
+        assert "urllib.request" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_enrich_on_error_default():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/"
+        bind: info
+        on_error: default { name: "unknown", region: "eu" }
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_do_enrich_info" in code
+        assert "unknown" in code
+        compile(code, "<string>", "exec")
+
+
+def test_codegen_multiple_enrich_stages():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/a"
+        bind: first
+    end
+    |> enrich via http
+        url: "https://api.example.com/b"
+        bind: second
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    model = parse_string(src)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        assert "_do_enrich_first" in code
+        assert "_do_enrich_second" in code
+        compile(code, "<string>", "exec")

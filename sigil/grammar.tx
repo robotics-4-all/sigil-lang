@@ -21,6 +21,11 @@
  *   warn, error, accumulate, rate, per, on_excess, on_error, drop,
  *   ema, cumsum, delta,
  *   abs, round, len, lower, upper, floor, ceil, fmt,
+ *   trim, contains, starts_with, ends_with, split, replace, substring,
+ *   sqrt, pow, log, log10, exp,
+ *   to_int, to_float, to_str, to_bool,
+ *   now, timestamp_ms, date_format, date_diff,
+ *   matches, extract,
  *   from, to, end, pipe, source, sink, pipeline, broker,
  *   join, on, other, inner, left, type,
  *   schema, strict, lenient,
@@ -29,7 +34,10 @@
  *   int, float, str, bool,
  *   func, match,
  *   model, predict, runtime, features, returns,
- *   onnx, sklearn, torch, tflite, custom
+ *   onnx, sklearn, torch, tflite, custom,
+ *   debug, label, fields,
+ *   validate, enrich, via, http, bind, method, GET, POST, PUT,
+ *   percentile, distinct_count
  */
 
 Model:
@@ -198,9 +206,10 @@ BatchConfig:
 
 // ─── Pipeline stages (abstract) ────────────────────────────────────
 Stage:
-    DeduplicateStage | FilterStage | PredictStage | RateStage | FlattenStage
+    DeduplicateStage | FilterStage | ValidateStage | PredictStage | RateStage | FlattenStage
     | DistinctStage | ThrottleStage | SampleStage | GroupByStage | WindowStage
     | AggregateStage | AccumulateStage | HavingStage | MapStage | SelectStage
+    | EnrichStage | DebugStage
 ;
 
 DeduplicateStage:
@@ -237,7 +246,7 @@ AggregateStage:
 ;
 
 AggAssignment:
-    name=ID (':' type=TypeAnnotation)? '=' func=AggFunc '(' (field=FieldRef)? ')' ('over' window_ref=ID)?
+    name=ID (':' type=TypeAnnotation)? '=' func=AggFunc '(' (field=FieldRef)? (',' param=Expression)? ')' ('over' window_ref=ID)?
 ;
 
 TypeAnnotation:
@@ -247,6 +256,7 @@ TypeAnnotation:
 AggFunc:
     'avg' | 'sum' | 'min' | 'max' | 'count'
     | 'stddev' | 'first' | 'last'
+    | 'percentile' | 'distinct_count'
 ;
 
 AccumulateStage:
@@ -324,6 +334,48 @@ SelectField:
 
 PredictStage:
     'predict' model=[ModelDef]
+;
+
+DebugStage:
+    'debug' ('label' ':' label=STRING ','?)? ('fields' ':' '[' fields+=FieldRef[','] ']')?
+;
+
+ValidateStage:
+    'validate' 'schema' ':' schema=[SchemaDef]
+    ('on_error' ':' validate_err=ValidateError)?
+;
+
+ValidateError:
+    'sink' 'to' broker=[Broker] '::' topic=STRING
+  | action=ValidateErrorAction
+;
+
+ValidateErrorAction:
+    'skip' | 'drop'
+;
+
+EnrichStage:
+    'enrich' 'via' 'http'
+        'url' ':' url=Expression
+        ('method' ':' method=HttpMethod)?
+        ('timeout' ':' timeout=Duration)?
+        'bind' ':' bind=ID
+        ('on_error' ':' enrich_err=EnrichError)?
+    'end'
+;
+
+HttpMethod:
+    'GET' | 'POST' | 'PUT'
+;
+
+EnrichError:
+    'sink' 'to' broker=[Broker] '::' topic=STRING
+  | 'default' body=ObjectLiteral
+  | action=EnrichErrorAction
+;
+
+EnrichErrorAction:
+    'skip' | 'drop'
 ;
 
 // ─── ML model declarations ─────────────────────────────────────────
@@ -456,11 +508,16 @@ UserFuncCall:
 ;
 
 FuncCall:
-    name=ScalarFunc '(' args+=Expression[','] ')'
+    name=ScalarFunc '(' (args+=Expression[','])? ')'
 ;
 
 ScalarFunc:
     'abs' | 'round' | 'len' | 'lower' | 'upper' | 'floor' | 'ceil' | 'fmt'
+    | 'trim' | 'contains' | 'starts_with' | 'ends_with' | 'split' | 'replace' | 'substring'
+    | 'sqrt' | 'pow' | 'log' | 'log10' | 'exp'
+    | 'to_int' | 'to_float' | 'to_str' | 'to_bool'
+    | 'now' | 'timestamp_ms' | 'date_format' | 'date_diff'
+    | 'matches' | 'extract'
 ;
 
 BoolLiteral:
@@ -480,7 +537,11 @@ StringLiteral:
 ;
 
 FieldRef:
-    segments+=ID['.']
+    segments+=ID['.'] (subscript=FieldSubscript)?
+;
+
+FieldSubscript:
+    '[' neg?='-' index=INT ']'
 ;
 
 // ─── Schema declarations ───────────────────────────────────────────

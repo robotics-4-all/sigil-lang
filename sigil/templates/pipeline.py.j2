@@ -2,17 +2,22 @@
 import csv
 import io
 {% endif %}
+from datetime import datetime
 import json
 import math
 {% if p.has_env_ref %}
 import os
 {% endif %}
+import re
 import time
 import threading
 import logging
 import statistics
 import random
 from collections import defaultdict
+{% if p.has_enrich %}
+import urllib.request
+{% endif %}
 {% if p.has_predict %}
 import numpy as np
 {% for pred in p.predictions %}
@@ -67,6 +72,20 @@ from commlib.transports.{{ p.on_error_broker.transport }} import (
     Publisher as DlqPublisher,
 )
 {% endif %}
+{% if p.has_validate and p.validate_stage and p.validate_stage.on_error == "sink" %}
+from commlib.transports.{{ p.validate_stage.on_error_broker.transport }} import (
+    ConnectionParameters as ValidateDlqConnParams,
+    Publisher as ValidateDlqPublisher,
+)
+{% endif %}
+{% for enrich in p.enrich_stages %}
+{% if enrich.on_error == "sink" %}
+from commlib.transports.{{ enrich.on_error_broker.transport }} import (
+    ConnectionParameters as EnrichDlq{{ loop.index }}ConnParams,
+    Publisher as EnrichDlq{{ loop.index }}Publisher,
+)
+{% endif %}
+{% endfor %}
 
 logger = logging.getLogger("sigil.pipeline.{{ p.name }}")
 
@@ -274,6 +293,42 @@ class {{ p.class_name }}Pipeline:
             conn_params=dlq_conn,
         )
 {% endif %}
+{% if p.has_validate and p.validate_stage and p.validate_stage.on_error == "sink" %}
+        _validate_dlq_conn = ValidateDlqConnParams(
+            host="{{ p.validate_stage.on_error_broker.host }}",
+            port={{ p.validate_stage.on_error_broker.port }},
+{% if p.validate_stage.on_error_broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if p.validate_stage.on_error_broker.username %}
+            username="{{ p.validate_stage.on_error_broker.username }}",
+            password="{{ p.validate_stage.on_error_broker.password }}",
+{% endif %}
+        )
+        self._validate_dlq_publisher = ValidateDlqPublisher(
+            topic="{{ p.validate_stage.on_error_topic }}",
+            conn_params=_validate_dlq_conn,
+        )
+{% endif %}
+{% for enrich in p.enrich_stages %}
+{% if enrich.on_error == "sink" %}
+        _enrich_dlq_conn_{{ loop.index }} = EnrichDlq{{ loop.index }}ConnParams(
+            host="{{ enrich.on_error_broker.host }}",
+            port={{ enrich.on_error_broker.port }},
+{% if enrich.on_error_broker.ssl %}
+            ssl=True,
+{% endif %}
+{% if enrich.on_error_broker.username %}
+            username="{{ enrich.on_error_broker.username }}",
+            password="{{ enrich.on_error_broker.password }}",
+{% endif %}
+        )
+        self._enrich_dlq_publisher_{{ loop.index }} = EnrichDlq{{ loop.index }}Publisher(
+            topic="{{ enrich.on_error_topic }}",
+            conn_params=_enrich_dlq_conn_{{ loop.index }},
+        )
+{% endif %}
+{% endfor %}
 {% if p.has_predict %}
 {% for pred in p.predictions %}
 {% if pred.model.runtime == "onnx" %}
@@ -329,6 +384,14 @@ class {{ p.class_name }}Pipeline:
 {% if p.has_on_error and not p.on_error_drop %}
         self._dlq_publisher.run()
 {% endif %}
+{% if p.has_validate and p.validate_stage and p.validate_stage.on_error == "sink" %}
+        self._validate_dlq_publisher.run()
+{% endif %}
+{% for enrich in p.enrich_stages %}
+{% if enrich.on_error == "sink" %}
+        self._enrich_dlq_publisher_{{ loop.index }}.run()
+{% endif %}
+{% endfor %}
         time.sleep(0.3)
 {% if p.has_window and not p.has_multi_window %}
         self._schedule_window_flush()
@@ -407,6 +470,14 @@ class {{ p.class_name }}Pipeline:
 {% if p.has_on_error and not p.on_error_drop %}
         _endpoints.append(self._dlq_publisher)
 {% endif %}
+{% if p.has_validate and p.validate_stage and p.validate_stage.on_error == "sink" %}
+        _endpoints.append(self._validate_dlq_publisher)
+{% endif %}
+{% for enrich in p.enrich_stages %}
+{% if enrich.on_error == "sink" %}
+        _endpoints.append(self._enrich_dlq_publisher_{{ loop.index }})
+{% endif %}
+{% endfor %}
         for ep in _endpoints:
             t = threading.Thread(target=ep.stop, daemon=True)
             t.start()
@@ -443,6 +514,16 @@ class {{ p.class_name }}Pipeline:
             if not isinstance(msg, dict):
                 logger.warning("Invalid message type: %s", type(msg).__name__)
                 return
+{% if p.has_debug %}
+{% for dbg in p.debug_stages %}
+        _dbg_fields_{{ loop.index }} = {
+{% for fc in dbg.field_codes %}
+            "{{ fc }}": {{ fc }},
+{% endfor %}
+        }
+        logger.debug("[{{ dbg.label }}] msg=%s fields=%s", msg, _dbg_fields_{{ loop.index }})
+{% endfor %}
+{% endif %}
 {% if p.has_pipeline_lets %}
 {% for plb in p.pipeline_lets %}
         {{ plb.name }} = {{ plb.value_code }}
@@ -565,6 +646,11 @@ class {{ p.class_name }}Pipeline:
 {% if p.has_old_ref %}
             self._prev_msg = dict(msg) if isinstance(msg, dict) else {}
 {% endif %}
+            return
+{% endif %}
+
+{% if p.has_validate and p.validate_stage %}
+        if not self._validate_msg(msg):
             return
 {% endif %}
 
@@ -779,6 +865,21 @@ class {{ p.class_name }}Pipeline:
             aggregated["{{ agg.name }}"] = _get_nested(
                 messages[-1], {{ agg.field_keys_str }}
             )
+{% elif agg.func == "percentile" %}
+            _vals_{{ agg.name }} = sorted(
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            )
+            _n_{{ agg.name }} = len(_vals_{{ agg.name }})
+            aggregated["{{ agg.name }}"] = (
+                _vals_{{ agg.name }}[int(({{ agg.param_code }} / 100.0) * (_n_{{ agg.name }} - 1))]
+                if _n_{{ agg.name }} > 0 else None
+            )
+{% elif agg.func == "distinct_count" %}
+            aggregated["{{ agg.name }}"] = len(set(
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None
+            ))
 {% endif %}
 {% if agg.type_annotation %}
             aggregated["{{ agg.name }}"] = {{ agg.type_annotation }}(aggregated["{{ agg.name }}"])
@@ -935,6 +1036,21 @@ class {{ p.class_name }}Pipeline:
             aggregated["{{ agg.name }}"] = _get_nested(
                 messages[-1], {{ agg.field_keys_str }}
             )
+{% elif agg.func == "percentile" %}
+            _vals_{{ agg.name }} = sorted(
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None and isinstance(v, (int, float))
+            )
+            _n_{{ agg.name }} = len(_vals_{{ agg.name }})
+            aggregated["{{ agg.name }}"] = (
+                _vals_{{ agg.name }}[int(({{ agg.param_code }} / 100.0) * (_n_{{ agg.name }} - 1))]
+                if _n_{{ agg.name }} > 0 else None
+            )
+{% elif agg.func == "distinct_count" %}
+            aggregated["{{ agg.name }}"] = len(set(
+                v for v in (_get_nested(m, {{ agg.field_keys_str }}) for m in messages)
+                if v is not None
+            ))
 {% endif %}
 {% if agg.type_annotation %}
             aggregated["{{ agg.name }}"] = {{ agg.type_annotation }}(aggregated["{{ agg.name }}"])
@@ -999,9 +1115,146 @@ class {{ p.class_name }}Pipeline:
                 self._on_message(_pmsg)
 {% endif %}
 
+{% if p.has_validate and p.validate_stage %}
+    def _validate_msg(self, msg):
+        _schema_fields = [{% for fname, ftype, foptional in p.validate_stage.schema_fields %}["{{ fname }}", "{{ ftype }}", {{ foptional }}]{% if not loop.last %}, {% endif %}{% endfor %}]
+        for _fname, _ftype, _foptional in _schema_fields:
+            _fval = msg.get(_fname)
+            if _fval is None:
+                if not _foptional:
+                    logger.debug(
+                        "Validate '%s': missing required field '%s'",
+                        "{{ p.validate_stage.schema_name }}", _fname,
+                    )
+{% if p.validate_stage.on_error == "drop" %}
+                    return False
+{% elif p.validate_stage.on_error == "sink" %}
+                    self._validate_dlq_publisher.publish({
+                        "_error": f"missing required field '{_fname}'",
+                        "_schema": "{{ p.validate_stage.schema_name }}",
+                        "_pipeline": self.name,
+                        "_original": msg,
+                    })
+                    return False
+{% else %}
+                    pass
+{% endif %}
+                continue
+            if _ftype == "int" and not isinstance(_fval, int):
+                logger.debug(
+                    "Validate '%s': field '%s' expected int, got %s",
+                    "{{ p.validate_stage.schema_name }}", _fname, type(_fval).__name__,
+                )
+{% if p.validate_stage.on_error == "drop" %}
+                return False
+{% elif p.validate_stage.on_error == "sink" %}
+                self._validate_dlq_publisher.publish({
+                    "_error": f"field '{_fname}' expected int",
+                    "_schema": "{{ p.validate_stage.schema_name }}",
+                    "_pipeline": self.name,
+                    "_original": msg,
+                })
+                return False
+{% endif %}
+            elif _ftype == "float" and not isinstance(_fval, (int, float)):
+                logger.debug(
+                    "Validate '%s': field '%s' expected float, got %s",
+                    "{{ p.validate_stage.schema_name }}", _fname, type(_fval).__name__,
+                )
+{% if p.validate_stage.on_error == "drop" %}
+                return False
+{% elif p.validate_stage.on_error == "sink" %}
+                self._validate_dlq_publisher.publish({
+                    "_error": f"field '{_fname}' expected float",
+                    "_schema": "{{ p.validate_stage.schema_name }}",
+                    "_pipeline": self.name,
+                    "_original": msg,
+                })
+                return False
+{% endif %}
+            elif _ftype == "str" and not isinstance(_fval, str):
+                logger.debug(
+                    "Validate '%s': field '%s' expected str, got %s",
+                    "{{ p.validate_stage.schema_name }}", _fname, type(_fval).__name__,
+                )
+{% if p.validate_stage.on_error == "drop" %}
+                return False
+{% elif p.validate_stage.on_error == "sink" %}
+                self._validate_dlq_publisher.publish({
+                    "_error": f"field '{_fname}' expected str",
+                    "_schema": "{{ p.validate_stage.schema_name }}",
+                    "_pipeline": self.name,
+                    "_original": msg,
+                })
+                return False
+{% endif %}
+            elif _ftype == "bool" and not isinstance(_fval, bool):
+                logger.debug(
+                    "Validate '%s': field '%s' expected bool, got %s",
+                    "{{ p.validate_stage.schema_name }}", _fname, type(_fval).__name__,
+                )
+{% if p.validate_stage.on_error == "drop" %}
+                return False
+{% elif p.validate_stage.on_error == "sink" %}
+                self._validate_dlq_publisher.publish({
+                    "_error": f"field '{_fname}' expected bool",
+                    "_schema": "{{ p.validate_stage.schema_name }}",
+                    "_pipeline": self.name,
+                    "_original": msg,
+                })
+                return False
+{% endif %}
+        return True
+{% endif %}
+
+{% if p.has_enrich %}
+{% for enrich in p.enrich_stages %}
+    def _do_enrich_{{ enrich.bind }}(self, msg):
+        _url = {{ enrich.url_code }}
+        try:
+            _req = urllib.request.Request(
+                _url,
+                method="{{ enrich.method }}",
+            )
+            with urllib.request.urlopen(_req, timeout={{ enrich.timeout_ms }} / 1000.0) as _resp:
+                _body = _resp.read()
+                return json.loads(_body)
+        except Exception as _enrich_exc:
+            logger.warning(
+                "Enrich '{{ enrich.bind }}' failed for url '%s': %s", _url, _enrich_exc,
+            )
+{% if enrich.on_error == "drop" %}
+            return None
+{% elif enrich.on_error == "sink" %}
+            self._enrich_dlq_publisher_{{ loop.index }}.publish({
+                "_error": str(_enrich_exc),
+                "_pipeline": self.name,
+                "_original": msg,
+            })
+            return None
+{% elif enrich.on_error == "default" %}
+            return {
+{% for f in enrich.on_error_default_fields %}
+                "{{ f.name }}": {{ f.value_code }},
+{% endfor %}
+            }
+{% else %}
+            return {}
+{% endif %}
+{% endfor %}
+{% endif %}
+
 {% if not p.has_window %}
     def _process_immediate(self, msg{% if p.has_join %}, other=None{% endif %}):
         try:
+{% if p.has_enrich %}
+{% for enrich in p.enrich_stages %}
+            _enrich_result_{{ enrich.bind }} = self._do_enrich_{{ enrich.bind }}(msg)
+            if _enrich_result_{{ enrich.bind }} is None:
+                return
+            msg["{{ enrich.bind }}"] = _enrich_result_{{ enrich.bind }}
+{% endfor %}
+{% endif %}
 {% if p.has_map %}
             aggregated = {}
 {% for lb in p.let_bindings %}

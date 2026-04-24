@@ -1,0 +1,100 @@
+/*
+ * Example 39 — Select Stage (Field Projection)
+ * =============================================
+ * Demonstrates the `select` stage for projecting and renaming message fields.
+ *
+ * SELECT STAGE:
+ *   |> select [field1, alias: source_field, ...]
+ *
+ *   Two forms:
+ *     - `name`          — keep field as-is (pass-through)
+ *     - `alias: source` — rename source_field to alias in the output
+ *
+ *   The select stage runs at the same phase as `map` (after aggregation).
+ *   Use it as a lightweight alternative to `map` when you only need to
+ *   project or rename fields — no expressions, no let bindings.
+ *
+ * SCENARIO:
+ *   An IoT data normalisation pipeline that receives wide telemetry messages
+ *   from edge devices. Each message contains many raw fields, but downstream
+ *   consumers only need a clean, minimal subset with standardised names.
+ *
+ *   Raw message (wide):
+ *     {
+ *       "device_id": "edge-042",
+ *       "ts": 1714000000000,
+ *       "temperature_celsius": 23.7,
+ *       "humidity_pct": 61.2,
+ *       "battery_mv": 3720,
+ *       "rssi_dbm": -67,
+ *       "fw_version": "2.4.1",
+ *       "uptime_s": 98432,
+ *       "error_flags": 0
+ *     }
+ *
+ *   Projected output (clean):
+ *     {
+ *       "device_id": "edge-042",
+ *       "ts": 1714000000000,
+ *       "temp": 23.7,
+ *       "humidity": 61.2,
+ *       "battery_mv": 3720
+ *     }
+ *
+ *   A second pipeline demonstrates the pass-through (no-rename) form,
+ *   forwarding only the fields needed for a battery-health dashboard.
+ */
+
+broker edge
+    transport: mqtt
+    host: "edge-broker.example.com"
+    port: 1883
+end
+
+broker cloud
+    transport: mqtt
+    host: "cloud.example.com"
+    port: 1883
+end
+
+// ── Pipeline 1: normalise telemetry for downstream consumers ──────────────────
+//
+// Receives wide raw telemetry, drops messages with missing critical fields,
+// then uses `select` with renaming to produce a clean minimal payload.
+//
+pipeline telemetry_normalise
+    source from edge :: "devices/+/telemetry"
+
+    // Drop messages missing required fields
+    |> filter msg.device_id is not null
+              and msg.ts is not null
+              and msg.temperature_celsius is not null
+
+    // Project and rename: alias: source_field form
+    |> select [
+        id: device_id,
+        ts: ts,
+        temp: temperature_celsius,
+        humidity: humidity_pct,
+        battery_mv: battery_mv
+    ]
+
+    |> sink to cloud :: "telemetry/normalised"
+end
+
+// ── Pipeline 2: battery health — pass-through (no rename) form ───────────────
+//
+// Forwards only the fields relevant to battery monitoring, keeping their
+// original names. Uses the bare `name` form of select.
+//
+pipeline battery_health
+    source from edge :: "devices/+/telemetry"
+
+    // Only forward messages where battery is below 3600 mV (low battery)
+    |> filter msg.battery_mv is not null and msg.battery_mv < 3600
+
+    // Keep fields as-is — no renaming
+    |> select [device_id, ts, battery_mv, rssi_dbm]
+
+    |> sink to cloud :: "alerts/battery_low"
+end

@@ -3299,3 +3299,237 @@ def test_select_duplicate_stage():
     """
     errs = _errors(src)
     assert any("select" in str(e).lower() for e in errs)
+
+
+# ── Array indexing ──────────────────────────────────────────────────────────
+
+BASE_SUB = 'broker b host: "h" port: 1883 end\n'
+
+
+def test_subscript_no_error_in_filter():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> filter msg.items[0] > 0
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+def test_subscript_warning_in_group_by():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> group_by msg.items[0]
+    |> aggregate { n = count() }
+    |> sink to b :: "out"
+end
+"""
+    )
+    warnings = [e for e in _errors(src) if e.severity == "warning"]
+    assert any(
+        "subscript" in e.message.lower() or "index" in e.message.lower()
+        for e in warnings
+    )
+
+
+def test_subscript_warning_in_dedup():
+    src = (
+        BASE_SUB
+        + """
+pipeline p
+    source from b :: "in"
+    |> deduplicate msg.items[0] within 60 s
+    |> sink to b :: "out"
+end
+"""
+    )
+    warnings = [e for e in _errors(src) if e.severity == "warning"]
+    assert any(
+        "subscript" in e.message.lower() or "index" in e.message.lower()
+        for e in warnings
+    )
+
+
+# ── DebugStage ───────────────────────────────────────────────────────────────
+
+BASE_DBG = 'broker b host: "h" port: 1883 end\n'
+
+
+def test_debug_no_errors():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug label: "test"
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+def test_multiple_debug_no_duplicate_error():
+    src = (
+        BASE_DBG
+        + """
+pipeline p
+    source from b :: "in"
+    |> debug
+    |> filter msg.v > 0
+    |> debug
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+# ── percentile / distinct_count ──────────────────────────────────────────────
+
+BASE_PCT = 'broker b host: "h" port: 1883 end\n'
+
+
+def test_percentile_no_errors():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { p95 = percentile(msg.value, 95) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+def test_percentile_missing_param_error():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { p95 = percentile(msg.value) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert any(
+        "percentile" in e.message.lower() or "param" in e.message.lower()
+        for e in errors
+    )
+
+
+def test_distinct_count_no_errors():
+    src = (
+        BASE_PCT
+        + """
+pipeline p
+    source from b :: "in"
+    |> window tumbling(1 m)
+    |> aggregate { n = distinct_count(msg.device_id) }
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+# ── ValidateStage ─────────────────────────────────────────────────────────────
+
+BASE_VAL = """
+broker b host: "h" port: 1883 end
+schema S strict id: str value: float active: bool? end
+"""
+
+
+def test_validate_no_errors():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S on_error: drop
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+def test_validate_no_on_error_ok():
+    src = (
+        BASE_VAL
+        + """
+pipeline p
+    source from b :: "in"
+    |> validate schema: S
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+# ── EnrichStage ──────────────────────────────────────────────────────────────
+
+BASE_ENR = 'broker b host: "h" port: 1883 end\n'
+
+
+def test_enrich_no_errors():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/"
+        bind: meta
+        on_error: skip
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
+
+
+def test_multiple_enrich_no_duplicate_error():
+    src = (
+        BASE_ENR
+        + """
+pipeline p
+    source from b :: "in"
+    |> enrich via http
+        url: "https://api.example.com/a"
+        bind: a_data
+    end
+    |> enrich via http
+        url: "https://api.example.com/b"
+        bind: b_data
+    end
+    |> sink to b :: "out"
+end
+"""
+    )
+    errors = [e for e in _errors(src) if e.severity == "error"]
+    assert errors == []
