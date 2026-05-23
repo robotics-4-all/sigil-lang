@@ -25,9 +25,7 @@ SCALAR_FUNC_MAP = {
     "split": lambda args: f"str({args[0]}).split({args[1]})",
     "replace": lambda args: f"str({args[0]}).replace({args[1]}, {args[2]})",
     "substring": lambda args: (
-        f"str({args[0]})[{args[1]}:{args[2]}]"
-        if len(args) == 3
-        else f"str({args[0]})[{args[1]}:]"
+        f"str({args[0]})[{args[1]}:{args[2]}]" if len(args) == 3 else f"str({args[0]})[{args[1]}:]"
     ),
     "sqrt": lambda args: f"math.sqrt({args[0]})",
     "pow": lambda args: f"math.pow({args[0]}, {args[1]})",
@@ -44,8 +42,7 @@ SCALAR_FUNC_MAP = {
     "date_diff": lambda args: f"({args[0]} - {args[1]})",
     "matches": lambda args: f"(bool(re.search({args[1]}, str({args[0]}))))",
     "extract": lambda args: (
-        f"((lambda _m: _m.group({args[2]}) if _m else None)"
-        f"(re.search({args[1]}, str({args[0]}))))"
+        f"((lambda _m: _m.group({args[2]}) if _m else None)(re.search({args[1]}, str({args[0]}))))"
     ),
 }
 
@@ -107,14 +104,14 @@ def compile_expr(
     if cls == "Addition":
         operands, ops = _flatten_binary(node, "Addition")
         result = _r(operands[0])
-        for op, operand in zip(ops, operands[1:]):
+        for op, operand in zip(ops, operands[1:], strict=False):
             result = f"{result} {op} {_r(operand)}"
         return result
 
     if cls == "Multiplication":
         operands, ops = _flatten_binary(node, "Multiplication")
         result = _r(operands[0])
-        for op, operand in zip(ops, operands[1:]):
+        for op, operand in zip(ops, operands[1:], strict=False):
             result = f"{result} {op} {_r(operand)}"
         return result
 
@@ -176,14 +173,10 @@ def compile_expr(
         return f"({cur} != {prev})"
 
     if cls == "ForallExpr":
-        return _compile_quantifier_expr(
-            node, "all", ctx, local_names, const_map, func_defs
-        )
+        return _compile_quantifier_expr(node, "all", ctx, local_names, const_map, func_defs)
 
     if cls == "ExistsExpr":
-        return _compile_quantifier_expr(
-            node, "any", ctx, local_names, const_map, func_defs
-        )
+        return _compile_quantifier_expr(node, "any", ctx, local_names, const_map, func_defs)
 
     if cls == "FuncCall":
         args = [_r(a) for a in node.args]
@@ -228,10 +221,7 @@ def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
         raise ValueError("CaseExpr must have at least one 'when' arm")
 
     # Build from inside out (last arm first)
-    if node.elseExpr:
-        result = _r(node.elseExpr)
-    else:
-        result = "None"
+    result = _r(node.elseExpr) if node.elseExpr else "None"
 
     for arm in reversed(node.arms):
         cond = _r(arm.condition)
@@ -254,10 +244,7 @@ def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
 
     subject = _r(node.subject)
 
-    if node.elseExpr:
-        result = _r(node.elseExpr)
-    else:
-        result = "None"
+    result = _r(node.elseExpr) if node.elseExpr else "None"
 
     for arm in reversed(node.arms):
         pattern = _r(arm.pattern)
@@ -282,16 +269,14 @@ def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None):
         )
 
     param_map = {}
-    for param, arg in zip(params, args):
+    for param, arg in zip(params, args, strict=False):
         param_map[param] = compile_expr(arg, ctx, local_names, const_map, func_defs)
 
     merged_const = dict(const_map) if const_map else {}
     merged_const.update(param_map)
 
     inner_locals = set(local_names) if local_names else set()
-    return (
-        f"({compile_expr(func_def.body, ctx, inner_locals, merged_const, func_defs)})"
-    )
+    return f"({compile_expr(func_def.body, ctx, inner_locals, merged_const, func_defs)})"
 
 
 def _compile_field_ref(
@@ -380,9 +365,7 @@ def _compile_field_ref(
     return base
 
 
-def _compile_quantifier_expr(
-    node, func_name, ctx, local_names, const_map, func_defs=None
-):
+def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map, func_defs=None):
     var = node.var
     inner_locals = set(local_names) if local_names else set()
     inner_locals.add(var)
