@@ -72,7 +72,7 @@ FUNCS_NO_FIELD = {"count"}
 FUNCS_REQUIRING_PARAM = {"percentile"}
 VALID_QOS = {0, 1, 2}
 VALID_FORMATS = {"json", "csv", "raw"}
-VALID_TRANSPORTS = {"mqtt", "redis", "amqp", "kafka"}
+VALID_TRANSPORTS = {"MQTT", "REDIS", "AMQP", "KAFKA"}
 
 
 def _unwrap_stages(pipeline):
@@ -452,15 +452,14 @@ def _check_map_expr_refs(node, agg_names, pipeline_name, errors):
     cls = node.__class__.__name__
     if cls == "FieldRef":
         segments = node.segments
-        if segments[0] != "msg" and len(segments) == 1:
-            if segments[0] not in agg_names:
-                errors.append(
-                    SemanticError(
-                        f"Pipeline '{pipeline_name}': map references "
-                        f"undefined aggregation '{segments[0]}'. "
-                        f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
-                    )
+        if segments[0] != "msg" and len(segments) == 1 and segments[0] not in agg_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': map references "
+                    f"undefined aggregation '{segments[0]}'. "
+                    f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
                 )
+            )
         return
 
     if cls in ("ForallExpr", "ExistsExpr"):
@@ -483,20 +482,20 @@ def _check_duplicate_stages(pipeline):
         if cls in seen and cls not in ("WindowStage", "DebugStage", "EnrichStage"):
             # Map class name to DSL keyword for readable error messages
             stage_keyword = {
-                "DeduplicateStage": "deduplicate",
-                "FilterStage": "filter",
-                "RateStage": "rate",
-                "FlattenStage": "flatten",
-                "DistinctStage": "distinct",
-                "ThrottleStage": "throttle",
-                "SampleStage": "sample",
-                "GroupByStage": "group_by",
-                "AggregateStage": "aggregate",
-                "AccumulateStage": "accumulate",
-                "HavingStage": "having",
-                "MapStage": "map",
-                "SelectStage": "select",
-                "PredictStage": "predict",
+                "DeduplicateStage": "DEDUPLICATE",
+                "FilterStage": "FILTER",
+                "RateStage": "RATE",
+                "FlattenStage": "FLATTEN",
+                "DistinctStage": "DISTINCT",
+                "ThrottleStage": "THROTTLE",
+                "SampleStage": "SAMPLE",
+                "GroupByStage": "GROUP_BY",
+                "AggregateStage": "AGGREGATE",
+                "AccumulateStage": "ACCUMULATE",
+                "HavingStage": "HAVING",
+                "MapStage": "MAP",
+                "SelectStage": "SELECT",
+                "PredictStage": "PREDICT",
             }.get(cls, cls)
             errors.append(
                 SemanticError(
@@ -757,10 +756,7 @@ def _walk_expr_for_funcs(node, pipeline_name, errors):
         if bounds:
             lo, hi = bounds
             if nargs < lo or nargs > hi:
-                if lo == hi:
-                    expect = f"exactly {lo}"
-                else:
-                    expect = f"{lo}-{hi}"
+                expect = f"exactly {lo}" if lo == hi else f"{lo}-{hi}"
                 errors.append(
                     SemanticError(
                         f"Pipeline '{pipeline_name}': function '{node.name}' "
@@ -928,15 +924,14 @@ def _check_having_expr_refs(node, agg_names, pipeline_name, errors):
     cls = node.__class__.__name__
     if cls == "FieldRef":
         segments = node.segments
-        if segments[0] != "msg" and len(segments) == 1:
-            if segments[0] not in agg_names:
-                errors.append(
-                    SemanticError(
-                        f"Pipeline '{pipeline_name}': having references "
-                        f"undefined aggregation '{segments[0]}'. "
-                        f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
-                    )
+        if segments[0] != "msg" and len(segments) == 1 and segments[0] not in agg_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': having references "
+                    f"undefined aggregation '{segments[0]}'. "
+                    f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
                 )
+            )
         return
 
     if cls in ("ForallExpr", "ExistsExpr"):
@@ -1064,22 +1059,22 @@ def _check_temporal_field_validity(pipeline):
 
 def _walk_expr_for_temporal_fields(node, pipeline_name, errors):
     cls = node.__class__.__name__
-    if cls == "OldRef":
-        if node.field.segments[0] != "msg" or len(node.field.segments) < 2:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': old() requires a message "
-                    f"field path (e.g. old(msg.status))."
-                )
+    if cls == "OldRef" and (node.field.segments[0] != "msg" or len(node.field.segments) < 2):
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': old() requires a message "
+                f"field path (e.g. old(msg.status))."
             )
-    if cls == "ChangedRef":
-        if node.field.segments[0] != "msg" or len(node.field.segments) < 2:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': changed() requires a message "
-                    f"field path (e.g. changed(msg.status))."
-                )
+        )
+    if cls == "ChangedRef" and (
+        node.field.segments[0] != "msg" or len(node.field.segments) < 2
+    ):
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': changed() requires a message "
+                f"field path (e.g. changed(msg.status))."
             )
+        )
 
     for child in _iter_expr_children(node):
         _walk_expr_for_temporal_fields(child, pipeline_name, errors)
@@ -1094,13 +1089,12 @@ def _check_env_refs(pipeline):
 
 def _walk_expr_for_env(node, pipeline_name, errors):
     cls = node.__class__.__name__
-    if cls == "EnvRef":
-        if not node.key:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': env() requires a non-empty string key argument."
-                )
+    if cls == "EnvRef" and not node.key:
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': env() requires a non-empty string key argument."
             )
+        )
 
     for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
         _walk_expr_for_env(child, pipeline_name, errors)
@@ -1171,15 +1165,15 @@ def _check_object_literal_fields(pipeline):
 
 def _check_object_field_uniqueness(obj_literal, pipeline_name, hook_name, errors):
     seen = set()
-    for field in obj_literal.fields:
-        if field.name in seen:
+    for obj_field in obj_literal.fields:
+        if obj_field.name in seen:
             errors.append(
                 SemanticError(
                     f"Pipeline '{pipeline_name}': {hook_name} has duplicate "
-                    f"field '{field.name}' in object literal."
+                    f"field '{obj_field.name}' in object literal."
                 )
             )
-        seen.add(field.name)
+        seen.add(obj_field.name)
 
 
 def _check_sink_batch(pipeline):
@@ -1227,7 +1221,7 @@ def _check_stage_annotations(pipeline):
                 SemanticError(
                     f"Pipeline '{pipeline.name}': @{ann.severity} on "
                     f"{annotated.stage.__class__.__name__}: {ann.message}",
-                    severity=("warning" if ann.severity == "warn" else "error"),
+                    severity=("warning" if ann.severity == "WARN" else "error"),
                 )
             )
     return errors
@@ -1400,7 +1394,7 @@ def _check_throttle(pipeline):
             errors.append(
                 SemanticError(f"Pipeline '{pipeline.name}': throttle period must be positive.")
             )
-        if stage.overflow == "buffer" and stage.buffer_size and stage.buffer_size <= 0:
+        if stage.overflow == "BUFFER" and stage.buffer_size and stage.buffer_size <= 0:
             errors.append(
                 SemanticError(
                     f"Pipeline '{pipeline.name}': throttle buffer size must be "
@@ -1493,11 +1487,10 @@ def _check_on_error(pipeline):
     if not pipeline.on_error:
         return errors
     oe = pipeline.on_error
-    if oe.broker:
-        if not oe.topic:
-            errors.append(
-                SemanticError(f"Pipeline '{pipeline.name}': on_error sink topic must not be empty.")
-            )
+    if oe.broker and not oe.topic:
+        errors.append(
+            SemanticError(f"Pipeline '{pipeline.name}': on_error sink topic must not be empty.")
+        )
     if not oe.broker and oe.topic:
         errors.append(
             SemanticError(f"Pipeline '{pipeline.name}': on_error has topic but no broker.")
@@ -1595,13 +1588,12 @@ def _check_user_func_calls(pipeline, func_names):
 
 def _walk_expr_for_user_func_calls(node, pipeline_name, func_names, errors):
     cls = node.__class__.__name__
-    if cls == "UserFuncCall":
-        if node.name not in func_names:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': call to undefined function '{node.name}'."
-                )
+    if cls == "UserFuncCall" and node.name not in func_names:
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': call to undefined function '{node.name}'."
             )
+        )
 
     for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS + _EXTRA_MATCH_ATTRS):
         _walk_expr_for_user_func_calls(child, pipeline_name, func_names, errors)
@@ -1671,13 +1663,13 @@ def _check_schema_field_uniqueness(fields, schema_name, path, errors):
     seen = set()
     for f in fields:
         if f.name in seen:
-            location = ".".join(path + [f.name]) if path else f.name
+            location = ".".join([*path, f.name]) if path else f.name
             errors.append(
                 SemanticError(f"Schema '{schema_name}': duplicate field name '{location}'.")
             )
         seen.add(f.name)
         if f.type.__class__.__name__ == "SchemaObjectType":
-            _check_schema_field_uniqueness(f.type.fields, schema_name, path + [f.name], errors)
+            _check_schema_field_uniqueness(f.type.fields, schema_name, [*path, f.name], errors)
 
 
 def _resolve_schema_field(schema, field_segments):
@@ -1705,14 +1697,12 @@ def _resolve_schema_field(schema, field_segments):
 
 
 def _schema_type_name(schema_type):
-    cls = schema_type.__class__.__name__
-    if cls == "SchemaScalarType":
-        return schema_type.name
-    elif cls == "SchemaObjectType":
-        return "object"
-    elif cls == "SchemaListType":
-        return "list"
-    return "unknown"
+    type_names = {
+        "SchemaScalarType": schema_type.name,
+        "SchemaObjectType": "object",
+        "SchemaListType": "list",
+    }
+    return type_names.get(schema_type.__class__.__name__, "unknown")
 
 
 def _check_schema_references(pipeline, model):
@@ -1722,7 +1712,7 @@ def _check_schema_references(pipeline, model):
         return errors
 
     schema = src.schema
-    is_strict = schema.strictness != "lenient"
+    is_strict = schema.strictness != "LENIENT"
 
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_schema(stage, pipeline.name, schema, is_strict, errors)
@@ -1819,7 +1809,7 @@ def _check_models(model):
                     errors.append(SemanticError(f"Model '{m.name}': duplicate output name '{o}'."))
                 output_seen.add(o)
 
-        if m.runtime != "custom":
+        if m.runtime.lower() != "custom":
             if not m.features:
                 errors.append(
                     SemanticError(
