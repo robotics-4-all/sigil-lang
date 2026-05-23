@@ -1,5 +1,7 @@
 import os
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+
 from jinja2 import Environment, FileSystemLoader
 
 from .expressions import ExprContext, compile_expr, extract_field_keys
@@ -423,9 +425,7 @@ def _build_pipeline_ctx(
     if snk and snk.batch:
         ctx.has_batch = True
         ctx.batch_size = snk.batch.size if snk.batch.size else None
-        ctx.batch_timeout_seconds = (
-            _dur_to_secs(snk.batch.timeout) if snk.batch.timeout else None
-        )
+        ctx.batch_timeout_seconds = _dur_to_secs(snk.batch.timeout) if snk.batch.timeout else None
 
     if pipeline.initially:
         ctx.has_initially = True
@@ -567,7 +567,7 @@ def _build_pipeline_ctx(
             ctx.has_rate = True
             ctx.rate_limit = stage.limit
             ctx.rate_period_seconds = _dur_to_secs(stage.period)
-            ctx.rate_on_excess = stage.on_excess if stage.on_excess else "drop"
+            ctx.rate_on_excess = stage.on_excess.lower() if stage.on_excess else "drop"
 
         elif cls == "FlattenStage":
             ctx.has_flatten = True
@@ -584,7 +584,7 @@ def _build_pipeline_ctx(
             ctx.has_throttle = True
             ctx.throttle_limit = stage.limit
             ctx.throttle_period_seconds = _dur_to_secs(stage.period)
-            ctx.throttle_overflow = stage.overflow if stage.overflow else "drop"
+            ctx.throttle_overflow = stage.overflow.lower() if stage.overflow else "drop"
             ctx.throttle_buffer_size = stage.buffer_size if stage.buffer_size else 1000
 
         elif cls == "SampleStage":
@@ -623,8 +623,7 @@ def _build_pipeline_ctx(
             )
             ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(stage.condition)
             ctx.has_quantifier_over_messages = (
-                ctx.has_quantifier_over_messages
-                or _has_quantifier_over_messages(stage.condition)
+                ctx.has_quantifier_over_messages or _has_quantifier_over_messages(stage.condition)
             )
 
         elif cls == "MapStage":
@@ -667,9 +666,7 @@ def _build_pipeline_ctx(
                         SelectFieldCtx(output_name=f.alias, source_name=f.source)
                     )
                 else:
-                    ctx.select_fields.append(
-                        SelectFieldCtx(output_name=f.name, source_name=f.name)
-                    )
+                    ctx.select_fields.append(SelectFieldCtx(output_name=f.name, source_name=f.name))
 
         elif cls == "DebugStage":
             ctx.has_debug = True
@@ -700,7 +697,7 @@ def _build_pipeline_ctx(
                     on_error_broker = _build_broker_ctx(ve.broker)
                     on_error_topic = ve.topic
                 elif ve.action:
-                    on_error = ve.action
+                    on_error = ve.action.lower()
             ctx.validate_stage = ValidateStageCtx(
                 schema_name=stage.schema.name,
                 on_error=on_error,
@@ -718,7 +715,7 @@ def _build_pipeline_ctx(
                 const_map=const_map,
                 func_defs=func_defs,
             )
-            method = stage.method if stage.method else "GET"
+            method = stage.method.lower() if stage.method else "get"
             timeout_ms = 5000
             if stage.timeout:
                 timeout_ms = int(_dur_to_secs(stage.timeout) * 1000)
@@ -747,7 +744,7 @@ def _build_pipeline_ctx(
                             )
                         )
                 elif ee.action:
-                    on_error = ee.action
+                    on_error = ee.action.lower()
             ctx.enrich_stages.append(
                 EnrichStageCtx(
                     url_code=url_code,
@@ -765,9 +762,10 @@ def _build_pipeline_ctx(
 
 
 def _build_broker_ctx(broker) -> BrokerCtx:
+    transport = broker.transport.lower() if broker.transport else "mqtt"
     return BrokerCtx(
         name=broker.name,
-        transport=broker.transport if broker.transport else "mqtt",
+        transport=transport,
         host=broker.host,
         port=broker.port,
         ssl=broker.ssl if broker.ssl else False,
@@ -812,11 +810,7 @@ def _build_const_map(model) -> dict[str, str]:
     for c in model.constants:
         val = c.value
         cls = val.__class__.__name__
-        if cls == "IntLiteral":
-            result[c.name] = repr(val.val)
-        elif cls == "FloatLiteral":
-            result[c.name] = repr(val.val)
-        elif cls == "StringLiteral":
+        if cls == "IntLiteral" or cls == "FloatLiteral" or cls == "StringLiteral":
             result[c.name] = repr(val.val)
         elif cls == "BoolLiteral":
             result[c.name] = "True" if val.val else "False"
@@ -863,7 +857,7 @@ def _build_model_map(
         result[m.name] = ModelCtx(
             name=m.name,
             source_code=source_code,
-            runtime=m.runtime,
+            runtime=m.runtime.lower(),
             input_key_strs=input_key_strs,
             returns=returns,
         )
