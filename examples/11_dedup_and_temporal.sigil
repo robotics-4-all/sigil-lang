@@ -1,13 +1,13 @@
 /*
  * Example 11 — Deduplication and Temporal Logic
  * ================================================
- * Introduces `deduplicate` for dropping duplicate messages and
+ * Introduces `DEDUPLICATE` for dropping duplicate messages and
  * `old()` / `changed()` for temporal state awareness.
  *
  * NEW FEATURES:
- *   deduplicate msg.field within 30s
- *       — drop messages with duplicate key values within a time window
- *       — must appear before filter (earliest stage position)
+ *   DEDUPLICATE msg.field within 30s
+ *       — drop messages with duplicate key values within a time WINDOW
+ *       — must appear before FILTER (earliest stage position)
  *
  *   old(msg.field)
  *       — value of field from the PREVIOUS message
@@ -17,13 +17,13 @@
  *       — true if the field differs from its previous value
  *       — equivalent to: old(msg.field) != msg.field
  *
- * STAGE ORDER (with deduplicate):
- *   source → deduplicate → filter → ... → sink
+ * STAGE ORDER (with DEDUPLICATE):
+ *   SOURCE → DEDUPLICATE → FILTER → ... → SINK
  *
  * SCENARIO:
  *   An industrial sensor network where sensors may retransmit
  *   readings (duplicates by event_id). We want to:
- *   1. Drop duplicate events within a 60-second window
+ *   1. Drop duplicate events within a 60-second WINDOW
  *   2. Only forward readings where the status has changed
  *      OR the value has shifted significantly from the last reading
  *
@@ -32,22 +32,22 @@
  * OUTPUT: Only non-duplicate, status-changed or value-shifted messages
  */
 
-broker factory
-    host: "factory.local"
-    port: 1883
-end
+BROKER factory
+    HOST: "factory.local"
+    PORT: 1883
+;
 
-pipeline sensor_dedup
-    source from factory :: "sensors/+/events" qos: 1 format: json
+PIPELINE sensor_dedup
+    SOURCE FROM factory :: "sensors/+/events" QOS: 1 FORMAT: json
 
     // Stage 1: Deduplicate — drop retransmits within 60 seconds
-    |> deduplicate msg.event_id within 60s
+    |> DEDUPLICATE msg.event_id WITHIN 60s
 
     // Stage 2: Filter — only forward meaningful changes
     //   changed(msg.status) → status field differs from last message
     //   old(msg.value)      → previous message's value
-    |> filter changed(msg.status) or msg.value > (old(msg.value) * 1.1)
+    |> FILTER changed(msg.status) or msg.value > (old(msg.value) * 1.1)
 
-    |> sink to factory :: "sensors/processed" qos: 1
-end
+    |> SINK TO factory :: "sensors/processed" QOS: 1
+;
 

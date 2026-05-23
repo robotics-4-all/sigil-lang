@@ -1,24 +1,24 @@
-// Example 13: Lifecycle Hooks (@initially / @finally)
+// Example 13: Lifecycle Hooks (@INITIALLY / @FINALLY)
 //
-// Demonstrates pipeline lifecycle management:
-// - @initially publishes a message when the pipeline starts
-// - @finally publishes a message when the pipeline shuts down
+// Demonstrates PIPELINE lifecycle management:
+// - @INITIALLY publishes a message when the PIPELINE starts
+// - @FINALLY publishes a message when the PIPELINE shuts down
 //
-// Use case: a temperature monitoring pipeline that announces
+// Use case: a temperature monitoring PIPELINE that announces
 // its presence on the network when starting and sends a
 // goodbye message on shutdown. Useful for health monitoring,
 // service discovery, and graceful shutdown signaling.
 
-broker edge
-    transport: mqtt
-    host: "localhost"
-    port: 1883
-end
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline monitored_temps
-    // Published to sink topic when pipeline starts
-    @initially {
-        publish {
+PIPELINE monitored_temps
+    // Published to SINK topic when PIPELINE starts
+    @INITIALLY {
+        PUBLISH {
             status: "online",
             hostname: env("HOSTNAME", "unknown"),
             version: "2.1.0",
@@ -26,32 +26,32 @@ pipeline monitored_temps
         }
     }
 
-    source from edge :: "sensors/temperature"
+    SOURCE FROM edge :: "sensors/temperature"
 
-    |> filter msg.value is not null
+    |> FILTER msg.value is not null
 
-    |> window tumbling(30 s)
+    |> WINDOW tumbling(30 s)
 
-    |> aggregate {
-        avg_temp = avg(msg.value)
-        max_temp = max(msg.value)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
         n = count()
     }
 
-    |> map {
-        average = avg_temp;
-        peak = max_temp;
+    |> MAP {
+        average = avg_temp,
+        peak = max_temp,
         samples = n
     }
 
-    |> sink to edge :: "analytics/temp_summary"
+    |> SINK TO edge :: "analytics/temp_summary"
 
-    // Published to sink topic when pipeline stops
-    @finally {
-        publish {
+    // Published to SINK topic when PIPELINE stops
+    @FINALLY {
+        PUBLISH {
             status: "offline",
             hostname: env("HOSTNAME", "unknown")
         }
     }
-end
+;
 
