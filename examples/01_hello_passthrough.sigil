@@ -1,13 +1,13 @@
 /*
  * Example 01 — Hello Passthrough
  * ================================
- * The simplest possible Sigil pipeline.
+ * The simplest possible Sigil PIPELINE.
  *
  * CONCEPTS INTRODUCED:
- *   - broker    : connection to a message broker
- *   - pipeline  : a named data processing flow
- *   - source    : where messages come from
- *   - sink      : where messages go
+ *   - BROKER    : connection to a message BROKER
+ *   - PIPELINE  : a named data processing flow
+ *   - SOURCE    : where messages come from
+ *   - SINK      : where messages go
  *
  * WHAT IT DOES:
  *   Subscribes to "sensors/temperature" and forwards every message
@@ -18,20 +18,20 @@
  *   Creates a Python app that subscribes and republishes messages.
  */
 
-// Step 1: Define a broker — where your data lives.
+// Step 1: Define a BROKER — where your data lives.
 // At minimum, you need a host and port.
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-// Step 2: Define a pipeline — what to do with the data.
-// A pipeline needs at least a source and a sink.
-pipeline relay
+// Step 2: Define a PIPELINE — what to do with the data.
+// A PIPELINE needs at least a SOURCE and a SINK.
+PIPELINE relay
     // Subscribe to incoming messages
-    source from local :: "sensors/temperature"
+    SOURCE FROM local :: "sensors/temperature"
 
     // Republish them somewhere else (unchanged)
-    |> sink to local :: "mirror/temperature"
-end
+    |> SINK TO local :: "mirror/temperature"
+;
 

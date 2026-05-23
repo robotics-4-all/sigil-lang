@@ -1,47 +1,47 @@
 // Example 18: Rate Limiting
 //
-// The `rate` stage limits message throughput using a token bucket algorithm.
-// Syntax:  rate <limit> per <duration> [on_excess: drop|warn|error]
+// The `RATE` stage limits message throughput using a token bucket algorithm.
+// Syntax:  RATE <limit> per <duration> [ON_EXCESS: drop|warn|error]
 //
-// - Placed AFTER filter, BEFORE group_by in the pipeline order
+// - Placed AFTER FILTER, BEFORE GROUP_BY in the PIPELINE order
 // - Token bucket refills at (limit / period) tokens per second
-// - Default on_excess is "drop" (silently discard)
+// - Default ON_EXCESS is "drop" (silently discard)
 // - "warn" logs a warning before dropping
 // - "error" logs an error before dropping
 
-broker sensors
-    host: "localhost"
-    port: 1883
-end
+BROKER sensors
+    HOST: "localhost"
+    PORT: 1883
+;
 
-// Basic rate limiting: allow 100 messages per second
-pipeline rate_basic
-    source from sensors :: "sensors/temperature"
-    |> rate 100 per 1s
-    |> sink to sensors :: "sensors/throttled"
-end
+// Basic RATE limiting: allow 100 messages per second
+PIPELINE rate_basic
+    SOURCE FROM sensors :: "sensors/temperature"
+    |> RATE 100 PER 1s
+    |> SINK TO sensors :: "sensors/throttled"
+;
 
 // Rate limiting with warning: 50 messages per 10 seconds
-pipeline rate_with_warning
-    source from sensors :: "sensors/pressure"
-    |> filter msg.value > 0
-    |> rate 50 per 10s on_excess: warn
-    |> window tumbling(30s)
-    |> aggregate {
-        avg_pressure = avg(msg.value)
+PIPELINE rate_with_warning
+    SOURCE FROM sensors :: "sensors/pressure"
+    |> FILTER msg.value > 0
+    |> RATE 50 PER 10s ON_EXCESS: WARN
+    |> WINDOW tumbling(30s)
+    |> AGGREGATE {
+        avg_pressure = avg(msg.value),
         sample_count = count()
     }
-    |> map {
-        pressure = avg_pressure;
+    |> MAP {
+        pressure = avg_pressure,
         samples = sample_count
     }
-    |> sink to sensors :: "sensors/pressure_agg"
-end
+    |> SINK TO sensors :: "sensors/pressure_agg"
+;
 
-// Strict rate limiting with error logging
-pipeline rate_strict
-    source from sensors :: "sensors/critical"
-    |> rate 10 per 1s on_excess: error
-    |> sink to sensors :: "alerts/critical"
-end
+// Strict RATE limiting with error logging
+PIPELINE rate_strict
+    SOURCE FROM sensors :: "sensors/critical"
+    |> RATE 10 PER 1s ON_EXCESS: ERROR
+    |> SINK TO sensors :: "alerts/critical"
+;
 

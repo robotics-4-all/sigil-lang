@@ -6,51 +6,51 @@
 //   and flushes when either the count or timeout is reached
 //
 // Use case: high-throughput event processing that batches
-// output to reduce broker publish overhead, using JSON format
+// output to reduce BROKER publish overhead, using JSON format
 // for structured downstream consumption.
 
-broker ingest
-    transport: mqtt
-    host: "localhost"
-    port: 1883
-end
+BROKER ingest
+    TRANSPORT: MQTT
+    HOST: "localhost"
+    PORT: 1883
+;
 
-broker warehouse
-    transport: redis
-    host: "localhost"
-    port: 6379
-end
+BROKER warehouse
+    TRANSPORT: REDIS
+    HOST: "localhost"
+    PORT: 6379
+;
 
-const BATCH_THRESHOLD = 200
+CONST BATCH_THRESHOLD = 200
 
-pipeline event_batcher
-    source from ingest :: "events/raw"
+PIPELINE event_batcher
+    SOURCE FROM ingest :: "events/raw"
 
-    |> deduplicate msg.event_id within 60 s
+    |> DEDUPLICATE msg.event_id WITHIN 60 s
 
-    |> filter msg.event_type is not null
+    |> FILTER msg.event_type is not null
 
-    |> map {
-        event = msg.event_type;
-        payload = msg.data ?? "empty";
+    |> MAP {
+        event = msg.event_type,
+        payload = msg.data ?? "empty",
         ts = msg.timestamp
     }
 
-    |> sink to warehouse :: "events.batched" format: json batch: { size: 100 timeout: 10 s }
-end
+    |> SINK TO warehouse :: "events.batched" FORMAT: json BATCH: { SIZE: 100 TIMEOUT: 10 s }
+;
 
-// A second pipeline demonstrating CSV format without batching
-pipeline csv_exporter
-    source from ingest :: "metrics/raw"
+// A second PIPELINE demonstrating CSV format without batching
+PIPELINE csv_exporter
+    SOURCE FROM ingest :: "metrics/raw"
 
-    |> filter msg.value is not null
+    |> FILTER msg.value is not null
 
-    |> map {
-        metric = msg.name;
-        value = msg.value;
+    |> MAP {
+        metric = msg.name,
+        value = msg.value,
         unit = msg.unit ?? "unknown"
     }
 
-    |> sink to warehouse :: "metrics.csv" format: csv
-end
+    |> SINK TO warehouse :: "metrics.csv" FORMAT: csv
+;
 
