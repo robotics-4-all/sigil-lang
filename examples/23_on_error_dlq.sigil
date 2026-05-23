@@ -1,24 +1,24 @@
 // ─── Example 23: Error Handling & Dead Letter Queue ─────────────────
 //
-// on_error routes failed messages to a Dead Letter Queue (DLQ)
+// ON_ERROR routes failed messages to a Dead Letter Queue (DLQ)
 // instead of silently logging them. This enables:
 //   - Post-mortem debugging of processing failures
 //   - Automated retry systems consuming from the DLQ
-//   - Error rate monitoring via the DLQ topic
+//   - Error RATE monitoring via the DLQ topic
 //
 // Difficulty: Intermediate
-// Features:  on_error sink, on_error drop, DLQ routing
+// Features:  ON_ERROR SINK, ON_ERROR drop, DLQ routing
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-broker redis_broker
-    transport: redis
-    host: "localhost"
-    port: 6379
-end
+BROKER redis_broker
+    TRANSPORT: REDIS
+    HOST: "localhost"
+    PORT: 6379
+;
 
 // ─── Basic DLQ routing ──────────────────────────────────────────────
 // If any stage throws an exception, the original message plus error
@@ -30,47 +30,47 @@ end
 //     "_timestamp": 1709123456.789,
 //     "_original": { ... the original message ... }
 //   }
-pipeline sensor_pipeline
-    source from local :: "sensors/raw"
-    |> filter msg.value > 0
-    |> window tumbling(1 m)
-    |> aggregate {
-        avg_value: float = avg(msg.value)
+PIPELINE sensor_pipeline
+    SOURCE FROM local :: "sensors/raw"
+    |> FILTER msg.value > 0
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE {
+        avg_value: float = avg(msg.value),
         count = count()
     }
-    |> map {
-        average = avg_value;
+    |> MAP {
+        average = avg_value,
         samples = count
     }
-    |> sink to local :: "sensors/processed"
-    on_error: sink to local :: "errors/sensors"
-end
+    |> SINK TO local :: "sensors/processed"
+    ON_ERROR: SINK TO local :: "errors/sensors"
+;
 
 // ─── Cross-transport DLQ ────────────────────────────────────────────
-// DLQ can use a different broker/transport than the main pipeline.
-// Here: source from MQTT, DLQ to Redis for persistent error storage.
-pipeline payment_processor
-    source from local :: "payments/incoming"
-    |> filter msg.amount > 0 and msg.currency != ""
-    |> sink to local :: "payments/validated"
-    on_error: sink to redis_broker :: "dlq:payments"
-end
+// DLQ can use a different BROKER/transport than the main PIPELINE.
+// Here: SOURCE from MQTT, DLQ to Redis for persistent error storage.
+PIPELINE payment_processor
+    SOURCE FROM local :: "payments/incoming"
+    |> FILTER msg.amount > 0 and msg.currency != ""
+    |> SINK TO local :: "payments/validated"
+    ON_ERROR: SINK TO redis_broker :: "dlq:payments"
+;
 
 // ─── Explicit drop ──────────────────────────────────────────────────
-// on_error: drop silently discards failed messages (logs at DEBUG).
+// ON_ERROR: drop silently discards failed messages (logs at DEBUG).
 // Use when you explicitly don't care about failures (e.g., best-effort
 // telemetry that can tolerate data loss).
-pipeline telemetry_best_effort
-    source from local :: "telemetry/raw"
-    |> filter msg.signal_strength > -90
-    |> sink to local :: "telemetry/filtered"
-    on_error: drop
-end
+PIPELINE telemetry_best_effort
+    SOURCE FROM local :: "telemetry/raw"
+    |> FILTER msg.signal_strength > -90
+    |> SINK TO local :: "telemetry/filtered"
+    ON_ERROR: DROP
+;
 
-// ─── No on_error (default behavior) ────────────────────────────────
-// Without on_error, failures are logged at ERROR level but the message
+// ─── No ON_ERROR (default behavior) ────────────────────────────────
+// Without ON_ERROR, failures are logged at ERROR level but the message
 // is lost. This is the original behavior — shown here for comparison.
-pipeline legacy_pipeline
-    source from local :: "legacy/input"
-    |> sink to local :: "legacy/output"
-end
+PIPELINE legacy_pipeline
+    SOURCE FROM local :: "legacy/input"
+    |> SINK TO local :: "legacy/output"
+;

@@ -1,64 +1,64 @@
-broker edge
-    transport: mqtt
-    host: "192.168.1.100"
-    port: 1883
-    auth: {
-        username: "admin"
-        password: "s3cret"
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "192.168.1.100"
+    PORT: 1883
+    AUTH: {
+        USERNAME: "admin"
+        PASSWORD: "s3cret"
     }
-end
+;
 
-broker cloud
-    transport: redis
-    host: "redis.example.io"
-    port: 6379
-    ssl: true
-    auth: {
-        username: "device01"
-        password: "tok3n"
+BROKER cloud
+    TRANSPORT: REDIS
+    HOST: "redis.example.io"
+    PORT: 6379
+    SSL: true
+    AUTH: {
+        USERNAME: "device01"
+        PASSWORD: "tok3n"
     }
-end
+;
 
-pipeline temperature_monitor
-    source from edge :: "factory/+/temperature" qos: 1 format: json
+PIPELINE temperature_monitor
+    SOURCE FROM edge :: "factory/+/temperature" QOS: 1 FORMAT: json
 
-    |> filter msg.value > -40 and msg.value < 150
+    |> FILTER msg.value > -40 and msg.value < 150
 
-    |> group_by msg.zone
+    |> GROUP_BY msg.zone
 
-    |> window tumbling(1 m)
+    |> WINDOW tumbling(1 m)
 
-    |> aggregate {
-        avg_temp = avg(msg.value)
-        max_temp = max(msg.value)
-        min_temp = min(msg.value)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
+        min_temp = min(msg.value),
         readings = count()
     }
 
-    |> map {
-        temperature_avg = avg_temp;
-        temperature_max = max_temp;
-        temperature_min = min_temp;
+    |> MAP {
+        temperature_avg = avg_temp,
+        temperature_max = max_temp,
+        temperature_min = min_temp,
         sample_count    = readings
     }
 
-    |> sink to cloud :: "analytics/temperature" qos: 1
-end
+    |> SINK TO cloud :: "analytics/temperature" QOS: 1
+;
 
-pipeline vibration_alert
-    source from edge :: "factory/+/vibration" qos: 2 format: json
+PIPELINE vibration_alert
+    SOURCE FROM edge :: "factory/+/vibration" QOS: 2 FORMAT: json
 
-    |> filter msg.rms > 10.0
+    |> FILTER msg.rms > 10.0
 
-    |> window sliding(30 s, step = 5 s)
+    |> WINDOW sliding(30 s, STEP = 5 s)
 
-    |> aggregate {
-        peak_rms   = max(msg.rms)
-        avg_rms    = avg(msg.rms)
-        deviation  = stddev(msg.rms)
+    |> AGGREGATE {
+        peak_rms   = max(msg.rms),
+        avg_rms    = avg(msg.rms),
+        deviation  = stddev(msg.rms),
         num_events = count()
     }
 
-    |> sink to cloud :: "alerts/vibration" qos: 2
-end
+    |> SINK TO cloud :: "alerts/vibration" QOS: 2
+;
 

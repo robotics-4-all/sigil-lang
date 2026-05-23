@@ -1,14 +1,14 @@
 /*
  * Example 28 — ML Quality Inspection with PyTorch
  * =================================================
- * Uses a TorchScript model for real-time quality scoring on a
+ * Uses a TorchScript MODEL for real-time quality scoring on a
  * manufacturing production line.
  *
- * RUNTIME: torch — loads a TorchScript model via torch.jit.load.
+ * RUNTIME: torch — loads a TorchScript MODEL via torch.jit.load.
  *
  * SCENARIO:
  *   Vision sensors on a conveyor belt extract numeric features
- *   from product images (edge-computed upstream).  A PyTorch model
+ *   from product images (edge-computed upstream).  A PyTorch MODEL
  *   predicts a quality score and defect probability.  Products
  *   scoring below threshold are diverted for manual inspection.
  *   Windowed statistics track line quality over 10-minute periods.
@@ -20,41 +20,41 @@
  *          "inspected": 412}
  */
 
-broker factory
-    transport: redis
-    host: "10.0.1.50"
-    port: 6379
-end
+BROKER factory
+    TRANSPORT: REDIS
+    HOST: "10.0.1.50"
+    PORT: 6379
+;
 
-model quality_model
-    source: env("QUALITY_MODEL_PATH", "models/quality_inspector.pt")
-    runtime: torch
-    features: [msg.brightness, msg.symmetry, msg.edge_sharpness, msg.color_deviation]
-    returns: [quality_score, defect_prob]
-end
+MODEL quality_model
+    SOURCE: env("QUALITY_MODEL_PATH", "models/quality_inspector.pt")
+    RUNTIME: TORCH
+    FEATURES: [msg.brightness, msg.symmetry, msg.edge_sharpness, msg.color_deviation]
+    RETURNS: [quality_score, defect_prob]
+;
 
-pipeline quality_monitor
-    source from factory :: "line/+/features"
+PIPELINE quality_monitor
+    SOURCE FROM factory :: "line/+/features"
 
-    |> predict quality_model
+    |> PREDICT quality_model
 
-    |> group_by msg.line
+    |> GROUP_BY msg.line
 
-    |> window tumbling(10 m)
+    |> WINDOW tumbling(10 m)
 
-    |> aggregate {
-        avg_quality = avg(msg.quality_score)
-        max_defect  = max(msg.defect_prob)
-        defect_rate = avg(msg.defect_prob)
+    |> AGGREGATE {
+        avg_quality = avg(msg.quality_score),
+        max_defect  = max(msg.defect_prob),
+        defect_rate = avg(msg.defect_prob),
         inspected   = count()
     }
 
-    |> map {
-        avg_quality  = avg_quality;
-        defect_rate  = defect_rate;
-        max_defect   = max_defect;
+    |> MAP {
+        avg_quality  = avg_quality,
+        defect_rate  = defect_rate,
+        max_defect   = max_defect,
         inspected    = inspected
     }
 
-    |> sink to factory :: "analytics/quality/summary"
-end
+    |> SINK TO factory :: "analytics/quality/summary"
+;

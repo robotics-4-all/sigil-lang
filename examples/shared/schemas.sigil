@@ -6,17 +6,17 @@
  * be referenced in `source … schema: NAME` clauses.
  */
 
-schema SensorReading strict
+SCHEMA SensorReading STRICT
     device_id : str
     value     : float
     unit      : str
     ts        : int
     tags      : [str]?
-end
+;
 
-schema AlertPayload lenient
+SCHEMA AlertPayload LENIENT
     device_id : str
     value     : float
     threshold : float
     severity  : str
-end
+;

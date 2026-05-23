@@ -4,11 +4,11 @@
  * Uses a pre-trained scikit-learn classifier to categorize
  * incoming support tickets by urgency level.
  *
- * RUNTIME: sklearn — loads a joblib-serialized model.
+ * RUNTIME: sklearn — loads a joblib-serialized MODEL.
  *
  * SCENARIO:
  *   Customer support tickets arrive as structured messages.
- *   An sklearn model classifies each ticket as low/medium/high
+ *   An sklearn MODEL classifies each ticket as low/medium/high
  *   urgency based on word count, response time, and sentiment.
  *   Results are routed to priority-specific queues.
  *
@@ -18,33 +18,33 @@
  *         (routed to "tickets/high" because urgency >= 2)
  */
 
-broker support
-    transport: amqp
-    host: "rabbitmq.internal"
-    port: 5672
-    auth: {
-        username: "ticket-svc"
-        password: "amqp-token"
+BROKER support
+    TRANSPORT: AMQP
+    HOST: "rabbitmq.internal"
+    PORT: 5672
+    AUTH: {
+        USERNAME: "ticket-svc"
+        PASSWORD: "amqp-token"
     }
-end
+;
 
-model urgency_classifier
-    source: "models/urgency_clf.pkl"
-    runtime: sklearn
-    features: [msg.word_count, msg.response_hours, msg.sentiment_score]
-    returns: [urgency]
-end
+MODEL urgency_classifier
+    SOURCE: "models/urgency_clf.pkl"
+    RUNTIME: SKLEARN
+    FEATURES: [msg.word_count, msg.response_hours, msg.sentiment_score]
+    RETURNS: [urgency]
+;
 
-pipeline ticket_triage
-    source from support :: "tickets/incoming"
+PIPELINE ticket_triage
+    SOURCE FROM support :: "tickets/incoming"
 
-    |> filter msg.word_count is not null
+    |> FILTER msg.word_count is not null
 
-    |> predict urgency_classifier
+    |> PREDICT urgency_classifier
 
-    |> route
-        when msg.urgency >= 2 => sink to support :: "tickets/high"
-        when msg.urgency >= 1 => sink to support :: "tickets/medium"
-        default               => sink to support :: "tickets/low"
-    end
-end
+    |> ROUTE
+        when msg.urgency >= 2 => SINK TO support :: "tickets/high"
+        when msg.urgency >= 1 => SINK TO support :: "tickets/medium"
+        DEFAULT               => SINK TO support :: "tickets/low"
+    ;
+;
