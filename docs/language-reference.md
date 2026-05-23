@@ -24,16 +24,15 @@ Sigil files (`.sigil`) are compiled into Python code. The generated applications
 A minimal Sigil program requires at least one broker and one pipeline with a source and a sink.
 
 ```sigil
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline hello_world
-    source from local :: "input/topic"
-
-    |> sink to local :: "output/topic"
-end
+PIPELINE hello_world
+    SOURCE FROM local :: "input/topic"
+    |> SINK TO local :: "output/topic"
+;
 ```
 
 ### CLI Commands
@@ -64,24 +63,24 @@ Brokers define the connection parameters for message transports.
 
 ### Syntax
 ```sigil
-broker NAME
-    transport: mqtt | redis | amqp | kafka
-    host: "hostname"
-    port: 1234
-    ssl: true | false
-    auth: {
-        username: "user"
-        password: "pass"
+BROKER NAME
+    TRANSPORT: MQTT | REDIS | AMQP | KAFKA
+    HOST: "hostname"
+    PORT: 1234
+    SSL: true | false
+    AUTH: {
+        USERNAME: "user"
+        PASSWORD: "pass"
     }
-end
+;
 ```
 
 ### Fields
-- **transport**: The message transport protocol. Defaults to `mqtt`. Supported values: `mqtt`, `redis`, `amqp`, `kafka`.
-- **host**: The broker hostname or IP address (string).
-- **port**: The port number (integer).
-- **ssl**: (Optional) Enable SSL/TLS connection. Defaults to `false`.
-- **auth**: (Optional) Authentication credentials.
+- **TRANSPORT**: The message transport protocol. Defaults to `MQTT`. Supported values: `MQTT`, `REDIS`, `AMQP`, `KAFKA`.
+- **HOST**: The broker hostname or IP address (string).
+- **PORT**: The port number (integer).
+- **SSL**: (Optional) Enable SSL/TLS connection. Defaults to `false`.
+- **AUTH**: (Optional) Authentication credentials.
 
 Multiple brokers can be defined in a single file, allowing pipelines to bridge different transports.
 
@@ -91,7 +90,7 @@ Constants allow you to define reusable values that are inlined at compile time.
 
 ### Syntax
 ```sigil
-const NAME = value
+CONST NAME = value
 ```
 
 ### Supported Types
@@ -107,13 +106,12 @@ const NAME = value
 Schemas define typed message shapes for compile-time field validation. When a schema is bound to a pipeline source, the compiler checks that all `msg.X` references exist in the schema and have compatible types.
 
 ### Syntax
-
 ```sigil
-schema <name> [strict|lenient]
+SCHEMA <name> [STRICT|LENIENT]
     <field_name>: <type>
     <field_name>: <type>?     // optional field
     ...
-end
+;
 ```
 
 ### Field Types
@@ -138,10 +136,10 @@ end
 Bind a schema to a pipeline source:
 
 ```sigil
-pipeline my_pipeline
-    source from broker :: "topic" schema: SensorReading
+PIPELINE my_pipeline
+    SOURCE FROM broker :: "topic" SCHEMA: SensorReading
     ...
-end
+;
 ```
 
 ### Type Compatibility
@@ -153,7 +151,7 @@ The compiler issues warnings for type mismatches:
 ### Example
 
 ```sigil
-schema SensorReading strict
+SCHEMA SensorReading STRICT
     temp: float
     humidity: float
     sensor_id: str
@@ -163,14 +161,16 @@ schema SensorReading strict
         altitude: float?
     }
     tags: [str]
-end
+;
+```
 
-pipeline monitor
-    source from local :: "sensors/data" schema: SensorReading
-    |> filter msg.temp > 30.0
-    |> filter msg.location.lat > 35.0   // nested access validated
-    |> sink to local :: "alerts"
-end
+
+PIPELINE monitor
+    SOURCE FROM local :: "sensors/data" SCHEMA: SensorReading
+    |> FILTER msg.temp > 30.0
+    |> FILTER msg.location.lat > 35.0   // nested access validated
+    |> SINK TO local :: "alerts"
+;
 ```
 
 ## Pipelines
@@ -179,70 +179,70 @@ A pipeline defines the flow of data from a source through various processing sta
 
 ### Syntax
 ```sigil
-pipeline NAME
+PIPELINE NAME
     [lifecycle_hooks]
-    source from BROKER :: "topic"
+    SOURCE FROM BROKER :: "topic"
     |> [join]
     |> [stages]
-    |> sink to BROKER :: "topic" | |> route ... end
+    |> SINK TO BROKER :: "topic" | |> ROUTE ... ;
     [lifecycle_hooks]
-end
+;
 ```
 
 ### Fixed Stage Order
 Sigil enforces a strict order for processing stages. While most stages are optional, they must appear in this sequence if present:
 
-1. **source** (Required)
-2. **join**
-3. **deduplicate**
-4. **filter**
-5. **rate**
-6. **flatten**
-7. **distinct**
-8. **throttle**
-9. **sample**
-10. **group_by**
-11. **window** (Multiple named windows allowed)
-12. **aggregate**
-13. **accumulate**
-14. **having**
-15. **map**
-16. **sink** or **route** (Required)
+1. **SOURCE** (Required)
+2. **JOIN**
+3. **DEDUPLICATE**
+4. **FILTER**
+5. **RATE**
+6. **FLATTEN**
+7. **DISTINCT**
+8. **THROTTLE**
+9. **SAMPLE**
+10. **GROUP_BY**
+11. **WINDOW** (Multiple named windows allowed)
+12. **AGGREGATE**
+13. **ACCUMULATE**
+14. **HAVING**
+15. **MAP**
+16. **SINK** or **ROUTE** (Required)
 
-Each stage type can appear at most once in a pipeline, with the exception of the **window** stage which can appear multiple times if each instance is named.
+Each stage type can appear at most once in a pipeline, with the exception of the **WINDOW** stage which can appear multiple times if each instance is named.
 
 ## Source
 
-The `source` stage defines where the pipeline receives messages.
+The `SOURCE` stage defines where the pipeline receives messages.
 
 ### Broker Source
 Subscribes to a topic on a defined broker.
 ```sigil
-source from local :: "sensors/+/data" qos: 1 format: json
+SOURCE FROM local :: "sensors/+/data" QOS: 1 FORMAT: json
 ```
 - **broker**: Reference to a defined broker name.
 - **topic**: The topic to subscribe to. Supports wildcards depending on the transport.
 - **qos**: (Optional) Quality of Service level (0, 1, or 2).
-- **format**: (Optional) Message serialization format (`json`, `csv`, or `raw`). Defaults to `json`.
+- **format**: (Optional) Message serialization format (`JSON`, `CSV`, or `RAW`). Defaults to `JSON`.
 
 ### Pipe Source
 Receives messages directly from another pipeline in the same application.
 ```sigil
-source from pipe upstream_pipeline_name
+SOURCE FROM PIPE upstream_pipeline_name
 ```
 This enables pipeline chaining without needing an intermediate broker.
 
 ## Join
 
-The `join` stage allows you to enrich the primary message stream with data from another stream (the "joined" stream). It buffers messages from both streams and matches them based on a common key.
+The `JOIN` stage allows you to enrich the primary message stream with data from another stream (the "joined" stream). It buffers messages from both streams and matches them based on a common key.
 
 ### Syntax
 ```sigil
-|> join BROKER :: "topic"
-    on msg.LEFT_KEY == other.RIGHT_KEY
-    within DURATION
-    [type: inner | left]
-end
+|> JOIN BROKER :: "topic"
+    ON msg.LEFT_KEY == other.RIGHT_KEY
+    WITHIN DURATION
+    [TYPE: INNER | LEFT]
+;
 ```
 
 - **broker**: Reference to a defined broker name for the joined stream.
@@ -252,217 +252,219 @@ end
 - **type**: (Optional) The join type. Defaults to `inner`.
 
 ### Join Types
-- **inner**: Only emits a message when a match is found in both streams within the time window. If a primary message arrives and no match is found yet, it is buffered and retried when a message arrives on the joined stream.
-- **left**: Always emits the primary message. If a match is found in the joined stream within the window, the fields from `other` are populated. Otherwise, they are `null`.
+- **INNER**: Only emits a message when a match is found in both streams within the time window. If a primary message arrives and no match is found yet, it is buffered and retried when a message arrives on the joined stream.
+- **LEFT**: Always emits the primary message. If a match is found in the joined stream within the window, the fields from `other` are populated. Otherwise, they are `null`.
 
 ### Referencing Joined Fields
-Downstream stages (like `filter`, `aggregate`, or `map`) can access fields from the joined message using the `other` prefix (e.g., `other.name`).
+Downstream stages (like `FILTER`, `AGGREGATE`, or `MAP`) can access fields from the joined message using the `other` prefix (e.g., `other.name`).
 
 ### Null Handling (Left Join)
-When using a `left` join, joined fields may be `null`. Use the null coalesce operator (`??`) to provide default values:
+When using a `LEFT` join, joined fields may be `null`. Use the null coalesce operator (`??`) to provide default values:
 ```sigil
-|> map {
+|> MAP {
     customer_name = other.name ?? "Guest"
 }
 ```
 
 ### Restrictions
-- The `join` stage cannot be used in pipelines that use a `pipe` source.
-- The left key in the `on` clause must start with `msg.`.
-- The right key in the `on` clause must start with `other.`.
+- The `JOIN` stage cannot be used in pipelines that use a `PIPE` source.
+- The left key in the `ON` clause must start with `msg.`.
+- The right key in the `ON` clause must start with `other.`.
 
 ### Example
 ```sigil
-pipeline enrich_orders
-    source from local :: "orders/new"
-    |> join local :: "customers/profiles"
-        on msg.customer_id == other.id
-        within 30 s
-        type: inner
-    end
-    |> filter other.active == true
-    |> map {
+PIPELINE enrich_orders
+    SOURCE FROM local :: "orders/new"
+    |> JOIN local :: "customers/profiles"
+        ON msg.customer_id == other.id
+        WITHIN 30 S
+        TYPE: INNER
+    ;
+    |> FILTER other.active == true
+    |> MAP {
         order_id = msg.order_id;
         customer_name = other.name ?? "unknown";
         amount = msg.amount
     }
-    |> sink to local :: "orders/enriched"
-end
+    |> SINK TO local :: "orders/enriched"
+;
 ```
 
 ## Sink
 
-The `sink` stage defines the primary destination for processed messages.
+The `SINK` stage defines the primary destination for processed messages.
 
 ### Basic Sink
 ```sigil
-|> sink to local :: "output/topic" qos: 1 format: json
+|> SINK TO local :: "output/topic" QOS: 1 FORMAT: json
 ```
 
 ### Batching
 Sinks can buffer messages and send them in batches.
 ```sigil
-|> sink to local :: "output/batch" batch: {
-    size: 100
-    timeout: 10s
+|> SINK TO local :: "output/batch" BATCH: {
+    SIZE: 100
+    TIMEOUT: 10S
 }
 ```
-- **size**: Maximum number of messages in a batch.
-- **timeout**: Maximum time to wait before sending a partial batch. Supports duration units (`ms`, `s`, `m`, `h`, `d`).
+- **SIZE**: Maximum number of messages in a batch.
+- **TIMEOUT**: Maximum time to wait before sending a partial batch. Supports duration units (`MS`, `S`, `M`, `H`, `D`).
 
 ## Route (Conditional Routing)
 
-The `route` stage allows you to send messages to different destinations based on conditions. A pipeline can have either a `sink` or a `route`, but not both.
+The `ROUTE` stage allows you to send messages to different destinations based on conditions. A pipeline can have either a `SINK` or a `ROUTE`, but not both.
 
 ### Syntax
 ```sigil
-|> route
-    when msg.value > 100 => sink to alerts :: "critical"
-    when msg.value > 50 => sink to local :: "warning"
-    default => sink to local :: "normal"
-end
+|> ROUTE
+    WHEN msg.value > 100 => SINK TO alerts :: "critical"
+    WHEN msg.value > 50 => SINK TO local :: "warning"
+    DEFAULT => SINK TO local :: "normal"
+;
 ```
-Conditions are evaluated in order. The first matching arm is used. The `default` arm is highly recommended to handle messages that don't match any condition.
+Conditions are evaluated in order. The first matching arm is used. The `DEFAULT` arm is highly recommended to handle messages that don't match any condition.
 
 ## Stages
 
-### deduplicate
+### DEDUPLICATE
 Drops duplicate messages based on a specific field within a sliding time window.
 
 ```sigil
-|> deduplicate msg.event_id within 5m
+|> DEDUPLICATE msg.event_id WITHIN 5M
 ```
 - **key**: Must be a message field path starting with `msg.`.
 - **within**: The time window for tracking duplicates.
 
-### filter
+### FILTER
 Drops messages that do not satisfy a boolean expression.
 
 ```sigil
-|> filter msg.status == "active" and msg.value > 0
+|> FILTER msg.status == "active" and msg.value > 0
 ```
 
-### flatten
+### FLATTEN
 
 Expands an array field into individual messages. Each element of the array
 becomes a separate message flowing through the rest of the pipeline.
 
 **Syntax:**
-|> flatten msg.<field>
+|> FLATTEN msg.<field>
 
 **Example:**
-|> flatten msg.items
+|> FLATTEN msg.items
 
 If `msg = {"items": [{"name": "a"}, {"name": "b"}]}`, the flatten stage
 produces two messages: `{"name": "a"}` and `{"name": "b"}`.
 
 If the field is not a list, the original message passes through unchanged.
 
-### distinct
+### DISTINCT
 
 Deduplicates messages by a field value within a time window. Messages with
 the same field value within the TTL window are dropped.
 
 **Syntax:**
-|> distinct msg.<field> within <duration>
+|> DISTINCT msg.<field> WITHIN <duration>
 
 **Example:**
-|> distinct msg.event_id within 10 m
+|> DISTINCT msg.event_id WITHIN 10 M
 
-Unlike `deduplicate` (which uses string key matching), `distinct` compares
+Unlike `DEDUPLICATE` (which uses string key matching), `DISTINCT` compares
 field values for equality and automatically expires entries after the TTL.
 
-### throttle
+### THROTTLE
 
-Rate-limits messages with configurable overflow behavior. Unlike `rate`
-(which always drops excess messages), throttle can buffer overflow messages
+Rate-limits messages with configurable overflow behavior. Unlike `RATE`
+(which always drops excess messages), THROTTLE can buffer overflow messages
 and process them when capacity becomes available.
 
 **Syntax:**
-|> throttle <limit> per <duration> [overflow: drop|buffer] [buffer: <size>]
+|> THROTTLE <limit> PER <duration> [OVERFLOW: DROP|BUFFER] [BUFFER: <size>]
 
 **Examples:**
-|> throttle 100 per 1 s                        // drop excess (default)
-|> throttle 10 per 1 s overflow: buffer         // buffer excess (default 1000)
-|> throttle 10 per 1 s overflow: buffer buffer: 500  // buffer with size limit
+|> THROTTLE 100 PER 1 S                        // drop excess (default)
+|> THROTTLE 10 PER 1 S OVERFLOW: BUFFER         // buffer excess (default 1000)
+|> THROTTLE 10 PER 1 S OVERFLOW: BUFFER BUFFER: 500  // buffer with size limit
 
-When overflow is `buffer`, excess messages are queued (up to buffer size)
+When overflow is `BUFFER`, excess messages are queued (up to buffer size)
 and automatically drained when rate tokens become available. When the buffer
 is full, additional messages are dropped.
 
-### sample
+### SAMPLE
 
 Probabilistically samples a percentage of messages. Each message has an
 independent chance of being kept.
 
 **Syntax:**
-|> sample <percentage> %
+|> SAMPLE <percentage> %
 
 **Example:**
-|> sample 10 %
+|> SAMPLE 10 %
 
-The percentage must be between 1 and 100. `sample 100 %` keeps all
-messages. `sample 1 %` keeps approximately 1 in 100 messages.
+The percentage must be between 1 and 100. `SAMPLE 100 %` keeps all
+messages. `SAMPLE 1 %` keeps approximately 1 in 100 messages.
 
-### group_by
+### GROUP_BY
 Partitions messages into groups for windowed aggregation.
 
 ```sigil
-|> group_by msg.sensor_id, msg.region
+|> GROUP_BY msg.sensor_id, msg.region
 ```
-Requires a `window` stage to follow.
+Requires a `WINDOW` stage to follow.
 
-### window
+### WINDOW
 Defines the time-based buffer for aggregation.
 
 #### Named Multi-Window
 Pipelines can define multiple windows to perform aggregations over different time horizons simultaneously. When using multiple windows, each must be given a unique name.
 
 ```sigil
-|> window short tumbling(1m)
-|> window long tumbling(5m)
+|> WINDOW SHORT TUMBLING(1M)
+|> WINDOW LONG TUMBLING(5M)
 ```
 
 When multiple windows are defined:
 - All windows must be named.
-- All aggregation assignments in the `aggregate` stage must use the `over` keyword to specify which window they apply to.
+- All aggregation assignments in the `AGGREGATE` stage must use the `OVER` keyword to specify which window they apply to.
 - Each window flushes independently at its own interval.
-- The output message includes a `_window` field containing the name of the window that triggered the flush.
+- The output message includes a `_WINDOW` field containing the name of the window that triggered the flush.
 
-If only a single window is used, naming is optional and the `over` keyword is not required in the `aggregate` stage.
+If only a single window is used, naming is optional and the `OVER` keyword is not required in the `AGGREGATE` stage.
 
 #### Tumbling Window
 Fixed-size, non-overlapping windows.
+
 ```sigil
-|> window tumbling(1h)
+|> WINDOW TUMBLING(1H)
 ```
 
 #### Sliding Window
 Overlapping windows that advance by a specified step.
-```sigil
-|> window sliding(1h, step = 15m)
-```
-The `step` must be less than or equal to the window size.
 
-### aggregate
+```sigil
+|> WINDOW SLIDING(1H, STEP = 15M)
+```
+The `STEP` must be less than or equal to the window size.
+
+### AGGREGATE
 Performs calculations over the messages in the current window.
 
 ```sigil
-|> aggregate {
-    avg_val = avg(msg.value)
-    max_val = max(msg.value)
-    total   = sum(msg.count)
+|> AGGREGATE {
+    avg_val = avg(msg.value),
+    max_val = max(msg.value),
+    total   = sum(msg.count),
     samples = count()
 }
 ```
 
-#### The `over` Clause
-When multiple windows are defined, use the `over` keyword to associate an aggregation with a specific window.
+#### The `OVER` Clause
+When multiple windows are defined, use the `OVER` keyword to associate an aggregation with a specific window.
 
 ```sigil
-|> aggregate {
-    avg_1m = avg(msg.value) over short
-    avg_5m = avg(msg.value) over long
+|> AGGREGATE {
+    avg_1m = avg(msg.value) OVER short,
+    avg_5m = avg(msg.value) OVER long
 }
 ```
 
@@ -492,19 +494,19 @@ If a type annotation is provided, the result of the aggregation function is coer
 
 Requires a `window` stage.
 
-### having
+### HAVING
 Filters the results of an aggregation.
 
 ```sigil
-|> having avg_val > 10 and samples >= 5
+|> HAVING avg_val > 10 and samples >= 5
 ```
-In the `having` stage, bare identifiers (like `avg_val`) resolve to the names defined in the `aggregate` stage.
+In the `HAVING` stage, bare identifiers (like `avg_val`) resolve to the names defined in the `AGGREGATE` stage.
 
-### map
+### MAP
 Transforms the output message structure.
 
 ```sigil
-|> map {
+|> MAP {
     let temp_c = (avg_val - 32) * 5 / 9;
     
     sensor_id = msg.sensor_id;
@@ -512,31 +514,31 @@ Transforms the output message structure.
     value     = temp_c
 }
 ```
-- **let bindings**: Define temporary variables for use within the map block. Use `;` to separate multiple bindings.
-- **assignments**: Define the fields of the output message. Use `;` to separate multiple assignments.
+- **let bindings**: Define temporary variables for use within the map block. Use `,` to separate multiple bindings.
+- **assignments**: Define the fields of the output message. Use `,` to separate multiple assignments.
 
 Bare identifiers resolve to aggregation names.
 
-### select
-Projects and optionally renames fields from the current message. Use `select` as a lightweight alternative to `map` when you only need to pick a subset of fields — no expressions, no let bindings.
+### SELECT
+Projects and optionally renames fields from the current message. Use `SELECT` as a lightweight alternative to `MAP` when you only need to pick a subset of fields — no expressions, no let bindings.
 
 ```sigil
-|> select [field1, alias: source_field, ...]
+|> SELECT [field1, alias: source_field, ...]
 ```
 
 **Two forms:**
 - `name` — keep the field as-is (pass-through, same name in output):
   ```sigil
-  |> select [device_id, ts, battery_mv]
+  |> SELECT [device_id, ts, battery_mv]
   ```
 - `alias: source` — rename `source` to `alias` in the output message:
   ```sigil
-  |> select [id: device_id, temp: temperature_celsius, ts: ts]
+  |> SELECT [id: device_id, temp: temperature_celsius, ts: ts]
   ```
 
-Both forms can be mixed freely in a single `select` stage:
+Both forms can be mixed freely in a single `SELECT` stage:
 ```sigil
-|> select [
+|> SELECT [
     id: device_id,
     ts,
     temp: temperature_celsius,
@@ -634,42 +636,24 @@ Valid only in `filter` and `having` stages.
 Hooks allow you to publish messages when a pipeline starts or stops.
 
 ```sigil
-pipeline my_pipe
-    @initially {
-        publish { event: "started", version: 1.0 }
-    }
+PIPELINE my_pipe
+    @INITIALLY { PUBLISH { event: "started", version: 1.0 } }
     
     // ... pipeline logic ...
     
-    @finally {
-        publish { event: "stopped" }
-    }
-end
-
-## Error Handling (on_error)
-
-The `on_error` clause configures how a pipeline handles processing failures. Without `on_error`, failures are logged at ERROR level and the message is lost.
-
-### Syntax
-
-```sigil
-pipeline my_pipeline
-    source from broker :: "topic"
-    |> ...stages...
-    |> sink to broker :: "output"
-    on_error: sink to broker :: "errors/topic"   // route to DLQ
-end
+    @FINALLY { PUBLISH { event: "stopped" } }
+;
 ```
 
 Or to silently discard failed messages:
 
 ```sigil
-    on_error: drop
+    ON_ERROR: DROP
 ```
 
 ### DLQ Envelope
 
-When `on_error: sink to ...` is used, failed messages are wrapped in an error envelope:
+When `ON_ERROR: SINK TO ...` is used, failed messages are wrapped in an error envelope:
 
 ```json
 {
@@ -686,11 +670,11 @@ When `on_error: sink to ...` is used, failed messages are wrapped in an error en
 The DLQ can use a different broker/transport than the main pipeline:
 
 ```sigil
-pipeline payments
-    source from mqtt_broker :: "payments/incoming"
-    |> sink to mqtt_broker :: "payments/processed"
-    on_error: sink to redis_broker :: "dlq:payments"
-end
+PIPELINE payments
+    SOURCE FROM mqtt_broker :: "payments/incoming"
+    |> SINK TO mqtt_broker :: "payments/processed"
+    ON_ERROR: SINK TO redis_broker :: "dlq:payments"
+;
 ```
 
 ## Retry Policy
@@ -700,19 +684,19 @@ The `retry` clause configures the publish retry behavior for a pipeline's sink o
 ### Syntax
 
 ```sigil
-pipeline my_pipeline
-    source from broker :: "topic"
-    |> sink to broker :: "output"
-    retry: 5 with backoff 500 ms
-end
+PIPELINE my_pipeline
+    SOURCE FROM broker :: "topic"
+    |> SINK TO broker :: "output"
+    RETRY: 5 WITH BACKOFF 500 MS
+;
 ```
 
-- **max_retries**: The maximum number of retry attempts (must be ≥ 1).
-- **backoff**: The base duration for exponential backoff (must be positive).
+- **MAX_RETRIES**: The maximum number of retry attempts (must be ≥ 1).
+- **BACKOFF**: The base duration for exponential backoff (must be positive).
 
 ### Default Behavior
 
-If no `retry` policy is specified, the default is **3 retries with a 100ms base backoff**.
+If no `RETRY` policy is specified, the default is **3 retries with a 100ms base backoff**.
 
 ### Exponential Backoff
 
@@ -720,16 +704,14 @@ The retry mechanism uses exponential backoff to avoid overwhelming the broker. T
 
 ## Stage Annotations
 
-
-
 Annotations can be used to emit diagnostic messages during the `sigil check` process.
 
 ```sigil
-|> @warn("This filter might be too restrictive")
-filter msg.value > 1000
+|> @WARN("This filter might be too restrictive")
+FILTER msg.value > 1000
 
-|> @error("Deprecated stage usage")
-deduplicate msg.id within 1s
+|> @ERROR("Deprecated stage usage")
+DEDUPLICATE msg.id WITHIN 1S
 ```
 
 ## Imports
@@ -737,8 +719,8 @@ deduplicate msg.id within 1s
 You can split your Sigil definitions across multiple files.
 
 ```sigil
-import "common_brokers.sigil"
-import "constants.sigil"
+IMPORT "common_brokers.sigil"
+IMPORT "constants.sigil"
 ```
 Importing a file merges its brokers, constants, and pipelines into the current model. Circular imports are automatically detected and prevented.
 
@@ -747,15 +729,15 @@ Importing a file merges its brokers, constants, and pipelines into the current m
 Pipelines can be connected by setting the `source` of one pipeline to the name of another.
 
 ```sigil
-pipeline p1
-    source from b :: "in"
-    |> sink to b :: "out"
-end
+PIPELINE p1
+    SOURCE FROM b :: "in"
+    |> SINK TO b :: "out"
+;
 
-pipeline p2
-    source from pipe p1
-    |> sink to b :: "final"
-end
+PIPELINE p2
+    SOURCE FROM PIPE p1
+    |> SINK TO b :: "final"
+;
 ```
 Messages emitted by `p1` (via its sink or route) are automatically fed into `p2`.
 
@@ -768,4 +750,29 @@ Messages emitted by `p1` (via its sink or route) are automatically fed into `p2`
 
 The following keywords are reserved and cannot be used as identifiers (broker names, pipeline names, etc.):
 
-`if`, `then`, `else`, `let`, `in`, `is`, `null`, `const`, `env`, `case`, `when`, `having`, `deduplicate`, `within`, `old`, `changed`, `forall`, `exists`, `initially`, `finally`, `publish`, `batch`, `import`, `route`, `default`, `warn`, `error`, `abs`, `round`, `len`, `lower`, `upper`, `floor`, `ceil`, `fmt`, `int`, `float`, `str`, `bool`, `end`, `from`, `to`, `pipe`, `source`, `sink`, `join`, `on`, `other`, `inner`, `left`, `type`, `schema`, `strict`, `lenient`, `on_error`, `flatten`, `distinct`, `throttle`, `sample`, `overflow`, `buffer`, `retry`, `backoff`, `with`, `over`
+Expression keywords (lowercase):
+`if`, `then`, `else`, `let`, `in`, `is`, `null`, `const`, `env`, `case`, `when`, `having`, `old`, `changed`, `forall`, `exists`, `initially`, `finally`, `publish`, `default`, `warn`, `error`, `abs`, `round`, `len`, `lower`, `upper`, `floor`, `ceil`, `fmt`
+
+Structural keywords (UPPERCASE):
+`BROKER`, `PIPELINE`, `SOURCE`, `SINK`, `FILTER`, `MAP`, `JOIN`, `ROUTE`, `AGGREGATE`, `ACCUMULATE`, `HAVING`, `WINDOW`, `GROUP_BY`, `DEDUPLICATE`, `RATE`, `FLATTEN`, `DISTINCT`, `THROTTLE`, `SAMPLE`, `MODEL`, `SCHEMA`, `PREDICT`, `DEBUG`, `TEE`, `FANOUT`, `ENRICH`
+
+Structural clause keywords:
+`FROM`, `TO`, `PIPE`, `ON`, `OTHER`, `INNER`, `LEFT`, `TYPE`, `WITH`, `OVER`, `WITHIN`, `BATCH`, `RETRY`, `BACKOFF`, `ON_ERROR`
+
+Annotation keywords:
+`@WARN`, `@ERROR`, `@INITIALLY`, `@FINALLY`, `PUBLISH`
+
+Type keywords:
+`int`, `float`, `str`, `bool`
+
+Transport values:
+`MQTT`, `REDIS`, `AMQP`, `KAFKA`
+
+Action values:
+`DROP`, `WARN`, `ERROR`
+
+Runtime values:
+`ONNX`, `SKLEARN`, `TORCH`, `TFLITE`, `CUSTOM`
+
+Strictness values:
+`STRICT`, `LENIENT`
