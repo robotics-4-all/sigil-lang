@@ -1,4 +1,5 @@
 import pytest
+from textx.exceptions import TextXSyntaxError
 
 from sigil.language import CircularImportError, build_metamodel, parse, parse_string
 
@@ -149,7 +150,7 @@ def test_expression_arithmetic():
 
 
 def test_parse_error_gives_message():
-    with pytest.raises(Exception):
+    with pytest.raises(TextXSyntaxError):
         parse_string("broker { }")
 
 
@@ -377,7 +378,7 @@ def test_map_multi_assignment_with_arithmetic():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 2
     assert m.mappings[0].target == "total"
     assert m.mappings[1].target == "samples"
@@ -403,7 +404,7 @@ def test_map_three_assignments_with_mixed_arithmetic():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 3
     assert [ma.target for ma in m.mappings] == ["mean", "total", "count"]
 
@@ -420,7 +421,7 @@ def test_map_single_assignment_no_semicolon():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 1
     assert m.mappings[0].target == "result"
 
@@ -441,7 +442,7 @@ def test_map_assignment_with_field_ref_arithmetic():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 3
     assert [ma.target for ma in m.mappings] == ["cost", "tax", "label"]
 
@@ -471,7 +472,7 @@ def test_if_then_else_in_map():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -514,7 +515,7 @@ def test_null_coalesce_in_map():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -571,7 +572,7 @@ def test_scalar_func_round_in_map():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -586,7 +587,7 @@ def test_scalar_func_floor_in_map():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -604,7 +605,7 @@ def test_let_binding_single():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 1
     assert len(m.mappings) == 1
     assert m.bindings[0].name == "ratio"
@@ -625,7 +626,7 @@ def test_let_binding_chained():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 2
 
 
@@ -640,7 +641,7 @@ def test_let_binding_none():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 0
 
 
@@ -767,7 +768,7 @@ def test_case_single_arm():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -789,7 +790,7 @@ def test_case_multiple_arms():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -804,7 +805,7 @@ def test_case_no_else():
     ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -930,7 +931,7 @@ def test_forall_window_implicit():
     ;
     """
     model = parse_string(src)
-    having = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
@@ -977,7 +978,7 @@ def test_exists_window_implicit():
     ;
     """
     model = parse_string(src)
-    having = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
@@ -994,7 +995,7 @@ def test_forall_and_exists_combined():
     ;
     """
     model = parse_string(src)
-    having = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
@@ -1295,7 +1296,7 @@ def test_route_without_default():
     BROKER b HOST: "h" PORT: 1 ;
     PIPELINE p
         SOURCE FROM b :: "a"
-        |> ROUTE 
+        |> ROUTE
             when msg.x > 0 => SINK TO b :: "pos"
         ;
     ;
@@ -1311,7 +1312,7 @@ def test_route_no_sink():
     BROKER b HOST: "h" PORT: 1 ;
     PIPELINE p
         SOURCE FROM b :: "a"
-        |> ROUTE 
+        |> ROUTE
             when msg.x > 0 => SINK TO b :: "pos"
         ;
     ;
@@ -1645,7 +1646,7 @@ class TestAccumulateStage:
     """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        accum = [s for s in stages if s.__class__.__name__ == "AccumulateStage"][0]
+        accum = next(s for s in stages if s.__class__.__name__ == "AccumulateStage")
         assert len(accum.assignments) == 1
         a = accum.assignments[0]
         assert a.name == "smooth"
@@ -1667,9 +1668,9 @@ class TestAccumulateStage:
         ;
     """
         model = parse_string(src)
-        accum = [
+        accum = next(
             s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        )
         a = accum.assignments[0]
         assert a.name == "running"
         assert a.func == "cumsum"
@@ -1689,9 +1690,9 @@ class TestAccumulateStage:
         ;
     """
         model = parse_string(src)
-        accum = [
+        accum = next(
             s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        )
         a = accum.assignments[0]
         assert a.name == "change"
         assert a.func == "delta"
@@ -1715,9 +1716,9 @@ class TestAccumulateStage:
         ;
     """
         model = parse_string(src)
-        accum = [
+        accum = next(
             s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        )
         assert len(accum.assignments) == 3
         names = [a.name for a in accum.assignments]
         assert names == ["smooth", "running", "change"]
@@ -2710,7 +2711,7 @@ class TestMultiWindow:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        w = [s for s in stages if s.__class__.__name__ == "WindowStage"][0]
+        w = next(s for s in stages if s.__class__.__name__ == "WindowStage")
         assert w.wname is None or w.wname == ""
 
     def test_parse_single_named_window(self):
@@ -2726,7 +2727,7 @@ class TestMultiWindow:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        w = [s for s in stages if s.__class__.__name__ == "WindowStage"][0]
+        w = next(s for s in stages if s.__class__.__name__ == "WindowStage")
         assert w.wname == "short"
 
     def test_parse_multiple_named_windows(self):
@@ -2766,7 +2767,7 @@ class TestMultiWindow:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
         assert agg.assignments[0].window_ref == "short"
 
     def test_parse_agg_without_over(self):
@@ -2782,7 +2783,7 @@ class TestMultiWindow:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
         assert agg.assignments[0].window_ref is None or agg.assignments[0].window_ref == ""
 
     def test_parse_multi_window_mixed_types(self):
@@ -2828,7 +2829,7 @@ class TestMultiWindow:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
         assert len(agg.assignments) == 3
         assert agg.assignments[0].window_ref == "short"
         assert agg.assignments[1].window_ref == "long"
@@ -3037,7 +3038,7 @@ class TestMatchExpr:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         # Navigate expression tree to the MatchExpr atom
         match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
@@ -3061,7 +3062,7 @@ class TestMatchExpr:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert len(match_node.arms) == 2
@@ -3084,7 +3085,7 @@ class TestMatchExpr:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert len(match_node.arms) == 1
@@ -3108,7 +3109,7 @@ class TestMatchExpr:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         arm0 = match_node.arms[0]
@@ -3133,7 +3134,7 @@ class TestMatchExpr:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert match_node.subject is not None
@@ -3195,7 +3196,7 @@ class TestUserFuncCall:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.__class__.__name__ == "UserFuncCall"
         assert atom.name == "double"
@@ -3213,7 +3214,7 @@ class TestUserFuncCall:
         ;
         """
         model = parse_string(src)
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.__class__.__name__ == "UserFuncCall"
         assert atom.name == "clamp"
@@ -3247,7 +3248,7 @@ class TestParseFile:
 
     def test_parse_file_nonexistent_raises(self):
         """parse() with a non-existent path raises an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(FileNotFoundError):
             parse("/tmp/_sigil_nonexistent_file_12345.sigil")
 
     def test_import_resolves_broker_from_helper(self):
@@ -3294,7 +3295,7 @@ class TestParseFile:
                     ";\n"
                 )
 
-            with pytest.raises(FileNotFoundError, match="nonexistent.sigil"):
+            with pytest.raises(FileNotFoundError, match=r"nonexistent\.sigil"):
                 parse(main)
 
     def test_circular_import_direct(self):

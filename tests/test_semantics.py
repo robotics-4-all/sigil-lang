@@ -1,4 +1,5 @@
 import pytest
+from textx.exceptions import TextXSyntaxError
 
 from sigil.language import parse_string
 from sigil.semantics import SemanticValidationError, validate, validate_or_raise
@@ -1707,7 +1708,7 @@ def test_schema_empty_fields():
         |> SINK TO b :: "out"
     ;
     """
-    with pytest.raises(Exception):
+    with pytest.raises(TextXSyntaxError):
         _model(src)
 
 

@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import json
 import os
@@ -170,10 +171,8 @@ def _make_redis_sub(sink_topic: str):
         while not stop_event.is_set():
             msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.1)
             if msg and msg["type"] == "message":
-                try:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
                     received.append(json.loads(msg["data"]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
         ps.unsubscribe()
         ps.close()
 
@@ -1794,7 +1793,7 @@ class TestMQTTDistinct:
             assert ids == ["A", "B", "C"]
 
             # The A message should have value 1 (the first one)
-            a_msg = [m for m in received if m["sensor_id"] == "A"][0]
+            a_msg = next(m for m in received if m["sensor_id"] == "A")
             assert a_msg["value"] == 1
 
         finally:
