@@ -63,7 +63,8 @@ def test_generated_app_imports_pipeline():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        app_code = open(os.path.join(tmpdir, "app.py")).read()
+        with open(os.path.join(tmpdir, "app.py")) as f:
+            app_code = f.read()
         assert "from pipelines.temp_avg import TempAvgPipeline" in app_code
         assert "TempAvgPipeline()" in app_code
 
@@ -72,7 +73,8 @@ def test_generated_pipeline_has_class():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert "class TempAvgPipeline:" in code
         assert "def start(self):" in code
         assert "def stop(self" in code
@@ -83,7 +85,8 @@ def test_generated_pipeline_contains_filter():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert "_get_nested(msg, 'value')" in code
         assert "(-40" in code
         assert "85" in code
@@ -93,7 +96,8 @@ def test_generated_pipeline_contains_aggregation():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert 'aggregated["avg_val"]' in code
         assert 'aggregated["n"]' in code
         assert "statistics.mean" in code
@@ -104,7 +108,8 @@ def test_generated_pipeline_contains_mapping():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert 'result["average"]' in code
         assert 'result["samples"]' in code
 
@@ -113,7 +118,8 @@ def test_generated_pipeline_broker_config():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert '"localhost"' in code
         assert "1883" in code
         assert '"mqtt.cloud.io"' in code
@@ -128,7 +134,8 @@ def test_generated_pipeline_compiles():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         compile(code, "<test>", "exec")
 
 
@@ -136,7 +143,8 @@ def test_generated_app_compiles():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "app.py")).read()
+        with open(os.path.join(tmpdir, "app.py")) as f:
+            code = f.read()
         compile(code, "<test>", "exec")
 
 
@@ -350,7 +358,8 @@ def test_let_binding_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "ratio = " in code
         ratio_pos = code.index("ratio = ")
         result_pos = code.index('result["result"]')
@@ -362,7 +371,8 @@ def test_generated_pipeline_uses_commlib():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "temp_avg.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "temp_avg.py")) as f:
+            code = f.read()
         assert "from commlib.transports.mqtt import" in code
         assert "Subscriber" in code
         assert "Publisher" in code
@@ -375,7 +385,8 @@ def test_generated_requirements_uses_commlib():
     model = parse_string(SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        reqs = open(os.path.join(tmpdir, "requirements.txt")).read()
+        with open(os.path.join(tmpdir, "requirements.txt")) as f:
+            reqs = f.read()
         assert "commlib-py" in reqs
         assert "paho-mqtt" not in reqs
 
@@ -395,7 +406,8 @@ def test_generated_pipeline_redis_transport():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "redis_pipe.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "redis_pipe.py")) as f:
+            code = f.read()
         assert "from commlib.transports.redis import" in code
         assert '"redis.local"' in code
         assert "6379" in code
@@ -422,7 +434,8 @@ def test_generated_pipeline_cross_transport():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "bridge.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "bridge.py")) as f:
+            code = f.read()
         assert "from commlib.transports.mqtt import" in code
         assert "from commlib.transports.redis import" in code
         assert "SourceConnParams" in code
@@ -441,7 +454,8 @@ def test_generated_pipeline_default_transport():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "from commlib.transports.mqtt import" in code
         compile(code, "<test>", "exec")
 
@@ -459,7 +473,8 @@ def test_const_inlined_in_filter():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "42" in code
         compile(code, "<test>", "exec")
 
@@ -479,7 +494,8 @@ def test_const_inlined_in_map():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "1.5" in code
         compile(code, "<test>", "exec")
 
@@ -496,7 +512,8 @@ def test_env_ref_generates_import_os():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "import os" in code
         compile(code, "<test>", "exec")
 
@@ -515,7 +532,8 @@ def test_case_in_map_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "'high'" in code
         assert "'low'" in code
         compile(code, "<test>", "exec")
@@ -536,7 +554,8 @@ def test_having_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "aggregated['n']" in code
         assert "5" in code
         compile(code, "<test>", "exec")
@@ -554,7 +573,8 @@ def test_dedup_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_dedup_seen" in code
         assert "_dedup_ttl" in code
         assert "30" in code
@@ -573,7 +593,8 @@ def test_temporal_codegen_has_prev_msg():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "self._prev_msg = {}" in code
         assert "_get_nested(self._prev_msg" in code
         compile(code, "<test>", "exec")
@@ -596,7 +617,8 @@ def test_forall_compiles_to_all():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "all(" in code
         assert "for m in messages" in code
         compile(code, "<test>", "exec")
@@ -614,7 +636,8 @@ def test_exists_with_collection_compiles_to_any():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "any(" in code
         assert "_get_nested(msg, 'tags')" in code
         compile(code, "<test>", "exec")
@@ -632,7 +655,7 @@ def test_forall_expression_compiler():
     ;
     """
     model = parse_string(src)
-    having = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     code = compile_expr(having.condition, ExprContext.HAVING)
     assert "all(m > 0" in code
     assert "for m in messages" in code
@@ -669,7 +692,8 @@ def test_initially_hook_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert '"status"' in code
         assert "'online'" in code
         compile(code, "<test>", "exec")
@@ -687,7 +711,8 @@ def test_finally_hook_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert '"status"' in code
         assert "'offline'" in code
         compile(code, "<test>", "exec")
@@ -706,7 +731,8 @@ def test_both_hooks_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "'online'" in code
         assert "'offline'" in code
         assert "'1.0'" in code
@@ -725,7 +751,8 @@ def test_initially_with_env_ref_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "import os" in code
         assert "os.environ.get" in code
         compile(code, "<test>", "exec")
@@ -745,7 +772,8 @@ def test_sink_batch_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_batch_buffer" in code
         assert "_batch_size" in code
         assert "50" in code
@@ -764,7 +792,8 @@ def test_sink_batch_size_only_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_batch_buffer" in code
         assert "_batch_size" in code
         assert "_schedule_batch_flush" not in code
@@ -776,13 +805,14 @@ def test_sink_csv_format_codegen():
     BROKER b HOST: "h" PORT: 1 ;
     PIPELINE p
         SOURCE FROM b :: "a"
-        |> SINK TO b :: "b" FORMAT: csv 
+        |> SINK TO b :: "b" FORMAT: csv
     ;
     """
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "import csv" in code
         assert "import io" in code
         assert "DictWriter" in code
@@ -794,13 +824,14 @@ def test_sink_raw_format_codegen():
     BROKER b HOST: "h" PORT: 1 ;
     PIPELINE p
         SOURCE FROM b :: "a"
-        |> SINK TO b :: "b" FORMAT: raw 
+        |> SINK TO b :: "b" FORMAT: raw
     ;
     """
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "str(msg)" in code
         compile(code, "<test>", "exec")
 
@@ -816,7 +847,8 @@ def test_sink_no_batch_no_format_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_batch_buffer" not in code
         assert "DictWriter" not in code
         compile(code, "<test>", "exec")
@@ -840,7 +872,8 @@ def test_pipe_source_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "downstream.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "downstream.py")) as f:
+            code = f.read()
         assert "_downstream_listeners" in code
         assert "Subscriber" not in code
         compile(code, "<test>", "exec")
@@ -861,7 +894,8 @@ def test_pipe_source_app_wiring():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        app_code = open(os.path.join(tmpdir, "app.py")).read()
+        with open(os.path.join(tmpdir, "app.py")) as f:
+            app_code = f.read()
         assert "_downstream_listeners" in app_code
         assert "_on_message" in app_code
         compile(app_code, "<test>", "exec")
@@ -882,7 +916,8 @@ def test_pipe_source_no_subscriber():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "downstream.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "downstream.py")) as f:
+            code = f.read()
         assert "self._subscriber" not in code
 
 
@@ -903,7 +938,8 @@ def test_route_codegen_compiles():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "<test>", "exec")
 
 
@@ -921,7 +957,8 @@ def test_route_codegen_has_route_publishers():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_route_pub_1" in code
         assert "_route_pub_default" in code
 
@@ -942,7 +979,8 @@ def test_route_codegen_has_condition():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "if " in code
         assert "elif " in code
         compile(code, "<test>", "exec")
@@ -962,7 +1000,8 @@ def test_route_no_single_publisher():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "self._publisher" not in code
 
 
@@ -990,10 +1029,12 @@ def test_annotation_does_not_affect_codegen():
     model_ann = parse_string(annotated_src)
     with tempfile.TemporaryDirectory() as tmpdir_base:
         generate(model_base, tmpdir_base)
-        code_base = open(os.path.join(tmpdir_base, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir_base, "pipelines", "p.py")) as f:
+            code_base = f.read()
     with tempfile.TemporaryDirectory() as tmpdir_ann:
         generate(model_ann, tmpdir_ann)
-        code_ann = open(os.path.join(tmpdir_ann, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir_ann, "pipelines", "p.py")) as f:
+            code_ann = f.read()
     assert code_base == code_ann
 
 
@@ -1550,7 +1591,7 @@ class TestHardeningCodegen:
             |> SINK TO b :: "out"
         ;
         """
-        app_code, pipe_code = self._gen_code(src)
+        _app_code, pipe_code = self._gen_code(src)
         assert "def drain(self):" in pipe_code
         assert "_flush_window()" in pipe_code
         compile(pipe_code, "drain_test.py", "exec")
@@ -2106,7 +2147,7 @@ class TestMatchExprCompilation:
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        m = [s for s in stages if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in stages if s.__class__.__name__ == "MapStage")
         return m.mappings[0].value
 
     def test_match_single_arm_compiles_to_ternary(self):
@@ -2255,7 +2296,7 @@ class TestUserFuncCallCompilation:
         """
         model = parse_string(src)
         func_defs = {f.name: f for f in model.functions}
-        m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         code = compile_expr(m.mappings[0].value, ExprContext.MAP, func_defs=func_defs)
         assert "_get_nested(msg, 'value')" in code
         assert "* 2" in code
@@ -2297,7 +2338,8 @@ class TestUserFuncCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "func_filter.py", "exec")
             # Inlined expression should appear in generated code
             assert "* 2" in code
@@ -2316,7 +2358,8 @@ class TestUserFuncCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "func_map.py", "exec")
             assert "* 3" in code
 
@@ -2336,7 +2379,8 @@ class TestUserFuncCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "multi_func.py", "exec")
             assert "* 2" in code
             assert "+ 10" in code
@@ -2362,7 +2406,8 @@ class TestPipelineLetCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             assert "threshold = " in code
             compile(code, "let_single.py", "exec")
 
@@ -2381,7 +2426,8 @@ class TestPipelineLetCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             assert "low = " in code
             assert "high = " in code
             # Let bindings should appear before filter logic
@@ -2404,7 +2450,8 @@ class TestPipelineLetCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             assert "scaled = " in code
             assert "1.8" in code
             assert "32" in code
@@ -2436,7 +2483,8 @@ class TestMatchExprCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "match_map.py", "exec")
             # Should contain ternary pattern
             assert "if" in code
@@ -2458,7 +2506,8 @@ class TestMatchExprCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "match_filter.py", "exec")
 
     def test_match_many_arms_generates_valid_code(self):
@@ -2482,7 +2531,8 @@ class TestMatchExprCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "match_many_arms.py", "exec")
             assert "'one'" in code
             assert "'four'" in code
@@ -2510,7 +2560,8 @@ class TestCombinedFeaturesCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "func_and_let.py", "exec")
             assert "threshold = " in code
             assert "* 2" in code
@@ -2534,7 +2585,8 @@ class TestCombinedFeaturesCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "match_and_let.py", "exec")
             assert "base = " in code
             assert "'alpha'" in code
@@ -2561,7 +2613,8 @@ class TestCombinedFeaturesCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "all_three.py", "exec")
             assert "factor = " in code
             assert "* 100" in code
@@ -2589,7 +2642,8 @@ class TestCombinedFeaturesCodegen:
         model = parse_string(src)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate(model, tmpdir)
-            code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
             compile(code, "func_with_match.py", "exec")
             assert "* -1" in code or "* (- 1)" in code or "-1" in code
             assert "'good'" in code
@@ -2737,7 +2791,7 @@ class TestExplainSchemas:
         assert "value: float" in output
         # value is not optional, no trailing ?
         lines = output.split("\n")
-        value_line = [l for l in lines if "value:" in l][0]
+        value_line = next(line for line in lines if "value:" in line)
         assert not value_line.strip().endswith("?")
 
     def test_explain_schema_nested_object_type(self):
@@ -3489,7 +3543,8 @@ def test_group_by_multiple_fields_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "group_by_multi.py", "exec")
         assert "'region'" in code
         assert "'zone'" in code
@@ -3513,7 +3568,8 @@ def test_const_string_and_bool_codegen():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "const_str_bool.py", "exec")
         assert "'hello'" in code
         assert "True" in code
@@ -3617,7 +3673,7 @@ class TestExpressionCompilerCoverage:
 
     def test_field_ref_default_fallthrough(self):
         """FieldRef with no matching context (expressions.py line 300)."""
-        expr = self._parse_filter_expr("msg.x > 0")
+        self._parse_filter_expr("msg.x > 0")
         # Compile in a context that doesn't match any special case
         # The FieldRef for msg.x in FILTER context is handled, but
         # a multi-segment non-msg ref in a non-standard context falls through
@@ -3678,7 +3734,8 @@ def test_predict_pipeline_ctx_fields():
     model = parse_string(PREDICT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "sensor_check.py")) as f:
+            code = f.read()
         assert "import numpy as np" in code
         assert "import onnxruntime as ort" in code
 
@@ -3687,7 +3744,8 @@ def test_predict_model_loading_onnx():
     model = parse_string(PREDICT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "sensor_check.py")) as f:
+            code = f.read()
         assert "ort.InferenceSession" in code
         assert "_model_anomaly_detector" in code
 
@@ -3696,7 +3754,8 @@ def test_predict_inference_block_onnx():
     model = parse_string(PREDICT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "sensor_check.py")) as f:
+            code = f.read()
         assert "_feat_anomaly_detector" in code
         assert 'msg["anomaly_score"]' in code
         assert 'msg["is_anomaly"]' in code
@@ -3706,7 +3765,8 @@ def test_predict_generated_compiles_onnx():
     model = parse_string(PREDICT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "sensor_check.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "sensor_check.py")) as f:
+            code = f.read()
         compile(code, "sensor_check.py", "exec")
 
 
@@ -3723,7 +3783,8 @@ def test_predict_generated_compiles_sklearn():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "p.py", "exec")
         assert "import joblib" in code
         assert "joblib.load" in code
@@ -3742,7 +3803,8 @@ def test_predict_generated_compiles_torch():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "p.py", "exec")
         assert "import torch" in code
         assert "torch.jit.load" in code
@@ -3761,7 +3823,8 @@ def test_predict_generated_compiles_tflite():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "p.py", "exec")
         assert "import tflite_runtime" in code
 
@@ -3779,7 +3842,8 @@ def test_predict_generated_compiles_custom():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "p.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+            code = f.read()
         compile(code, "p.py", "exec")
         assert "importlib.util" in code
 
@@ -3788,7 +3852,8 @@ def test_requirements_includes_ml_deps():
     model = parse_string(PREDICT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        reqs = open(os.path.join(tmpdir, "requirements.txt")).read()
+        with open(os.path.join(tmpdir, "requirements.txt")) as f:
+            reqs = f.read()
         assert "numpy" in reqs
         assert "onnxruntime" in reqs
 
@@ -3805,7 +3870,8 @@ def test_requirements_no_ml_deps_without_predict():
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        reqs = open(os.path.join(tmpdir, "requirements.txt")).read()
+        with open(os.path.join(tmpdir, "requirements.txt")) as f:
+            reqs = f.read()
         assert "numpy" not in reqs
         assert "onnxruntime" not in reqs
 
@@ -3834,7 +3900,8 @@ def test_no_sink_pipeline_generates():
     model = parse_string(NO_SINK_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "hub.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "hub.py")) as f:
+            code = f.read()
         publish_method = code.split("def _publish_message")[1].split("def ")[0]
         assert "_notify_downstream" in publish_method
         assert "_publish_with_retry" not in publish_method
@@ -3844,7 +3911,8 @@ def test_no_sink_pipeline_compiles():
     model = parse_string(NO_SINK_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "hub.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "hub.py")) as f:
+            code = f.read()
         compile(code, "hub.py", "exec")
 
 
@@ -3852,7 +3920,8 @@ def test_no_sink_pipeline_no_publisher_import():
     model = parse_string(NO_SINK_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "hub.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "hub.py")) as f:
+            code = f.read()
         assert "SinkConnParams" not in code
         assert "self._publisher" not in code
 
@@ -3887,7 +3956,8 @@ def test_select_stage_generated_code():
     model = parse_string(SELECT_SRC)
     with tempfile.TemporaryDirectory() as tmpdir:
         generate(model, tmpdir)
-        code = open(os.path.join(tmpdir, "pipelines", "sel.py")).read()
+        with open(os.path.join(tmpdir, "pipelines", "sel.py")) as f:
+            code = f.read()
         compile(code, "sel.py", "exec")
         assert '"id"' in code
         assert '"value"' in code
@@ -3914,7 +3984,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_get_nested(msg, 'items')[0]" in code
         compile(code, "<string>", "exec")
 
@@ -3933,7 +4004,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_get_nested(msg, 'readings')[-1]" in code
 
 
@@ -3951,7 +4023,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_get_nested(msg, 'data', 'items')[2]" in code
 
 
@@ -3974,7 +4047,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "logger.debug" in code
         compile(code, "<string>", "exec")
 
@@ -3993,7 +4067,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "CHECK" in code
         assert "logger.debug" in code
 
@@ -4013,7 +4088,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert code.count("logger.debug") >= 2
 
 
@@ -4037,7 +4113,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "sorted(" in code
         assert "p95" in code
         compile(code, "<string>", "exec")
@@ -4058,7 +4135,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "set(" in code
         assert "n_dev" in code
         compile(code, "<string>", "exec")
@@ -4079,7 +4157,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "50" in code
 
 
@@ -4105,7 +4184,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_validate_msg" in code
         compile(code, "<string>", "exec")
 
@@ -4124,7 +4204,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "'id'" in code or "id" in code
         assert "'value'" in code or "value" in code
         compile(code, "<string>", "exec")
@@ -4144,7 +4225,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "drop" in code or "return" in code
         compile(code, "<string>", "exec")
 
@@ -4172,7 +4254,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_do_enrich_meta" in code
         assert "urllib.request" in code
         compile(code, "<string>", "exec")
@@ -4196,7 +4279,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_do_enrich_info" in code
         assert "unknown" in code
         compile(code, "<string>", "exec")
@@ -4223,7 +4307,8 @@ PIPELINE p
     model = parse_string(src)
     with tempfile.TemporaryDirectory() as d:
         generate(model, d)
-        code = open(os.path.join(d, "pipelines", "p.py")).read()
+        with open(os.path.join(d, "pipelines", "p.py")) as f:
+            code = f.read()
         assert "_do_enrich_first" in code
         assert "_do_enrich_second" in code
         compile(code, "<string>", "exec")
