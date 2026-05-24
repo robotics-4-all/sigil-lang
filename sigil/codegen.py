@@ -541,8 +541,10 @@ def _build_pipeline_ctx(
         elif cls == "AggregateStage":
             ctx.has_aggregate = True
             for agg in stage.assignments:
-                keys = extract_field_keys(agg.field) if agg.field else None
-                keys_str = ", ".join(repr(k) for k in keys) if keys else ""
+                agg_keys: list[str] = []
+                if agg.field:
+                    agg_keys = extract_field_keys(agg.field)
+                keys_str = ", ".join(repr(k) for k in agg_keys)
                 param_code = None
                 if agg.param is not None:
                     param_code = compile_expr(
@@ -555,7 +557,7 @@ def _build_pipeline_ctx(
                     AggregationCtx(
                         name=agg.name,
                         func=agg.func,
-                        field_keys=keys,
+                        field_keys=agg_keys,
                         field_keys_str=keys_str,
                         type_annotation=agg.type if agg.type else None,
                         window_ref=agg.window_ref if agg.window_ref else None,
@@ -779,7 +781,9 @@ def _to_class_name(snake: str) -> str:
 
 
 def _dur_to_secs(dur) -> float:
-    return dur.value * UNIT_MULTIPLIERS.get(dur.unit, 1)
+    mult = UNIT_MULTIPLIERS.get(dur.unit, 1)
+    result: float = dur.value * mult
+    return result
 
 
 def _build_raw_const_map(model) -> dict[str, str]:

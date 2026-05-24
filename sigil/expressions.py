@@ -74,7 +74,7 @@ def compile_expr(
     cls = node.__class__.__name__
 
     # Helper to recurse with same context
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if cls == "Expression":
@@ -209,12 +209,12 @@ def compile_expr(
     raise ValueError(f"Unknown expression node: {cls}")
 
 
-def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
+def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Compile case { when c1 => r1  when c2 => r2  else => r_else }
     into nested Python ternary: (r1 if c1 else (r2 if c2 else r_else))
     """
 
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if not node.arms:
@@ -231,12 +231,12 @@ def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
     return result
 
 
-def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
+def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Compile match subject { case p1 => r1  case p2 => r2  else => d }
     into nested Python ternary: (r1 if subject == p1 else (r2 if subject == p2 else d))
     """
 
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if not node.arms:
@@ -254,7 +254,7 @@ def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
     return result
 
 
-def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None):
+def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Inline user-defined function: celsius(msg.t) → ((msg.t - 32) * 5 / 9)"""
     if not func_defs or node.name not in func_defs:
         raise ValueError(f"Unknown function: {node.name}")
@@ -365,7 +365,7 @@ def _compile_field_ref(
     return base
 
 
-def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map, func_defs=None):
+def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map, func_defs=None) -> str:
     var = node.var
     inner_locals = set(local_names) if local_names else set()
     inner_locals.add(var)
@@ -388,7 +388,7 @@ def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map, func_
 
 
 def extract_field_keys(field_ref) -> list[str]:
-    segs = field_ref.segments
+    segs: list[str] = field_ref.segments
     if segs[0] == "msg" and len(segs) > 1:
         return segs[1:]
     return segs
