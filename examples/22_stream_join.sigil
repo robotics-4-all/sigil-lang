@@ -1,12 +1,12 @@
 // Example 22: Stream Join — Enrich orders with customer data
 //
-// Demonstrates the join stage which merges messages from two
-// different topics based on a matching key within a time window.
+// Demonstrates the JOIN stage which merges messages from two
+// different topics based on a matching key within a time WINDOW.
 // After joining, both `msg` (primary) and `other` (joined) fields
 // are available in downstream stages.
 //
 // Join syntax:
-//   |> join BROKER :: "topic"
+//   |> JOIN BROKER :: "topic"
 //       on msg.key == other.key
 //       within DURATION
 //       type: inner | left
@@ -15,24 +15,24 @@
 // The `??` (null-coalesce) operator provides defaults for
 // potentially missing fields from the joined stream.
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline enrich_orders
-    source from local :: "orders/new"
-    |> join local :: "customers/profiles"
-        on msg.customer_id == other.id
-        within 30 s
-        type: inner
-    end
-    |> filter other.active == true
-    |> map {
-        order_id = msg.order_id;
-        customer_name = other.name ?? "unknown";
-        customer_email = other.email;
+PIPELINE enrich_orders
+    SOURCE FROM local :: "orders/new"
+    |> JOIN local :: "customers/profiles"
+        ON msg.customer_id == other.id
+        WITHIN 30 s
+        TYPE: inner
+    ;
+    |> FILTER other.active == true
+    |> MAP {
+        order_id = msg.order_id,
+        customer_name = other.name ?? "unknown",
+        customer_email = other.email,
         amount = msg.amount
     }
-    |> sink to local :: "orders/enriched"
-end
+    |> SINK TO local :: "orders/enriched"
+;

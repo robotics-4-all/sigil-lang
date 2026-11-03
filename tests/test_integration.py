@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import json
 import os
@@ -9,8 +10,8 @@ import uuid
 
 import pytest
 
-from sigil.language import parse_string
 from sigil.codegen import generate
+from sigil.language import parse_string
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
@@ -155,9 +156,10 @@ def _make_redis_sub(sink_topic: str):
     to avoid the commlib Redis stop() hang.
     Returns (subscriber_thread, received_list, stop_event).
     """
-    import redis
     import json
     import threading
+
+    import redis
 
     r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
     received = []
@@ -169,10 +171,8 @@ def _make_redis_sub(sink_topic: str):
         while not stop_event.is_set():
             msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.1)
             if msg and msg["type"] == "message":
-                try:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
                     received.append(json.loads(msg["data"]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
         ps.unsubscribe()
         ps.close()
 
@@ -186,8 +186,9 @@ def _make_redis_pub(source_topic: str):
     Create a Redis publisher via direct redis-py.
     Returns a publish(msg_dict) callable and a close() callable.
     """
-    import redis
     import json
+
+    import redis
 
     r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 
@@ -369,15 +370,15 @@ class TestMQTTPassthrough:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline passthrough
-            source from b :: "{src_topic}"
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE passthrough
+            SOURCE FROM b :: "{src_topic}"
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "passthrough")
@@ -426,16 +427,16 @@ class TestMQTTFilter:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline filtered
-            source from b :: "{src_topic}"
-            |> filter msg.value > 20
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE filtered
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 20
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "filtered")
@@ -461,9 +462,7 @@ class TestMQTTFilter:
 
             time.sleep(1.0)  # extra wait to confirm no false positives
 
-            assert len(received) == 2, (
-                f"Expected 2 messages, got {len(received)}: {received}"
-            )
+            assert len(received) == 2, f"Expected 2 messages, got {len(received)}: {received}"
 
             values = sorted([m["value"] for m in received])
             assert values == [25, 50]
@@ -477,7 +476,7 @@ class TestMQTTFilter:
 
 @mqtt_available
 class TestMQTTWindowAggregate:
-    """Tumbling window + aggregate: collect messages, flush aggregated result."""
+    """Tumbling WINDOW + AGGREGATE: collect messages, flush aggregated result."""
 
     def test_tumbling_window_aggregation(self):
         uid = _uid()
@@ -485,21 +484,21 @@ class TestMQTTWindowAggregate:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline windowed
-            source from b :: "{src_topic}"
-            |> window tumbling(1 s)
-            |> aggregate {{
-                avg_val = avg(msg.value)
-                total   = sum(msg.value)
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE windowed
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
+                avg_val = avg(msg.value),
+                total   = sum(msg.value),
                 n       = count()
             }}
-            |> sink to b :: "{snk_topic}"
-        end
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "windowed")
@@ -521,9 +520,7 @@ class TestMQTTWindowAggregate:
             while len(received) < 1 and time.time() < deadline:
                 time.sleep(0.1)
 
-            assert len(received) >= 1, (
-                f"Expected at least 1 aggregate, got {len(received)}"
-            )
+            assert len(received) >= 1, f"Expected at least 1 aggregate, got {len(received)}"
 
             agg = received[0]
             assert agg["avg_val"] == pytest.approx(25.0)
@@ -549,24 +546,24 @@ class TestMQTTMapStage:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline mapped
-            source from b :: "{src_topic}"
-            |> window tumbling(1 s)
-            |> aggregate {{
-                avg_val = avg(msg.value)
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE mapped
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
+                avg_val = avg(msg.value),
                 n       = count()
             }}
-            |> map {{
-                average = avg_val;
+            |> MAP {{
+                average = avg_val,
                 samples = n
             }}
-            |> sink to b :: "{snk_topic}"
-        end
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "mapped")
@@ -588,9 +585,7 @@ class TestMQTTMapStage:
             while len(received) < 1 and time.time() < deadline:
                 time.sleep(0.1)
 
-            assert len(received) >= 1, (
-                f"Expected at least 1 result, got {len(received)}"
-            )
+            assert len(received) >= 1, f"Expected at least 1 result, got {len(received)}"
 
             result = received[0]
             assert "average" in result
@@ -609,7 +604,7 @@ class TestMQTTMapStage:
 
 @mqtt_available
 class TestMQTTFilterAndAggregate:
-    """Combined filter + window + aggregate: filter first, then aggregate."""
+    """Combined FILTER + WINDOW + AGGREGATE: FILTER first, then AGGREGATE."""
 
     def test_filter_before_aggregation(self):
         uid = _uid()
@@ -617,21 +612,21 @@ class TestMQTTFilterAndAggregate:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline combo
-            source from b :: "{src_topic}"
-            |> filter msg.value > 10
-            |> window tumbling(1 s)
-            |> aggregate {{
-                total = sum(msg.value)
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE combo
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 10
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
+                total = sum(msg.value),
                 n     = count()
             }}
-            |> sink to b :: "{snk_topic}"
-        end
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "combo")
@@ -675,16 +670,16 @@ class TestMQTTDedup:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline deduped
-            source from b :: "{src_topic}"
-            |> deduplicate msg.event_id within 5 s
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE deduped
+            SOURCE FROM b :: "{src_topic}"
+            |> DEDUPLICATE msg.event_id WITHIN 5 s
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "deduped")
@@ -731,16 +726,16 @@ class TestMQTTDedup:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline dedup_ttl
-            source from b :: "{src_topic}"
-            |> deduplicate msg.event_id within 1 s
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE dedup_ttl
+            SOURCE FROM b :: "{src_topic}"
+            |> DEDUPLICATE msg.event_id WITHIN 1 s
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "dedup_ttl")
@@ -773,9 +768,7 @@ class TestMQTTDedup:
             while len(received) < 2 and time.time() < deadline:
                 time.sleep(0.1)
 
-            assert len(received) == 2, (
-                f"Expected 2 messages after TTL expiry, got {len(received)}"
-            )
+            assert len(received) == 2, f"Expected 2 messages after TTL expiry, got {len(received)}"
             assert received[1]["value"] == 20
 
         finally:
@@ -787,7 +780,7 @@ class TestMQTTDedup:
 
 @mqtt_available
 class TestMQTTHaving:
-    """Having stage: post-aggregate filter on windowed results."""
+    """Having stage: post-AGGREGATE FILTER on windowed results."""
 
     def test_having_filters_aggregated_results(self):
         uid = _uid()
@@ -795,21 +788,21 @@ class TestMQTTHaving:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline having_test
-            source from b :: "{src_topic}"
-            |> window tumbling(1 s)
-            |> aggregate {{
-                total = sum(msg.value)
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE having_test
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
+                total = sum(msg.value),
                 n     = count()
             }}
-            |> having n > 2
-            |> sink to b :: "{snk_topic}"
-        end
+            |> HAVING n > 2
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "having_test")
@@ -854,20 +847,20 @@ class TestMQTTHaving:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline having_suppress
-            source from b :: "{src_topic}"
-            |> window tumbling(1 s)
-            |> aggregate {{
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE having_suppress
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
                 n = count()
             }}
-            |> having n > 100
-            |> sink to b :: "{snk_topic}"
-        end
+            |> HAVING n > 100
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "having_suppress")
@@ -910,17 +903,17 @@ class TestMQTTConst:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        const THRESHOLD = 20
-        pipeline const_filter
-            source from b :: "{src_topic}"
-            |> filter msg.value > THRESHOLD
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        CONST THRESHOLD = 20
+        PIPELINE const_filter
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > THRESHOLD
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "const_filter")
@@ -969,24 +962,24 @@ class TestMQTTLetBindings:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline let_test
-            source from b :: "{src_topic}"
-            |> window tumbling(1 s)
-            |> aggregate {{
-                avg_val = avg(msg.value)
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE let_test
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW tumbling(1 s)
+            |> AGGREGATE {{
+                avg_val = avg(msg.value),
                 total   = sum(msg.value)
             }}
-            |> map {{
-                let ratio = avg_val / total;
+            |> MAP {{
+                LET ratio = avg_val / total,
                 result = ratio
             }}
-            |> sink to b :: "{snk_topic}"
-        end
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "let_test")
@@ -1009,9 +1002,7 @@ class TestMQTTLetBindings:
             while len(received) < 1 and time.time() < deadline:
                 time.sleep(0.1)
 
-            assert len(received) >= 1, (
-                f"Expected at least 1 result, got {len(received)}"
-            )
+            assert len(received) >= 1, f"Expected at least 1 result, got {len(received)}"
 
             result = received[0]
             assert "result" in result, f"Missing 'result' key in output: {result}"
@@ -1040,21 +1031,21 @@ class TestMQTTMultiPipeline:
         snk_topic_low = f"test/{uid}/low"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline high_values
-            source from b :: "{src_topic}"
-            |> filter msg.value >= 50
-            |> sink to b :: "{snk_topic_high}"
-        end
-        pipeline low_values
-            source from b :: "{src_topic}"
-            |> filter msg.value < 50
-            |> sink to b :: "{snk_topic_low}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE high_values
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value >= 50
+            |> SINK TO b :: "{snk_topic_high}"
+        ;
+        PIPELINE low_values
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value < 50
+            |> SINK TO b :: "{snk_topic_low}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1112,9 +1103,7 @@ class TestMQTTMultiPipeline:
             pub.publish({"value": 50})  # high (>= 50)
 
             deadline = time.time() + 5
-            while (
-                len(received_high) < 3 or len(received_low) < 2
-            ) and time.time() < deadline:
+            while (len(received_high) < 3 or len(received_low) < 2) and time.time() < deadline:
                 time.sleep(0.1)
 
             time.sleep(1.0)  # extra wait for stragglers
@@ -1161,15 +1150,15 @@ class TestRedisPassthrough:
         snk_topic = f"test.{uid}.out"
 
         dsl = f"""
-        broker b
-            transport: redis
-            host: "{REDIS_HOST}"
-            port: 6379
-        end
-        pipeline redis_pass
-            source from b :: "{src_topic}"
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: REDIS
+            HOST: "{REDIS_HOST}"
+            PORT: 6379
+        ;
+        PIPELINE redis_pass
+            SOURCE FROM b :: "{src_topic}"
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1227,16 +1216,16 @@ time.sleep(3)
         snk_topic = f"test.{uid}.out"
 
         dsl = f"""
-        broker b
-            transport: redis
-            host: "{REDIS_HOST}"
-            port: 6379
-        end
-        pipeline redis_filt
-            source from b :: "{src_topic}"
-            |> filter msg.value > 50
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: REDIS
+            HOST: "{REDIS_HOST}"
+            PORT: 6379
+        ;
+        PIPELINE redis_filt
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 50
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1301,15 +1290,15 @@ class TestAMQPPassthrough:
         snk_topic = f"test.{uid}.out"
 
         dsl = f"""
-        broker b
-            transport: amqp
-            host: "{AMQP_HOST}"
-            port: 5672
-        end
-        pipeline amqp_pass
-            source from b :: "{src_topic}"
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: AMQP
+            HOST: "{AMQP_HOST}"
+            PORT: 5672
+        ;
+        PIPELINE amqp_pass
+            SOURCE FROM b :: "{src_topic}"
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "amqp_pass")
@@ -1350,16 +1339,16 @@ class TestAMQPFilter:
         snk_topic = f"test.{uid}.out"
 
         dsl = f"""
-        broker b
-            transport: amqp
-            host: "{AMQP_HOST}"
-            port: 5672
-        end
-        pipeline amqp_filt
-            source from b :: "{src_topic}"
-            |> filter msg.value > 50
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: AMQP
+            HOST: "{AMQP_HOST}"
+            PORT: 5672
+        ;
+        PIPELINE amqp_filt
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 50
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "amqp_filt")
@@ -1384,9 +1373,7 @@ class TestAMQPFilter:
 
             time.sleep(1.0)
 
-            assert len(received) == 2, (
-                f"Expected 2 messages, got {len(received)}: {received}"
-            )
+            assert len(received) == 2, f"Expected 2 messages, got {len(received)}: {received}"
 
             values = sorted([m["value"] for m in received])
             assert values == [80, 99]
@@ -1409,20 +1396,20 @@ class TestCrossTransportMQTTToRedis:
         snk_topic = f"test.{uid}.out"
 
         dsl = f"""
-        broker mqtt_broker
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        broker redis_broker
-            transport: redis
-            host: "{REDIS_HOST}"
-            port: 6379
-        end
-        pipeline bridge
-            source from mqtt_broker :: "{src_topic}"
-            |> sink to redis_broker :: "{snk_topic}"
-        end
+        BROKER mqtt_broker
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        BROKER redis_broker
+            TRANSPORT: REDIS
+            HOST: "{REDIS_HOST}"
+            PORT: 6379
+        ;
+        PIPELINE bridge
+            SOURCE FROM mqtt_broker :: "{src_topic}"
+            |> SINK TO redis_broker :: "{snk_topic}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1498,15 +1485,15 @@ class TestKafkaPassthrough:
         group_id = f"test-group-{uid}"
 
         dsl = f"""
-        broker b
-            transport: kafka
-            host: "{KAFKA_HOST}"
-            port: 9092
-        end
-        pipeline kafka_pass
-            source from b :: "{src_topic}"
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: KAFKA
+            HOST: "{KAFKA_HOST}"
+            PORT: 9092
+        ;
+        PIPELINE kafka_pass
+            SOURCE FROM b :: "{src_topic}"
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1516,7 +1503,7 @@ class TestKafkaPassthrough:
         result_file = os.path.join(tmpdir, "results.json")
 
         runner_script = (
-            _redis_runner_preamble(tmpdir, alarm_secs=25)
+            _redis_runner_preamble(tmpdir, alarm_secs=30)
             + _kafka_preamble([src_topic, snk_topic])
             + f"""
 from commlib.transports.kafka import ConnectionParameters, Subscriber as KSub, Publisher as KPub
@@ -1547,13 +1534,13 @@ time.sleep(0.5)
 
 src_pub.publish({{"sensor": "k1", "value": 42}})
 src_pub.publish({{"sensor": "k2", "value": 99}})
-time.sleep(5)
+time.sleep(10)
 
 """
             + _redis_runner_epilogue(result_file)
         )
 
-        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=20)
+        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=30)
 
         assert len(received) >= 2, f"Expected 2 messages, got {len(received)}"
         values = [m["value"] for m in received]
@@ -1570,16 +1557,16 @@ class TestKafkaFilter:
         group_id = f"test-group-{uid}"
 
         dsl = f"""
-        broker b
-            transport: kafka
-            host: "{KAFKA_HOST}"
-            port: 9092
-        end
-        pipeline kafka_filt
-            source from b :: "{src_topic}"
-            |> filter msg.value > 50
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: KAFKA
+            HOST: "{KAFKA_HOST}"
+            PORT: 9092
+        ;
+        PIPELINE kafka_filt
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 50
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         model = parse_string(dsl)
@@ -1654,16 +1641,16 @@ class TestMQTTFlatten:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline flat
-            source from b :: "{src_topic}"
-            |> flatten msg.items
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE flat
+            SOURCE FROM b :: "{src_topic}"
+            |> FLATTEN msg.items
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "flat")
@@ -1709,16 +1696,16 @@ class TestMQTTFlatten:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline flat_pass
-            source from b :: "{src_topic}"
-            |> flatten msg.items
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE flat_pass
+            SOURCE FROM b :: "{src_topic}"
+            |> FLATTEN msg.items
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "flat_pass")
@@ -1761,16 +1748,16 @@ class TestMQTTDistinct:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline dist
-            source from b :: "{src_topic}"
-            |> distinct msg.sensor_id within 3 s
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE dist
+            SOURCE FROM b :: "{src_topic}"
+            |> DISTINCT msg.sensor_id WITHIN 3 s
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "dist")
@@ -1806,7 +1793,7 @@ class TestMQTTDistinct:
             assert ids == ["A", "B", "C"]
 
             # The A message should have value 1 (the first one)
-            a_msg = [m for m in received if m["sensor_id"] == "A"][0]
+            a_msg = next(m for m in received if m["sensor_id"] == "A")
             assert a_msg["value"] == 1
 
         finally:
@@ -1826,16 +1813,16 @@ class TestMQTTThrottle:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline throttled
-            source from b :: "{src_topic}"
-            |> throttle 2 per 1 s
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE throttled
+            SOURCE FROM b :: "{src_topic}"
+            |> THROTTLE 2 PER 1 s
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "throttled")
@@ -1884,16 +1871,16 @@ class TestMQTTSample:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline sampled
-            source from b :: "{src_topic}"
-            |> sample 50%
-            |> sink to b :: "{snk_topic}"
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE sampled
+            SOURCE FROM b :: "{src_topic}"
+            |> SAMPLE 50%
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "sampled")
@@ -1940,17 +1927,17 @@ class TestMQTTRetryPolicy:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline retry_test
-            source from b :: "{src_topic}"
-            |> filter msg.value > 10
-            |> sink to b :: "{snk_topic}"
-            retry: 3 with backoff 200 ms
-        end
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE retry_test
+            SOURCE FROM b :: "{src_topic}"
+            |> FILTER msg.value > 10
+            |> SINK TO b :: "{snk_topic}"
+            RETRY: 3 WITH BACKOFF 200 ms
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "retry_test")
@@ -2001,21 +1988,21 @@ class TestMQTTMultiWindow:
         snk_topic = f"test/{uid}/out"
 
         dsl = f"""
-        broker b
-            transport: mqtt
-            host: "{MQTT_HOST}"
-            port: 1883
-        end
-        pipeline multi_win
-            source from b :: "{src_topic}"
-            |> window fast tumbling(1 s)
-            |> window slow tumbling(3 s)
-            |> aggregate {{
-                fast_n = count() over fast
-                slow_n = count() over slow
+        BROKER b
+            TRANSPORT: MQTT
+            HOST: "{MQTT_HOST}"
+            PORT: 1883
+        ;
+        PIPELINE multi_win
+            SOURCE FROM b :: "{src_topic}"
+            |> WINDOW fast tumbling(1 s)
+            |> WINDOW slow tumbling(3 s)
+            |> AGGREGATE {{
+                fast_n = count() OVER fast,
+                slow_n = count() OVER slow
             }}
-            |> sink to b :: "{snk_topic}"
-        end
+            |> SINK TO b :: "{snk_topic}"
+        ;
         """
 
         pipeline, tmpdir = _generate_and_import(dsl, "multi_win")

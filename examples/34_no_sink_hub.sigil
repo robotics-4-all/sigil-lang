@@ -1,128 +1,128 @@
 /*
  * Example 34 — No-Sink Hub Pipeline (In-Memory Fan-Out)
  * ======================================================
- * Demonstrates a pipeline with NO sink stage. Instead of publishing
- * to a broker, the pipeline acts as a shared in-memory hub. Downstream
- * pipelines receive messages directly via `source from pipe NAME` —
- * no broker round-trip, no network overhead.
+ * Demonstrates a PIPELINE with NO SINK stage. Instead of publishing
+ * to a BROKER, the PIPELINE acts as a shared in-memory hub. Downstream
+ * pipelines receive messages directly via `SOURCE from pipe NAME` —
+ * no BROKER round-trip, no network overhead.
  *
  * NEW FEATURES:
- *   pipeline with no `|> sink` or `|> route`
- *       — pipeline output is held in memory
- *       — other pipelines declare `source from pipe <name>` to receive it
- *       — the hub pipeline runs its full stage chain (filter, map, etc.)
+ *   PIPELINE with no `|> SINK` or `|> ROUTE`
+ *       — PIPELINE output is held in memory
+ *       — other pipelines declare `SOURCE from pipe <name>` to receive it
+ *       — the hub PIPELINE runs its full stage chain (FILTER, MAP, etc.)
  *         before handing off to all downstream listeners
  *
  * WHEN TO USE:
  *   - Multiple downstream pipelines need the same cleaned/validated stream
- *   - Avoid republishing to a broker just to re-subscribe from the same process
- *   - DAG-style topologies where one source fans out to N independent paths
+ *   - Avoid republishing to a BROKER just to re-subscribe from the same process
+ *   - DAG-style topologies where one SOURCE fans out to N independent paths
  *
  * ARCHITECTURE:
  *
- *   [MQTT sensors] ──→ hub (validate + normalise)
- *                          ├──→ realtime_alerts  (filter + route to AMQP)
- *                          ├──→ hourly_summary   (window + aggregate → MQTT)
- *                          └──→ anomaly_detect   (filter + map → Redis)
+ *   [MQTT sensors] ──→ hub (VALIDATE + normalise)
+ *                          ├──→ realtime_alerts  (FILTER + ROUTE to AMQP)
+ *                          ├──→ hourly_summary   (WINDOW + AGGREGATE → MQTT)
+ *                          └──→ anomaly_detect   (FILTER + MAP → Redis)
  *
  * INPUT:  {"device_id": "D-07", "type": "temperature",
  *           "value": 84.2, "unit": "celsius", "ts": 1711234567}
  */
 
-broker edge
-    transport: mqtt
-    host: "10.0.1.1"
-    port: 1883
-end
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "10.0.1.1"
+    PORT: 1883
+;
 
-broker cloud_amqp
-    transport: amqp
-    host: "rabbit.example.com"
-    port: 5672
-end
+BROKER cloud_amqp
+    TRANSPORT: AMQP
+    HOST: "rabbit.example.com"
+    PORT: 5672
+;
 
-broker cache
-    transport: redis
-    host: "redis.internal"
-    port: 6379
-end
+BROKER cache
+    TRANSPORT: REDIS
+    HOST: "redis.internal"
+    PORT: 6379
+;
 
-const TEMP_MAX   = 100.0
-const TEMP_MIN   = -40.0
-const ALERT_HIGH = 85.0
+CONST TEMP_MAX   = 100.0
+CONST TEMP_MIN   = -40.0
+CONST ALERT_HIGH = 85.0
 
-// ── Hub: validate and normalise raw sensor data ─────────────────────────────
-// No sink — output is held in memory and forwarded to downstream listeners.
-pipeline sensor_hub
-    source from edge :: "sensors/+/readings" qos: 1 format: json
+// ── Hub: VALIDATE and normalise raw sensor data ─────────────────────────────
+// No SINK — output is held in memory and forwarded to downstream listeners.
+PIPELINE sensor_hub
+    SOURCE FROM edge :: "sensors/+/readings" QOS: 1 FORMAT: json
 
     // Drop malformed messages
-    |> filter msg.device_id is not null and
+    |> FILTER msg.device_id is not null and
               msg.value is not null and
               msg.value >= TEMP_MIN and msg.value <= TEMP_MAX
 
     // Normalise: add derived flag for downstream consumers
-    |> map {
-        device_id = msg.device_id;
-        type      = msg.type ?? "unknown";
-        value     = msg.value;
+    |> MAP {
+        device_id = msg.device_id,
+        type      = msg.type ?? "unknown",
+        value     = msg.value,
         ts        = msg.ts
     }
 
-    // ← no sink or route: this pipeline is a hub
-end
+    // ← no SINK or ROUTE: this PIPELINE is a hub
+;
 
 // ── Branch 1: Realtime alerts for high readings ─────────────────────────────
-pipeline realtime_alerts
-    source from pipe sensor_hub
+PIPELINE realtime_alerts
+    SOURCE FROM PIPE sensor_hub
 
-    |> filter msg.value > ALERT_HIGH
+    |> FILTER msg.value > ALERT_HIGH
 
-    |> route
-        when msg.value > 95.0 => sink to cloud_amqp :: "alerts.critical"
-        default               => sink to cloud_amqp :: "alerts.warning"
-    end
-end
+    |> ROUTE
+        when msg.value > 95.0 => SINK TO cloud_amqp :: "alerts.critical"
+        DEFAULT               => SINK TO cloud_amqp :: "alerts.warning"
+    ;
+;
 
 // ── Branch 2: Hourly aggregated summary per device ─────────────────────────
-pipeline hourly_summary
-    source from pipe sensor_hub
+PIPELINE hourly_summary
+    SOURCE FROM PIPE sensor_hub
 
-    |> group_by msg.device_id
+    |> GROUP_BY msg.device_id
 
-    |> window tumbling(1 h)
+    |> WINDOW tumbling(1 h)
 
-    |> aggregate {
-        avg_value = avg(msg.value)
-        max_value = max(msg.value)
-        min_value = min(msg.value)
+    |> AGGREGATE {
+        avg_value = avg(msg.value),
+        max_value = max(msg.value),
+        min_value = min(msg.value),
         readings  = count()
     }
 
-    |> map {
-        device     = msg.device_id;
-        average    = avg_value;
-        peak       = max_value;
-        trough     = min_value;
+    |> MAP {
+        device     = msg.device_id,
+        average    = avg_value,
+        peak       = max_value,
+        trough     = min_value,
         n_readings = readings
     }
 
-    |> sink to edge :: "analytics/hourly/summary"
-end
+    |> SINK TO edge :: "analytics/hourly/summary"
+;
 
 // ── Branch 3: Anomaly cache — store readings above 2σ deviation ────────────
-pipeline anomaly_cache
-    source from pipe sensor_hub
+PIPELINE anomaly_cache
+    SOURCE FROM PIPE sensor_hub
 
     // Only cache readings that are suspiciously high (> 90 % of max range)
-    |> filter msg.value > TEMP_MAX * 0.9
+    |> FILTER msg.value > TEMP_MAX * 0.9
 
-    |> map {
-        device    = msg.device_id;
-        raw_value = msg.value;
-        pct_max   = msg.value / TEMP_MAX * 100.0;
+    |> MAP {
+        device    = msg.device_id,
+        raw_value = msg.value,
+        pct_max   = msg.value / TEMP_MAX * 100.0,
         ts        = msg.ts
     }
 
-    |> sink to cache :: "anomalies:sensors:hot"
-end
+    |> SINK TO cache :: "anomalies:sensors:hot"
+;

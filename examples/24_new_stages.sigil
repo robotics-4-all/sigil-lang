@@ -1,124 +1,124 @@
 /*
  * Example 24 — New Pipeline Stages
  * ================================
- * Demonstrates the 4 new pipeline stages:
- * flatten, distinct, throttle, and sample.
+ * Demonstrates the 4 new PIPELINE stages:
+ * FLATTEN, DISTINCT, THROTTLE, and SAMPLE.
  *
  * CONCEPTS INTRODUCED:
- *   - flatten expands an array field into individual messages
- *   - distinct deduplicates messages by a field value within a time window
- *   - throttle limits message throughput with optional buffering
- *   - sample probabilistic sampling of messages (percentage-based)
+ *   - FLATTEN expands an array field into individual messages
+ *   - DISTINCT deduplicates messages by a field value within a time WINDOW
+ *   - THROTTLE limits message throughput with optional buffering
+ *   - SAMPLE probabilistic sampling of messages (percentage-based)
  *
  * STAGE ORDER:
- *   source → deduplicate → filter → rate → flatten → distinct → throttle →
- *   sample → group_by → window → aggregate → accumulate → having → map → sink
+ *   SOURCE → DEDUPLICATE → FILTER → RATE → FLATTEN → DISTINCT → THROTTLE →
+ *   SAMPLE → GROUP_BY → WINDOW → AGGREGATE → ACCUMULATE → HAVING → MAP → SINK
  */
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
 // Pipeline 1: flatten_orders — Flatten nested order items
 // Expands an array of items into individual messages for downstream processing.
-pipeline flatten_orders
-    source from local :: "orders/raw"
+PIPELINE flatten_orders
+    SOURCE FROM local :: "orders/raw"
 
     // Expand the 'items' array field into individual messages
-    |> flatten msg.items
+    |> FLATTEN msg.items
 
     // Extract fields from the now-flattened message
-    |> map {
-        item_name = msg.item_name;
-        quantity = msg.quantity;
+    |> MAP {
+        item_name = msg.item_name,
+        quantity = msg.quantity,
         price = msg.price
     }
 
-    |> sink to local :: "orders/items"
-end
+    |> SINK TO local :: "orders/items"
+;
 
 // Pipeline 2: distinct_events — Deduplicate events by ID
-// Ensures that only unique event IDs are processed within a 10-minute window.
-pipeline distinct_events
-    source from local :: "events/raw"
+// Ensures that only unique event IDs are processed within a 10-minute WINDOW.
+PIPELINE distinct_events
+    SOURCE FROM local :: "events/raw"
 
     // Filter out test events before deduplication
-    |> filter msg.status != "test"
+    |> FILTER msg.status != "test"
 
     // Only allow one message per event_id every 10 minutes
-    |> distinct msg.event_id within 10m
+    |> DISTINCT msg.event_id WITHIN 10m
 
-    |> sink to local :: "events/unique"
-end
+    |> SINK TO local :: "events/unique"
+;
 
 // Pipeline 3: throttled_alerts — Throttle alert messages with buffering
-// Limits the rate of high-severity alerts to prevent downstream flooding.
-pipeline throttled_alerts
-    source from local :: "alerts/raw"
+// Limits the RATE of high-severity alerts to prevent downstream flooding.
+PIPELINE throttled_alerts
+    SOURCE FROM local :: "alerts/raw"
 
     // Only process high-severity alerts
-    |> filter msg.severity > 3
+    |> FILTER msg.severity > 3
 
     // Limit to 5 alerts per second. If exceeded, buffer up to 200 messages.
-    |> throttle 5 per 1s overflow: buffer buffer: 200
+    |> THROTTLE 5 PER 1s OVERFLOW: BUFFER BUFFER: 200
 
-    |> sink to local :: "alerts/throttled"
-end
+    |> SINK TO local :: "alerts/throttled"
+;
 
 // Pipeline 4: sampled_telemetry — Sample high-volume telemetry
 // Reduces data volume by only processing a random 10% of incoming messages.
-pipeline sampled_telemetry
-    source from local :: "telemetry/raw"
+PIPELINE sampled_telemetry
+    SOURCE FROM local :: "telemetry/raw"
 
     // Probabilistically keep only 10% of messages
-    |> sample 10%
+    |> SAMPLE 10%
 
     // Aggregate the sampled data over 1-minute windows
-    |> window tumbling(1m)
-    |> aggregate {
-        avg_value = avg(msg.value)
+    |> WINDOW tumbling(1m)
+    |> AGGREGATE {
+        avg_value = avg(msg.value),
         sample_count = count()
     }
 
-    |> map {
-        avg_value = avg_value;
+    |> MAP {
+        avg_value = avg_value,
         sample_count = sample_count
     }
 
-    |> sink to local :: "telemetry/sampled"
-end
+    |> SINK TO local :: "telemetry/sampled"
+;
 
 // Pipeline 5: combined_pipeline — Demonstrate multiple new stages together
-// A complex pipeline showing how the new stages interact in the required order.
-pipeline combined_pipeline
-    source from local :: "data/raw"
+// A complex PIPELINE showing how the new stages interact in the required order.
+PIPELINE combined_pipeline
+    SOURCE FROM local :: "data/raw"
 
     // 1. Expand nested readings
-    |> flatten msg.readings
+    |> FLATTEN msg.readings
 
     // 2. Deduplicate by sensor_id within 5 minutes
-    |> distinct msg.sensor_id within 5m
+    |> DISTINCT msg.sensor_id WITHIN 5m
 
     // 3. Sample 50% of the unique readings
-    |> sample 50%
+    |> SAMPLE 50%
 
     // 4. Aggregate over 30-second windows
-    |> window tumbling(30s)
-    |> aggregate {
-        avg_val = avg(msg.value)
-        min_val = min(msg.value)
-        max_val = max(msg.value)
+    |> WINDOW tumbling(30s)
+    |> AGGREGATE {
+        avg_val = avg(msg.value),
+        min_val = min(msg.value),
+        max_val = max(msg.value),
         total = count()
     }
 
     // 5. Format the output
-    |> map {
-        avg_val = avg_val;
-        min_val = min_val;
-        max_val = max_val;
+    |> MAP {
+        avg_val = avg_val,
+        min_val = min_val,
+        max_val = max_val,
         total = total
     }
 
-    |> sink to local :: "data/processed"
-end
+    |> SINK TO local :: "data/processed"
+;

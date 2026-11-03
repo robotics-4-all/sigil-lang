@@ -1,208 +1,205 @@
-import pytest
-
 from sigil.language import parse_string
 from sigil.visualize import visualize_dot, visualize_mermaid
-
 
 # ─── Helpers ────────────────────────────────────────────────────────
 
 MINIMAL = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline passthrough
-    source from b :: "in"
-    |> sink to b :: "out"
-end
+PIPELINE passthrough
+    SOURCE FROM b :: "in"
+    |> SINK TO b :: "out"
+;
 """
 
 FULL_PIPELINE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline full
-    source from b :: "sensors/raw" format: json
+PIPELINE full
+    SOURCE FROM b :: "sensors/raw" FORMAT: json
 
-    |> deduplicate msg.event_id within 10 s
+    |> DEDUPLICATE msg.event_id WITHIN 10 s
 
-    |> filter msg.value > 0
+    |> FILTER msg.value > 0
 
-    |> group_by msg.sensor_id
+    |> GROUP_BY msg.sensor_id
 
-    |> window tumbling(5 m)
+    |> WINDOW tumbling(5 m)
 
-    |> aggregate {
-        avg_val = avg(msg.value)
+    |> AGGREGATE {
+        avg_val = avg(msg.value),
         n = count()
     }
 
-    |> having n > 3
+    |> HAVING n > 3
 
-    |> map {
-        average = avg_val;
+    |> MAP {
+        average = avg_val,
         samples = n
     }
 
-    |> sink to b :: "sensors/clean"
-end
+    |> SINK TO b :: "sensors/clean"
+;
 """
 
 MULTI_PIPELINE = """
-broker b1 host: "localhost" port: 1883 end
+BROKER b1 HOST: "localhost" PORT: 1883 ;
 
-broker b2 host: "remote" port: 1884 end
+BROKER b2 HOST: "remote" PORT: 1884 ;
 
-pipeline first
-    source from b1 :: "a"
-    |> sink to b1 :: "b"
-end
+PIPELINE first
+    SOURCE FROM b1 :: "a"
+    |> SINK TO b1 :: "b"
+;
 
-pipeline second
-    source from b2 :: "c"
-    |> sink to b2 :: "d"
-end
+PIPELINE second
+    SOURCE FROM b2 :: "c"
+    |> SINK TO b2 :: "d"
+;
 """
 
 CHAINED = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline upstream
-    source from b :: "raw"
-    |> sink to b :: "clean"
-end
+PIPELINE upstream
+    SOURCE FROM b :: "raw"
+    |> SINK TO b :: "clean"
+;
 
-pipeline downstream
-    source from pipe upstream
-    |> sink to b :: "final"
-end
+PIPELINE downstream
+    SOURCE FROM PIPE upstream
+    |> SINK TO b :: "final"
+;
 """
 
 ROUTING = """
-broker local host: "localhost" port: 1883 end
+BROKER local HOST: "localhost" PORT: 1883 ;
 
-broker alerts
-    transport: redis
-    host: "redis.local"
-    port: 6379
-end
+BROKER alerts
+    TRANSPORT: REDIS
+    HOST: "redis.local"
+    PORT: 6379
+;
 
-pipeline classify
-    source from local :: "sensors/all"
+PIPELINE classify
+    SOURCE FROM local :: "sensors/all"
 
-    |> filter msg.value is not null
+    |> FILTER msg.value is not null
 
-    |> route
-        when msg.value > 90 => sink to alerts :: "priority.high"
-        when msg.value > 50 => sink to local :: "priority/medium"
-        default => sink to local :: "priority/low"
-    end
-end
+    |> ROUTE
+        when msg.value > 90 => SINK TO alerts :: "priority.high"
+        when msg.value > 50 => SINK TO local :: "priority/medium"
+        DEFAULT => SINK TO local :: "priority/low"
+    ;
+;
 """
 
 CONSTANTS = """
-const THRESHOLD = 42
-const NAME = "sensor"
-const ENABLED = true
+CONST THRESHOLD = 42
+CONST NAME = "sensor"
+CONST ENABLED = true
 
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline p
-    source from b :: "in"
-    |> filter msg.value > THRESHOLD
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> FILTER msg.value > THRESHOLD
+    |> SINK TO b :: "out"
+;
 """
 
 ANNOTATIONS = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline annotated
-    source from b :: "in"
+PIPELINE annotated
+    SOURCE FROM b :: "in"
 
-    |> @warn("large window may cause memory pressure") window tumbling(1 h)
+    |> @WARN("large window may cause memory pressure") WINDOW tumbling(1 h)
 
-    |> aggregate {
-        avg_val = avg(msg.value)
+    |> AGGREGATE {
+        avg_val = avg(msg.value),
         n = count()
     }
 
-    |> map {
-        average = avg_val;
+    |> MAP {
+        average = avg_val,
         samples = n
     }
 
-    |> sink to b :: "out"
-end
+    |> SINK TO b :: "out"
+;
 """
 
 HOOKS = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline hooked
-    @initially { publish { status: "online", version: "1.0" } }
+PIPELINE hooked
+    @INITIALLY { PUBLISH { status: "online", version: "1.0" } }
 
-    source from b :: "in"
+    SOURCE FROM b :: "in"
 
-    |> sink to b :: "out"
+    |> SINK TO b :: "out"
 
-    @finally { publish { status: "offline" } }
-end
+    @FINALLY { PUBLISH { status: "offline" } }
+;
 """
 
 MULTI_TRANSPORT = """
-broker mqtt_broker
-    transport: mqtt
-    host: "mqtt.local"
-    port: 1883
-end
+BROKER mqtt_broker
+    TRANSPORT: MQTT
+    HOST: "mqtt.local"
+    PORT: 1883
+;
 
-broker redis_broker
-    transport: redis
-    host: "redis.local"
-    port: 6379
-end
+BROKER redis_broker
+    TRANSPORT: REDIS
+    HOST: "redis.local"
+    PORT: 6379
+;
 
-pipeline cross
-    source from mqtt_broker :: "input"
-    |> sink to redis_broker :: "output"
-end
+PIPELINE cross
+    SOURCE FROM mqtt_broker :: "input"
+    |> SINK TO redis_broker :: "output"
+;
 """
 
 SLIDING_WINDOW = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline sliding
-    source from b :: "in"
+PIPELINE sliding
+    SOURCE FROM b :: "in"
 
-    |> window sliding(10 m, step = 2 m)
+    |> WINDOW sliding(10 m, STEP = 2 m)
 
-    |> aggregate {
+    |> AGGREGATE {
         total = sum(msg.value)
     }
 
-    |> map {
+    |> MAP {
         result = total
     }
 
-    |> sink to b :: "out"
-end
+    |> SINK TO b :: "out"
+;
 """
 
 JOIN_PIPELINE = """
-broker local host: "localhost" port: 1883 end
+BROKER local HOST: "localhost" PORT: 1883 ;
 
-pipeline enrich
-    source from local :: "orders/new"
-    |> join local :: "customers/profiles"
-        on msg.customer_id == other.id
-        within 30 s
-        type: inner
-    end
-    |> filter other.active == true
-    |> map {
-        order_id = msg.order_id;
+PIPELINE enrich
+    SOURCE FROM local :: "orders/new"
+    |> JOIN local :: "customers/profiles"
+        ON msg.customer_id == other.id
+        WITHIN 30 s
+        TYPE: inner
+    ;
+    |> FILTER other.active == true
+    |> MAP {
+        order_id = msg.order_id,
         customer_name = other.name
     }
-    |> sink to local :: "orders/enriched"
-end
+    |> SINK TO local :: "orders/enriched"
+;
 """
 
 
@@ -607,12 +604,12 @@ class TestCrossFormat:
 
     def test_rate_stage_label_in_dot(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 100 per 1s on_excess: warn
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 100 PER 1s ON_EXCESS: WARN
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         dot = visualize_dot(model)
@@ -622,12 +619,12 @@ class TestCrossFormat:
 
     def test_rate_stage_label_in_mermaid(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 100 per 1s on_excess: warn
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 100 PER 1s ON_EXCESS: WARN
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         mmd = visualize_mermaid(model)
@@ -636,14 +633,14 @@ class TestCrossFormat:
 
     def test_accumulate_stage_label_in_dot(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { avg_val = avg(msg.v) }
-            |> accumulate { smooth = ema(avg_val, 0.3) }
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { avg_val = avg(msg.v) }
+            |> ACCUMULATE { smooth = ema(avg_val, 0.3) }
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         dot = visualize_dot(model)
@@ -652,14 +649,14 @@ class TestCrossFormat:
 
     def test_accumulate_stage_label_in_mermaid(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { avg_val = avg(msg.v) }
-            |> accumulate { smooth = ema(avg_val, 0.3) }
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { avg_val = avg(msg.v) }
+            |> ACCUMULATE { smooth = ema(avg_val, 0.3) }
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         mmd = visualize_mermaid(model)
@@ -676,30 +673,30 @@ class TestCrossFormat:
 
 
 SCHEMA_PIPELINE = """
-schema Sensor
+SCHEMA Sensor
     temp: float
     humidity: float
     sensor_id: str
-end
+;
 
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline sensor_check
-    source from b :: "sensors/raw" schema: Sensor
-    |> filter msg.temp > 30.0
-    |> sink to b :: "sensors/hot"
-end
+PIPELINE sensor_check
+    SOURCE FROM b :: "sensors/raw" SCHEMA: Sensor
+    |> FILTER msg.temp > 30.0
+    |> SINK TO b :: "sensors/hot"
+;
 """
 
 DLQ_PIPELINE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline with_dlq
-    source from b :: "input"
-    |> filter msg.value > 0
-    |> sink to b :: "output"
-    on_error: sink to b :: "errors/with_dlq"
-end
+PIPELINE with_dlq
+    SOURCE FROM b :: "input"
+    |> FILTER msg.value > 0
+    |> SINK TO b :: "output"
+    ON_ERROR: SINK TO b :: "errors/with_dlq"
+;
 """
 
 
@@ -746,43 +743,43 @@ class TestOnErrorVisualize:
 
 
 NEW_STAGES_FLATTEN = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline flat
-    source from b :: "in"
-    |> flatten msg.items
-    |> sink to b :: "out"
-end
+PIPELINE flat
+    SOURCE FROM b :: "in"
+    |> FLATTEN msg.items
+    |> SINK TO b :: "out"
+;
 """
 
 NEW_STAGES_DISTINCT = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline dedup
-    source from b :: "in"
-    |> distinct msg.id within 5 m
-    |> sink to b :: "out"
-end
+PIPELINE dedup
+    SOURCE FROM b :: "in"
+    |> DISTINCT msg.id WITHIN 5 m
+    |> SINK TO b :: "out"
+;
 """
 
 NEW_STAGES_THROTTLE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline throttled
-    source from b :: "in"
-    |> throttle 100 per 1 s overflow: drop
-    |> sink to b :: "out"
-end
+PIPELINE throttled
+    SOURCE FROM b :: "in"
+    |> THROTTLE 100 PER 1 s OVERFLOW: DROP
+    |> SINK TO b :: "out"
+;
 """
 
 NEW_STAGES_SAMPLE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline sampled
-    source from b :: "in"
-    |> sample 50 %
-    |> sink to b :: "out"
-end
+PIPELINE sampled
+    SOURCE FROM b :: "in"
+    |> SAMPLE 50 %
+    |> SINK TO b :: "out"
+;
 """
 
 
@@ -834,28 +831,28 @@ class TestNewStagesVisualize:
 
 
 RETRY_PIPELINE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline retried
-    source from b :: "in"
-    |> sink to b :: "out"
-    retry: 5 with backoff 200 ms
-end
+PIPELINE retried
+    SOURCE FROM b :: "in"
+    |> SINK TO b :: "out"
+    RETRY: 5 WITH BACKOFF 200 ms
+;
 """
 
 MULTI_WINDOW_PIPELINE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 
-pipeline multi_win
-    source from b :: "in"
-    |> window short tumbling(1 m)
-    |> window long tumbling(5 m)
-    |> aggregate {
-        avg_1m = avg(msg.value) over short
-        avg_5m = avg(msg.value) over long
+PIPELINE multi_win
+    SOURCE FROM b :: "in"
+    |> WINDOW short tumbling(1 m)
+    |> WINDOW long tumbling(5 m)
+    |> AGGREGATE {
+        avg_1m = avg(msg.value) OVER short,
+        avg_5m = avg(msg.value) OVER long
     }
-    |> sink to b :: "out"
-end
+    |> SINK TO b :: "out"
+;
 """
 
 
@@ -929,23 +926,23 @@ class TestFunctionsVisualize:
     """Tests for user-defined function visualization in DOT and Mermaid."""
 
     FUNC_SINGLE = """
-    func celsius(t) = (t - 32) * 5 / 9
-    broker b host: "localhost" port: 1883 end
-    pipeline p
-        source from b :: "in"
-        |> sink to b :: "out"
-    end
+    FUNC celsius(t) = (t - 32) * 5 / 9
+    BROKER b HOST: "localhost" PORT: 1883 ;
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "out"
+    ;
     """
 
     FUNC_MULTIPLE = """
-    func celsius(t) = (t - 32) * 5 / 9
-    func add(a, b) = a + b
-    func pi() = 3.14159
-    broker b host: "localhost" port: 1883 end
-    pipeline p
-        source from b :: "in"
-        |> sink to b :: "out"
-    end
+    FUNC celsius(t) = (t - 32) * 5 / 9
+    FUNC add(a, b) = a + b
+    FUNC pi() = 3.14159
+    BROKER b HOST: "localhost" PORT: 1883 ;
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "out"
+    ;
     """
 
     def test_dot_functions_node_present(self):
@@ -992,24 +989,24 @@ class TestPipelineLetVisualize:
     """Tests for pipeline-level let binding visualization in DOT and Mermaid."""
 
     LET_SINGLE = """
-    broker b host: "localhost" port: 1883 end
-    pipeline p
-        source from b :: "in"
-        let threshold = 42
-        |> filter msg.value > 10
-        |> sink to b :: "out"
-    end
+    BROKER b HOST: "localhost" PORT: 1883 ;
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        LET threshold = 42
+        |> FILTER msg.value > 10
+        |> SINK TO b :: "out"
+    ;
     """
 
     LET_MULTIPLE = """
-    broker b host: "localhost" port: 1883 end
-    pipeline p
-        source from b :: "in"
-        let low = 10
-        let high = 100
-        |> filter msg.value > 0
-        |> sink to b :: "out"
-    end
+    BROKER b HOST: "localhost" PORT: 1883 ;
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        LET low = 10
+        LET high = 100
+        |> FILTER msg.value > 0
+        |> SINK TO b :: "out"
+    ;
     """
 
     def test_dot_let_node_present(self):
@@ -1063,12 +1060,12 @@ class TestPipelineLetVisualize:
 
 class TestDotSinkFormatBatch:
     SINK_FORMAT_BATCH = """
-    broker b host: "localhost" port: 1883 end
+    BROKER b HOST: "localhost" PORT: 1883 ;
 
-    pipeline p
-        source from b :: "in"
-        |> sink to b :: "out" format: json batch: { size: 50 timeout: 10 s }
-    end
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "out" FORMAT: json BATCH: { SIZE: 50 TIMEOUT: 10 s }
+    ;
     """
 
     def test_dot_sink_format_label(self):
@@ -1097,20 +1094,20 @@ class TestDotSinkFormatBatch:
 
 class TestPipeSourceFromRoute:
     ROUTE_THEN_PIPE = """
-    broker b host: "localhost" port: 1883 end
+    BROKER b HOST: "localhost" PORT: 1883 ;
 
-    pipeline upstream
-        source from b :: "in"
-        |> route
-            when msg.value > 50 => sink to b :: "high"
-            default => sink to b :: "low"
-        end
-    end
+    PIPELINE upstream
+        SOURCE FROM b :: "in"
+        |> ROUTE
+            when msg.value > 50 => SINK TO b :: "high"
+            DEFAULT => SINK TO b :: "low"
+        ;
+    ;
 
-    pipeline downstream
-        source from pipe upstream
-        |> sink to b :: "final"
-    end
+    PIPELINE downstream
+        SOURCE FROM PIPE upstream
+        |> SINK TO b :: "final"
+    ;
     """
 
     def test_dot_pipe_from_route_upstream(self):
@@ -1144,13 +1141,13 @@ class TestPipeSourceFromRoute:
 
 class TestAnnotationsVisualize:
     ANNOTATED_ERROR = """
-    broker b host: "localhost" port: 1883 end
+    BROKER b HOST: "localhost" PORT: 1883 ;
 
-    pipeline p
-        source from b :: "in"
-        |> @error("critical filter") filter msg.value > 0
-        |> sink to b :: "out"
-    end
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> @ERROR("critical filter") FILTER msg.value > 0
+        |> SINK TO b :: "out"
+    ;
     """
 
     def test_dot_error_annotation_in_label(self):
@@ -1173,16 +1170,16 @@ class TestAnnotationsVisualize:
 
 class TestRouteDefaultVisualize:
     ROUTE_WITH_DEFAULT = """
-    broker b host: "localhost" port: 1883 end
+    BROKER b HOST: "localhost" PORT: 1883 ;
 
-    pipeline p
-        source from b :: "in"
-        |> filter msg.value is not null
-        |> route
-            when msg.value > 100 => sink to b :: "high"
-            default => sink to b :: "normal"
-        end
-    end
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> FILTER msg.value is not null
+        |> ROUTE
+            when msg.value > 100 => SINK TO b :: "high"
+            DEFAULT => SINK TO b :: "normal"
+        ;
+    ;
     """
 
     def test_dot_route_default_node(self):
@@ -1203,18 +1200,18 @@ class TestRouteDefaultVisualize:
 
 
 PREDICT_VIS_SRC = """
-broker b host: "localhost" port: 1883 end
-model det
-    source: "models/anomaly.onnx"
-    runtime: onnx
-    features: [msg.x, msg.y]
-    returns: [score, flag]
-end
-pipeline p
-    source from b :: "in"
-    |> predict det
-    |> sink to b :: "out"
-end
+BROKER b HOST: "localhost" PORT: 1883 ;
+MODEL det
+    SOURCE: "models/anomaly.ONNX"
+    RUNTIME: ONNX
+    FEATURES: [msg.x, msg.y]
+    RETURNS: [score, flag]
+;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> PREDICT det
+    |> SINK TO b :: "out"
+;
 """
 
 
@@ -1271,11 +1268,11 @@ def test_dot_and_mermaid_both_include_predict():
 
 def test_dot_no_sink_pipeline():
     src = """
-broker local host: "localhost" port: 1883 end
-pipeline hub
-    source from local :: "input/data"
-    |> filter msg.value > 0
-end
+BROKER local HOST: "localhost" PORT: 1883 ;
+PIPELINE hub
+    SOURCE FROM local :: "input/data"
+    |> FILTER msg.value > 0
+;
 """
     model = parse_string(src)
     dot = visualize_dot(model)
@@ -1286,11 +1283,11 @@ end
 
 def test_mermaid_no_sink_pipeline():
     src = """
-broker local host: "localhost" port: 1883 end
-pipeline hub
-    source from local :: "input/data"
-    |> filter msg.value > 0
-end
+BROKER local HOST: "localhost" PORT: 1883 ;
+PIPELINE hub
+    SOURCE FROM local :: "input/data"
+    |> FILTER msg.value > 0
+;
 """
     model = parse_string(src)
     mmd = visualize_mermaid(model)
@@ -1300,12 +1297,12 @@ end
 
 
 SELECT_VIS_SRC = """
-broker b host: "localhost" port: 1883 end
-pipeline sel
-    source from b :: "in"
-    |> select [id, value: raw_value]
-    |> sink to b :: "out"
-end
+BROKER b HOST: "localhost" PORT: 1883 ;
+PIPELINE sel
+    SOURCE FROM b :: "in"
+    |> SELECT [id, value: raw_value]
+    |> SINK TO b :: "out"
+;
 """
 
 
@@ -1325,18 +1322,18 @@ def test_mermaid_select_stage_label():
 
 # ── DebugStage ───────────────────────────────────────────────────────────────
 
-BASE_DBG_VIS = """broker b host: "h" port: 1883 end\n"""
+BASE_DBG_VIS = """BROKER b HOST: "h" PORT: 1883;\n"""
 
 
 def test_visualize_dot_debug():
     src = (
         BASE_DBG_VIS
         + """
-pipeline p
-    source from b :: "in"
-    |> debug label: "check"
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG LABEL: "CHECK"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -1348,11 +1345,11 @@ def test_visualize_mermaid_debug():
     src = (
         BASE_DBG_VIS
         + """
-pipeline p
-    source from b :: "in"
-    |> debug
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)

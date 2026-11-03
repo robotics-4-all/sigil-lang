@@ -1,25 +1,24 @@
 import pytest
-from sigil.language import parse_string, build_metamodel, parse, CircularImportError
+from textx.exceptions import TextXSyntaxError
+
+from sigil.language import CircularImportError, build_metamodel, parse, parse_string
 
 
 def _stages(pipeline):
     """Unwrap AnnotatedStage wrappers to get raw stage objects."""
-    return [
-        s.stage if s.__class__.__name__ == "AnnotatedStage" else s
-        for s in pipeline.stages
-    ]
+    return [s.stage if s.__class__.__name__ == "AnnotatedStage" else s for s in pipeline.stages]
 
 
 MINIMAL = """
-broker b1
-    host: "localhost"
-    port: 1883
-end
+BROKER b1
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline p1
-    source from b1 :: "t/in"
-    |> sink to b1 :: "t/out"
-end
+PIPELINE p1
+    SOURCE FROM b1 :: "t/in"
+    |> SINK TO b1 :: "t/out"
+;
     """
 
 
@@ -34,19 +33,19 @@ def test_parse_minimal():
 
 def test_broker_with_auth():
     src = """
-    broker secure
-        host: "mqtt.io"
-        port: 8883
-        ssl: true
-        auth: {
-            username: "admin"
-            password: "pass"
+    BROKER secure
+        HOST: "mqtt.io"
+        PORT: 8883
+        SSL: true
+        AUTH: {
+            USERNAME: "admin"
+            PASSWORD: "pass"
         }
-    end
-    pipeline p
-        source from secure :: "a"
-        |> sink to secure :: "b"
-    end
+    ;
+    PIPELINE p
+        SOURCE FROM secure :: "a"
+        |> SINK TO secure :: "b"
+    ;
     """
     model = parse_string(src)
     b = model.brokers[0]
@@ -57,33 +56,33 @@ def test_broker_with_auth():
 
 def test_pipeline_with_all_stages():
     src = """
-    broker b
-        host: "localhost"
-        port: 1883
-    end
-    pipeline full
-        source from b :: "in" qos: 1 format: json
+    BROKER b
+        HOST: "localhost"
+        PORT: 1883
+    ;
+    PIPELINE full
+        SOURCE FROM b :: "in" QOS: 1 FORMAT: json
 
-        |> filter msg.value > 0 and msg.value < 100
+        |> FILTER msg.value > 0 and msg.value < 100
 
-        |> group_by msg.sensor_id
+        |> GROUP_BY msg.sensor_id
 
-        |> window tumbling(5 m)
+        |> WINDOW tumbling(5 m)
 
-        |> aggregate {
-            avg_val = avg(msg.value)
-            total   = sum(msg.value)
+        |> AGGREGATE {
+            avg_val = avg(msg.value),
+            total   = sum(msg.value),
             n       = count()
         }
 
-        |> map {
-            average = avg_val;
-            sum_val = total;
+        |> MAP {
+            average = avg_val,
+            sum_val = total,
             count   = n
         }
 
-        |> sink to b :: "out" qos: 1
-    end
+        |> SINK TO b :: "out" QOS: 1
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -103,12 +102,12 @@ def test_pipeline_with_all_stages():
 
 def test_sliding_window():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window sliding(10 m, step = 2 m)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW sliding(10 m, STEP = 2 m)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     w = _stages(model.pipelines[0])[0]
@@ -122,12 +121,12 @@ def test_sliding_window():
 
 def test_expression_comparison_operators():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x >= 10
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x >= 10
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -136,13 +135,13 @@ def test_expression_comparison_operators():
 
 def test_expression_arithmetic():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { r = avg(msg.v) }
-        |> map { fahrenheit = r * 1.8 + 32 }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { r = avg(msg.v) }
+        |> MAP { fahrenheit = r * 1.8 + 32 }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     stages = _stages(model.pipelines[0])
@@ -151,22 +150,22 @@ def test_expression_arithmetic():
 
 
 def test_parse_error_gives_message():
-    with pytest.raises(Exception):
+    with pytest.raises(TextXSyntaxError):
         parse_string("broker { }")
 
 
 def test_multiple_brokers_and_pipelines():
     src = """
-    broker a host: "a" port: 1 end
-    broker b host: "b" port: 2 end
-    pipeline p1
-        source from a :: "x"
-        |> sink to b :: "y"
-    end
-    pipeline p2
-        source from b :: "y"
-        |> sink to a :: "z"
-    end
+    BROKER a HOST: "a" PORT: 1 ;
+    BROKER b HOST: "b" PORT: 2 ;
+    PIPELINE p1
+        SOURCE FROM a :: "x"
+        |> SINK TO b :: "y"
+    ;
+    PIPELINE p2
+        SOURCE FROM b :: "y"
+        |> SINK TO a :: "z"
+    ;
     """
     model = parse_string(src)
     assert len(model.brokers) == 2
@@ -178,12 +177,12 @@ def test_multiple_brokers_and_pipelines():
 def test_line_comments():
     src = """
     // This is a line comment
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "x"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "x"
         // comment between stages
-        |> sink to b :: "y"
-    end
+        |> SINK TO b :: "y"
+    ;
     """
     model = parse_string(src)
     assert len(model.pipelines) == 1
@@ -193,11 +192,11 @@ def test_block_comments():
     src = """
     /* Multi-line
        block comment */
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "x"
-        |> sink to b :: "y"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "x"
+        |> SINK TO b :: "y"
+    ;
     """
     model = parse_string(src)
     assert len(model.pipelines) == 1
@@ -205,11 +204,11 @@ def test_block_comments():
 
 def test_inline_comment():
     src = """
-    broker b host: "h" port: 1 end  // inline
-    pipeline p
-        source from b :: "x"
-        |> sink to b :: "y"
-    end
+    BROKER b HOST: "h" PORT: 1 ;  // inline
+    PIPELINE p
+        SOURCE FROM b :: "x"
+        |> SINK TO b :: "y"
+    ;
     """
     model = parse_string(src)
     assert model.brokers[0].name == "b"
@@ -217,12 +216,12 @@ def test_inline_comment():
 
 def test_millisecond_duration():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(500 ms)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(500 ms)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     w = _stages(model.pipelines[0])[0]
@@ -233,12 +232,12 @@ def test_millisecond_duration():
 
 def test_millisecond_does_not_break_minutes():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(5 m)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(5 m)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     w = _stages(model.pipelines[0])[0]
@@ -254,80 +253,80 @@ def test_metamodel_caching():
 
 def test_broker_with_transport():
     src = """
-    broker edge
-        transport: mqtt
-        host: "localhost"
-        port: 1883
-    end
-    pipeline p
-        source from edge :: "a"
-        |> sink to edge :: "b"
-    end
+    BROKER edge
+        TRANSPORT: MQTT
+        HOST: "localhost"
+        PORT: 1883
+    ;
+    PIPELINE p
+        SOURCE FROM edge :: "a"
+        |> SINK TO edge :: "b"
+    ;
     """
     model = parse_string(src)
-    assert model.brokers[0].transport == "mqtt"
+    assert model.brokers[0].transport == "MQTT"
 
 
 def test_broker_with_redis_transport():
     src = """
-    broker cache
-        transport: redis
-        host: "localhost"
-        port: 6379
-    end
-    pipeline p
-        source from cache :: "a"
-        |> sink to cache :: "b"
-    end
+    BROKER cache
+        TRANSPORT: REDIS
+        HOST: "localhost"
+        PORT: 6379
+    ;
+    PIPELINE p
+        SOURCE FROM cache :: "a"
+        |> SINK TO cache :: "b"
+    ;
     """
     model = parse_string(src)
-    assert model.brokers[0].transport == "redis"
+    assert model.brokers[0].transport == "REDIS"
     assert model.brokers[0].port == 6379
 
 
 def test_broker_with_amqp_transport():
     src = """
-    broker rabbit
-        transport: amqp
-        host: "rabbitmq.local"
-        port: 5672
-        auth: {
-            username: "guest"
-            password: "guest"
+    BROKER rabbit
+        TRANSPORT: AMQP
+        HOST: "rabbitmq.local"
+        PORT: 5672
+        AUTH: {
+            USERNAME: "guest"
+            PASSWORD: "guest"
         }
-    end
-    pipeline p
-        source from rabbit :: "a"
-        |> sink to rabbit :: "b"
-    end
+    ;
+    PIPELINE p
+        SOURCE FROM rabbit :: "a"
+        |> SINK TO rabbit :: "b"
+    ;
     """
     model = parse_string(src)
-    assert model.brokers[0].transport == "amqp"
+    assert model.brokers[0].transport == "AMQP"
 
 
 def test_broker_with_kafka_transport():
     src = """
-    broker stream
-        transport: kafka
-        host: "kafka.local"
-        port: 9092
-    end
-    pipeline p
-        source from stream :: "a"
-        |> sink to stream :: "b"
-    end
+    BROKER stream
+        TRANSPORT: KAFKA
+        HOST: "kafka.local"
+        PORT: 9092
+    ;
+    PIPELINE p
+        SOURCE FROM stream :: "a"
+        |> SINK TO stream :: "b"
+    ;
     """
     model = parse_string(src)
-    assert model.brokers[0].transport == "kafka"
+    assert model.brokers[0].transport == "KAFKA"
 
 
 def test_broker_without_transport_defaults():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert not model.brokers[0].transport
@@ -335,27 +334,27 @@ def test_broker_without_transport_defaults():
 
 def test_cross_transport_pipeline():
     src = """
-    broker edge
-        transport: mqtt
-        host: "localhost"
-        port: 1883
-    end
-    broker cloud
-        transport: redis
-        host: "redis.cloud.io"
-        port: 6379
-    end
-    pipeline bridge
-        source from edge :: "sensors/temp"
-        |> sink to cloud :: "cloud.temp"
-    end
+    BROKER edge
+        TRANSPORT: MQTT
+        HOST: "localhost"
+        PORT: 1883
+    ;
+    BROKER cloud
+        TRANSPORT: REDIS
+        HOST: "redis.cloud.io"
+        PORT: 6379
+    ;
+    PIPELINE bridge
+        SOURCE FROM edge :: "sensors/temp"
+        |> SINK TO cloud :: "cloud.temp"
+    ;
     """
     model = parse_string(src)
-    assert model.brokers[0].transport == "mqtt"
-    assert model.brokers[1].transport == "redis"
+    assert model.brokers[0].transport == "MQTT"
+    assert model.brokers[1].transport == "REDIS"
     p = model.pipelines[0]
-    assert p.source.broker.transport == "mqtt"
-    assert p.sink.broker.transport == "redis"
+    assert p.source.broker.transport == "MQTT"
+    assert p.sink.broker.transport == "REDIS"
 
 
 # --- Regression tests: multi-assignment map blocks with arithmetic ---
@@ -367,21 +366,19 @@ def test_map_multi_assignment_with_arithmetic():
     """Multiple map assignments using arithmetic — the exact pattern that
     triggered the grammar bug before semicolons were added."""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { s = sum(msg.v)  c = count() }
-        |> map {
-            total = s * 1.0;
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { s = sum(msg.v), c = count() }
+        |> MAP {
+            total = s * 1.0,
             samples = c
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 2
     assert m.mappings[0].target == "total"
     assert m.mappings[1].target == "samples"
@@ -390,26 +387,24 @@ def test_map_multi_assignment_with_arithmetic():
 def test_map_three_assignments_with_mixed_arithmetic():
     """Three map assignments mixing multiplication, addition, and bare refs."""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate {
-            a = avg(msg.x)
-            s = sum(msg.x)
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE {
+            a = avg(msg.x),
+            s = sum(msg.x),
             n = count()
         }
-        |> map {
-            mean   = a;
-            total  = s * 2 + 1;
+        |> MAP {
+            mean   = a,
+            total  = s * 2 + 1,
             count  = n
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 3
     assert [ma.target for ma in m.mappings] == ["mean", "total", "count"]
 
@@ -417,18 +412,16 @@ def test_map_three_assignments_with_mixed_arithmetic():
 def test_map_single_assignment_no_semicolon():
     """Single map assignment needs no trailing semicolon."""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { result = v * 100 }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { result = v * 100 }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 1
     assert m.mappings[0].target == "result"
 
@@ -436,34 +429,32 @@ def test_map_single_assignment_no_semicolon():
 def test_map_assignment_with_field_ref_arithmetic():
     """Map assignment mixing aggregated IDs and msg.field arithmetic."""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { t = sum(msg.price) }
-        |> map {
-            cost  = t * 0.12;
-            tax   = msg.rate * t;
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { t = sum(msg.price) }
+        |> MAP {
+            cost  = t * 0.12,
+            tax   = msg.RATE * t,
             label = t
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.mappings) == 3
     assert [ma.target for ma in m.mappings] == ["cost", "tax", "label"]
 
 
 def test_if_then_else_in_filter():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter if msg.x > 0 then 1 else 0
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER if msg.x > 0 then 1 else 0
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -472,29 +463,27 @@ def test_if_then_else_in_filter():
 
 def test_if_then_else_in_map():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { out = if v > 0 then v else 0 }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { out = if v > 0 then v else 0 }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_is_null():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x is null
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x is null
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -503,12 +492,12 @@ def test_is_null():
 
 def test_is_not_null():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x is not null
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x is not null
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -517,29 +506,27 @@ def test_is_not_null():
 
 def test_null_coalesce_in_map():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { v = msg.x ?? 0 }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { v = msg.x ?? 0 }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_in_operator():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.status in ["active", "pending"]
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.status in ["active", "pending"]
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -548,12 +535,12 @@ def test_in_operator():
 
 def test_not_in_operator():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.code not in [1, 2, 3]
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.code not in [1, 2, 3]
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -562,12 +549,12 @@ def test_not_in_operator():
 
 def test_scalar_func_abs_in_filter():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter abs(msg.x) > 10
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER abs(msg.x) > 10
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -576,55 +563,49 @@ def test_scalar_func_abs_in_filter():
 
 def test_scalar_func_round_in_map():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { r = round(v, 2) }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { r = round(v, 2) }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_scalar_func_floor_in_map():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { f = floor(v) }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { f = floor(v) }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_let_binding_single():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map {
-            let ratio = v * 100;
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP {
+            LET ratio = v * 100,
             result = ratio
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 1
     assert len(m.mappings) == 1
     assert m.bindings[0].name == "ratio"
@@ -632,39 +613,35 @@ def test_let_binding_single():
 
 def test_let_binding_chained():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map {
-            let a = v * 2;
-            let b = a + 1;
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP {
+            LET a = v * 2,
+            LET b = a + 1,
             result = b
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 2
 
 
 def test_let_binding_none():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { result = v }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { result = v }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert len(m.bindings) == 0
 
 
@@ -673,12 +650,12 @@ def test_let_binding_none():
 
 def test_const_int():
     src = """
-    const THRESHOLD = 42
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    CONST THRESHOLD = 42
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert len(model.constants) == 1
@@ -688,12 +665,12 @@ def test_const_int():
 
 def test_const_float():
     src = """
-    const RATIO = 3.14
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    CONST RATIO = 3.14
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert model.constants[0].name == "RATIO"
@@ -702,12 +679,12 @@ def test_const_float():
 
 def test_const_string():
     src = """
-    const LABEL = "high"
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    CONST LABEL = "high"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert model.constants[0].name == "LABEL"
@@ -717,12 +694,12 @@ def test_const_string():
 
 def test_const_bool():
     src = """
-    const ENABLED = true
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    CONST ENABLED = true
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert model.constants[0].name == "ENABLED"
@@ -732,14 +709,14 @@ def test_const_bool():
 
 def test_const_multiple():
     src = """
-    const A = 1
-    const B = 2
-    const C = "x"
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    CONST A = 1
+    CONST B = 2
+    CONST C = "x"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert len(model.constants) == 3
@@ -751,12 +728,12 @@ def test_const_multiple():
 
 def test_env_ref_no_default():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x > env("THRESHOLD")
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x > env("THRESHOLD")
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -765,12 +742,12 @@ def test_env_ref_no_default():
 
 def test_env_ref_with_default():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x > env("THRESHOLD", 100)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x > env("THRESHOLD", 100)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -782,28 +759,26 @@ def test_env_ref_with_default():
 
 def test_case_single_arm():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { out = case { when v > 0 => "pos" else => "neg" } }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { out = case { when v > 0 => "pos" else => "neg" }}
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_case_multiple_arms():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map {
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP {
             out = case {
                 when v > 100 => "high"
                 when v > 50  => "mid"
@@ -811,30 +786,26 @@ def test_case_multiple_arms():
                 else => "none"
             }
         }
-        |> sink to b :: "b"
-    end
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
 def test_case_no_else():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> aggregate { v = avg(msg.x) }
-        |> map { out = case { when v > 0 => "pos" } }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> AGGREGATE { v = avg(msg.x) }
+        |> MAP { out = case { when v > 0 => "pos" }}
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    m = [s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"][
-        0
-    ]
+    m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
     assert m.__class__.__name__ == "MapStage"
 
 
@@ -843,14 +814,14 @@ def test_case_no_else():
 
 def test_having_stage_parses():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(5 m)
-        |> aggregate { n = count() }
-        |> having n > 10
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(5 m)
+        |> AGGREGATE { n = count() }
+        |> HAVING n > 10
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     stages = _stages(model.pipelines[0])
@@ -860,15 +831,15 @@ def test_having_stage_parses():
 
 def test_having_with_aggregate_and_map():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(5 m)
-        |> aggregate { n = count()  a = avg(msg.v) }
-        |> having n > 5
-        |> map { result = a }
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(5 m)
+        |> AGGREGATE { n = count(), a = avg(msg.v) }
+        |> HAVING n > 5
+        |> MAP { result = a }
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     stage_names = [s.__class__.__name__ for s in _stages(model.pipelines[0])]
@@ -882,12 +853,12 @@ def test_having_with_aggregate_and_map():
 
 def test_dedup_parses():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> deduplicate msg.event_id within 30 s
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> DEDUPLICATE msg.event_id WITHIN 30 s
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     d = _stages(model.pipelines[0])[0]
@@ -899,12 +870,12 @@ def test_dedup_parses():
 
 def test_dedup_with_ms_ttl():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> deduplicate msg.id within 500 ms
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> DEDUPLICATE msg.id WITHIN 500 ms
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     d = _stages(model.pipelines[0])[0]
@@ -918,12 +889,12 @@ def test_dedup_with_ms_ttl():
 
 def test_old_ref_in_filter():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.status != old(msg.status)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.status != old(msg.status)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -932,12 +903,12 @@ def test_old_ref_in_filter():
 
 def test_changed_ref_in_filter():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter changed(msg.status)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER changed(msg.status)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -950,31 +921,29 @@ def test_changed_ref_in_filter():
 def test_forall_window_implicit():
     """forall(m => m > 0) — window-implicit quantifier"""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(10s)
-        |> aggregate { n = count() }
-        |> having forall(m => m > 0)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(10s)
+        |> AGGREGATE { n = count() }
+        |> HAVING forall(m => m > 0)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    having = [
-        s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"
-    ][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
 def test_exists_with_collection():
     """exists(x in msg.tags => x == 'critical') — collection-based quantifier"""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter exists(x in msg.tags => x == "critical")
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER exists(x in msg.tags => x == "critical")
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -984,12 +953,12 @@ def test_exists_with_collection():
 def test_forall_with_collection():
     """forall(item in msg.items => item > 0) — iterate array field"""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter forall(item in msg.values => item > 0)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER forall(item in msg.values => item > 0)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     f = _stages(model.pipelines[0])[0]
@@ -999,38 +968,34 @@ def test_forall_with_collection():
 def test_exists_window_implicit():
     """exists(m => m > 100) — window-implicit exists"""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(10s)
-        |> aggregate { n = count() }
-        |> having exists(m => m > 100)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(10s)
+        |> AGGREGATE { n = count() }
+        |> HAVING exists(m => m > 100)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    having = [
-        s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"
-    ][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
 def test_forall_and_exists_combined():
     """forall(...) and exists(...) combined in having"""
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> window tumbling(10s)
-        |> aggregate { n = count() }
-        |> having forall(m => m > 0) and exists(m => m > 100)
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> WINDOW tumbling(10s)
+        |> AGGREGATE { n = count() }
+        |> HAVING forall(m => m > 0) and exists(m => m > 100)
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
-    having = [
-        s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage"
-    ][0]
+    having = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "HavingStage")
     assert having.__class__.__name__ == "HavingStage"
 
 
@@ -1039,12 +1004,12 @@ def test_forall_and_exists_combined():
 
 def test_initially_hook():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        @initially { publish { status: "online" } }
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        @INITIALLY { PUBLISH { status: "online" } }
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1055,12 +1020,12 @@ def test_initially_hook():
 
 def test_finally_hook():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-        @finally { publish { status: "offline" } }
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+        @FINALLY { PUBLISH { status: "offline" } }
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1071,13 +1036,13 @@ def test_finally_hook():
 
 def test_both_hooks():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        @initially { publish { status: "online", version: "1.0" } }
-        source from b :: "a"
-        |> sink to b :: "b"
-        @finally { publish { status: "offline" } }
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        @INITIALLY { PUBLISH { status: "online", version: "1.0" } }
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+        @FINALLY { PUBLISH { status: "offline" } }
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1088,11 +1053,11 @@ def test_both_hooks():
 
 def test_no_hooks():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1102,12 +1067,12 @@ def test_no_hooks():
 
 def test_initially_with_env_ref():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        @initially { publish { host: env("HOSTNAME", "unknown"), status: "online" } }
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        @INITIALLY { PUBLISH { HOST: env("HOSTNAME", "unknown"), status: "online" } }
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1120,11 +1085,11 @@ def test_initially_with_env_ref():
 
 def test_sink_format():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b" format: csv
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b" FORMAT: csv
+    ;
     """
     model = parse_string(src)
     assert model.pipelines[0].sink.format == "csv"
@@ -1132,11 +1097,11 @@ def test_sink_format():
 
 def test_sink_batch_size_only():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b" batch: { size: 100 }
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b" BATCH: { SIZE: 100 }
+    ;
     """
     model = parse_string(src)
     batch = model.pipelines[0].sink.batch
@@ -1146,11 +1111,11 @@ def test_sink_batch_size_only():
 
 def test_sink_batch_timeout_only():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b" batch: { timeout: 5s  }
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b" BATCH: { TIMEOUT: 5s  }
+    ;
     """
     model = parse_string(src)
     batch = model.pipelines[0].sink.batch
@@ -1161,11 +1126,11 @@ def test_sink_batch_timeout_only():
 
 def test_sink_batch_both():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b" format: json  batch: { size: 50  timeout: 10s  }
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b" FORMAT: json  BATCH: { SIZE: 50  TIMEOUT: 10s  }
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1177,11 +1142,11 @@ def test_sink_batch_both():
 
 def test_sink_no_batch():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert not model.pipelines[0].sink.batch
@@ -1193,12 +1158,12 @@ def test_sink_no_batch():
 
 def test_import_declaration():
     src = """
-    import "shared.sigil"
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    IMPORT "shared.sigil"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert len(model.imports) == 1
@@ -1207,13 +1172,13 @@ def test_import_declaration():
 
 def test_multiple_imports():
     src = """
-    import "types.sigil"
-    import "utils.sigil"
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    IMPORT "types.sigil"
+    IMPORT "utils.sigil"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert len(model.imports) == 2
@@ -1223,12 +1188,12 @@ def test_multiple_imports():
 
 def test_import_with_brokers():
     src = """
-    import "shared.sigil"
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    IMPORT "shared.sigil"
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert len(model.imports) == 1
@@ -1241,15 +1206,15 @@ def test_import_with_brokers():
 
 def test_pipe_source_parses():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline upstream
-        source from b :: "in"
-        |> sink to b :: "mid"
-    end
-    pipeline downstream
-        source from pipe upstream
-        |> sink to b :: "out"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE upstream
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "mid"
+    ;
+    PIPELINE downstream
+        SOURCE FROM PIPE upstream
+        |> SINK TO b :: "out"
+    ;
     """
     model = parse_string(src)
     ds = model.pipelines[1]
@@ -1259,15 +1224,15 @@ def test_pipe_source_parses():
 
 def test_pipe_source_no_topic():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline upstream
-        source from b :: "in"
-        |> sink to b :: "mid"
-    end
-    pipeline downstream
-        source from pipe upstream
-        |> sink to b :: "out"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE upstream
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "mid"
+    ;
+    PIPELINE downstream
+        SOURCE FROM PIPE upstream
+        |> SINK TO b :: "out"
+    ;
     """
     model = parse_string(src)
     ds = model.pipelines[1]
@@ -1276,11 +1241,11 @@ def test_pipe_source_no_topic():
 
 def test_broker_source_no_pipe():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     assert not model.pipelines[0].source.pipe
@@ -1292,13 +1257,13 @@ def test_broker_source_no_pipe():
 
 def test_route_single_arm():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> route
-            when msg.x > 0 => sink to b :: "pos"
-        end
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> ROUTE
+            when msg.x > 0 => SINK TO b :: "pos"
+        ;
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1309,15 +1274,15 @@ def test_route_single_arm():
 
 def test_route_multiple_arms():
     src = """
-    broker b host: "h" port: 1 end
-    broker b2 host: "h2" port: 2 end
-    pipeline p
-        source from b :: "a"
-        |> route
-            when msg.x > 100 => sink to b :: "high"
-            default => sink to b :: "other"
-        end
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    BROKER b2 HOST: "h2" PORT: 2 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> ROUTE
+            when msg.x > 100 => SINK TO b :: "high"
+            DEFAULT => SINK TO b :: "other"
+        ;
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1328,13 +1293,13 @@ def test_route_multiple_arms():
 
 def test_route_without_default():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> route 
-            when msg.x > 0 => sink to b :: "pos"
-        end
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> ROUTE
+            when msg.x > 0 => SINK TO b :: "pos"
+        ;
+    ;
     """
     model = parse_string(src)
     arm = model.pipelines[0].route.arms[0]
@@ -1344,13 +1309,13 @@ def test_route_without_default():
 
 def test_route_no_sink():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> route 
-            when msg.x > 0 => sink to b :: "pos"
-        end
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> ROUTE
+            when msg.x > 0 => SINK TO b :: "pos"
+        ;
+    ;
     """
     model = parse_string(src)
     p = model.pipelines[0]
@@ -1362,61 +1327,61 @@ def test_route_no_sink():
 
 def test_warn_annotation():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> @warn("slow stage") filter msg.x > 0
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> @WARN("slow stage") FILTER msg.x > 0
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     annotated = model.pipelines[0].stages[0]
     assert annotated.__class__.__name__ == "AnnotatedStage"
     assert len(annotated.annotations) == 1
-    assert annotated.annotations[0].severity == "warn"
+    assert annotated.annotations[0].severity == "WARN"
     assert annotated.annotations[0].message == "slow stage"
 
 
 def test_error_annotation():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> @error("deprecated") filter msg.x > 0
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> @ERROR("deprecated") FILTER msg.x > 0
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     annotated = model.pipelines[0].stages[0]
     assert len(annotated.annotations) == 1
-    assert annotated.annotations[0].severity == "error"
+    assert annotated.annotations[0].severity == "ERROR"
     assert annotated.annotations[0].message == "deprecated"
 
 
 def test_multiple_annotations():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> @warn("slow") @error("deprecated") filter msg.x > 0
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> @WARN("slow") @ERROR("deprecated") FILTER msg.x > 0
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     annotated = model.pipelines[0].stages[0]
     assert len(annotated.annotations) == 2
-    assert annotated.annotations[0].severity == "warn"
-    assert annotated.annotations[1].severity == "error"
+    assert annotated.annotations[0].severity == "WARN"
+    assert annotated.annotations[1].severity == "ERROR"
 
 
 def test_no_annotations():
     src = """
-    broker b host: "h" port: 1 end
-    pipeline p
-        source from b :: "a"
-        |> filter msg.x > 0
-        |> sink to b :: "b"
-    end
+    BROKER b HOST: "h" PORT: 1 ;
+    PIPELINE p
+        SOURCE FROM b :: "a"
+        |> FILTER msg.x > 0
+        |> SINK TO b :: "b"
+    ;
     """
     model = parse_string(src)
     annotated = model.pipelines[0].stages[0]
@@ -1438,12 +1403,12 @@ class TestRightSideArithmetic:
     def test_multiply_right_of_comparison(self):
         """msg.x > 2 * 2 must parse (previously failed)."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > 2 * 2
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > 2 * 2
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1451,12 +1416,12 @@ class TestRightSideArithmetic:
     def test_add_right_of_comparison(self):
         """msg.x > 2 + 3 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > 2 + 3
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > 2 + 3
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1464,12 +1429,12 @@ class TestRightSideArithmetic:
     def test_complex_right_side_arithmetic(self):
         """msg.x > 2 * 3 + 1 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > 2 * 3 + 1
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > 2 * 3 + 1
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1477,12 +1442,12 @@ class TestRightSideArithmetic:
     def test_field_ref_both_sides(self):
         """msg.x > msg.y * 2 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > msg.y * 2
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > msg.y * 2
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1490,12 +1455,12 @@ class TestRightSideArithmetic:
     def test_arithmetic_both_sides(self):
         """msg.x + 1 > msg.y * 2 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x + 1 > msg.y * 2
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x + 1 > msg.y * 2
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1503,12 +1468,12 @@ class TestRightSideArithmetic:
     def test_division_right_of_comparison(self):
         """msg.x < 100 / 3 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x < 100 / 3
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x < 100 / 3
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1516,12 +1481,12 @@ class TestRightSideArithmetic:
     def test_modulo_right_of_comparison(self):
         """msg.x == 10 % 3 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x == 10 % 3
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x == 10 % 3
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1529,12 +1494,12 @@ class TestRightSideArithmetic:
     def test_subtraction_right_of_comparison(self):
         """msg.x >= 10 - 3 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x >= 10 - 3
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x >= 10 - 3
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1542,12 +1507,12 @@ class TestRightSideArithmetic:
     def test_nested_arithmetic_in_and(self):
         """msg.x > 2 * 2 and msg.y < 10 + 5 must parse."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > 2 * 2 and msg.y < 10 + 5
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > 2 * 2 and msg.y < 10 + 5
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1555,12 +1520,12 @@ class TestRightSideArithmetic:
     def test_parenthesized_still_works(self):
         """msg.x > (2 * 2) must still work (was the old workaround)."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > (2 * 2)
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > (2 * 2)
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         assert model is not None
@@ -1572,12 +1537,12 @@ class TestRightSideArithmetic:
 class TestRateStage:
     def test_parse_rate_basic(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 100 per 1s
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 100 PER 1s
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -1591,56 +1556,56 @@ class TestRateStage:
 
     def test_parse_rate_with_on_excess_drop(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 50 per 5m on_excess: drop
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 50 PER 5m ON_EXCESS: DROP
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         rate = _stages(model.pipelines[0])[0]
         assert rate.limit == 50
         assert rate.period.value == 5
         assert rate.period.unit == "m"
-        assert rate.on_excess == "drop"
+        assert rate.on_excess == "DROP"
 
     def test_parse_rate_with_on_excess_warn(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 10 per 1s on_excess: warn
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 10 PER 1s ON_EXCESS: WARN
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         rate = _stages(model.pipelines[0])[0]
-        assert rate.on_excess == "warn"
+        assert rate.on_excess == "WARN"
 
     def test_parse_rate_with_on_excess_error(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 1000 per 1h on_excess: error
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 1000 PER 1h ON_EXCESS: ERROR
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         rate = _stages(model.pipelines[0])[0]
-        assert rate.on_excess == "error"
+        assert rate.on_excess == "ERROR"
         assert rate.period.unit == "h"
 
     def test_rate_before_filter(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 100 per 1s
-            |> filter msg.x > 0
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 100 PER 1s
+            |> FILTER msg.x > 0
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -1649,12 +1614,12 @@ class TestRateStage:
 
     def test_rate_with_milliseconds(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> rate 10 per 500ms
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> RATE 10 PER 500ms
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         rate = _stages(model.pipelines[0])[0]
@@ -1668,20 +1633,20 @@ class TestRateStage:
 class TestAccumulateStage:
     def test_parse_accumulate_ema(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { avg_val = avg(msg.v) }
-            |> accumulate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { avg_val = avg(msg.v) }
+            |> ACCUMULATE {
                 smooth = ema(avg_val, 0.3)
             }
-            |> sink to b :: "o"
-        end
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        accum = [s for s in stages if s.__class__.__name__ == "AccumulateStage"][0]
+        accum = next(s for s in stages if s.__class__.__name__ == "AccumulateStage")
         assert len(accum.assignments) == 1
         a = accum.assignments[0]
         assert a.name == "smooth"
@@ -1691,23 +1656,21 @@ class TestAccumulateStage:
 
     def test_parse_accumulate_cumsum(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { total = sum(msg.v) }
-            |> accumulate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { total = sum(msg.v) }
+            |> ACCUMULATE {
                 running = cumsum(total)
             }
-            |> sink to b :: "o"
-        end
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
-        accum = [
-            s
-            for s in _stages(model.pipelines[0])
-            if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        accum = next(
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
+        )
         a = accum.assignments[0]
         assert a.name == "running"
         assert a.func == "cumsum"
@@ -1715,67 +1678,63 @@ class TestAccumulateStage:
 
     def test_parse_accumulate_delta(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { total = sum(msg.v) }
-            |> accumulate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { total = sum(msg.v) }
+            |> ACCUMULATE {
                 change = delta(total)
             }
-            |> sink to b :: "o"
-        end
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
-        accum = [
-            s
-            for s in _stages(model.pipelines[0])
-            if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        accum = next(
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
+        )
         a = accum.assignments[0]
         assert a.name == "change"
         assert a.func == "delta"
 
     def test_parse_multiple_accumulations(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate {
-                avg_val = avg(msg.v)
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE {
+                avg_val = avg(msg.v),
                 total = sum(msg.v)
             }
-            |> accumulate {
-                smooth = ema(avg_val, 0.3)
-                running = cumsum(total)
+            |> ACCUMULATE {
+                smooth = ema(avg_val, 0.3),
+                running = cumsum(total),
                 change = delta(total)
             }
-            |> sink to b :: "o"
-        end
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
-        accum = [
-            s
-            for s in _stages(model.pipelines[0])
-            if s.__class__.__name__ == "AccumulateStage"
-        ][0]
+        accum = next(
+            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "AccumulateStage"
+        )
         assert len(accum.assignments) == 3
         names = [a.name for a in accum.assignments]
         assert names == ["smooth", "running", "change"]
 
     def test_accumulate_after_aggregate(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> window tumbling(10s)
-            |> aggregate { v = avg(msg.v) }
-            |> accumulate { s = ema(v, 0.5) }
-            |> having s > 10
-            |> map { result = s }
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> WINDOW tumbling(10s)
+            |> AGGREGATE { v = avg(msg.v) }
+            |> ACCUMULATE { s = ema(v, 0.5) }
+            |> HAVING s > 10
+            |> MAP { result = s }
+            |> SINK TO b :: "o"
+        ;
     """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -1795,23 +1754,23 @@ class TestAccumulateStage:
 class TestJoinStage:
     def test_parse_inner_join(self):
         src = """
-        broker local
-            host: "localhost"
-            port: 1883
-        end
-        broker remote
-            host: "remote.io"
-            port: 1883
-        end
-        pipeline p
-            source from local :: "orders"
-            |> join remote :: "customers"
-                on msg.customer_id == other.id
-                within 30 s
-                type: inner
-            end
-            |> sink to local :: "enriched"
-        end
+        BROKER local
+            HOST: "localhost"
+            PORT: 1883
+        ;
+        BROKER remote
+            HOST: "remote.io"
+            PORT: 1883
+        ;
+        PIPELINE p
+            SOURCE FROM local :: "orders"
+            |> JOIN remote :: "customers"
+                ON msg.customer_id == other.id
+                WITHIN 30 s
+                TYPE: inner
+            ;
+            |> SINK TO local :: "enriched"
+        ;
     """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -1827,16 +1786,16 @@ class TestJoinStage:
 
     def test_parse_left_join(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "orders"
-            |> join b :: "customers"
-                on msg.cid == other.id
-                within 10 s
-                type: left
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "orders"
+            |> JOIN b :: "customers"
+                ON msg.cid == other.id
+                WITHIN 10 s
+                TYPE: left
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         join = model.pipelines[0].join
@@ -1844,15 +1803,15 @@ class TestJoinStage:
 
     def test_parse_join_default_type(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 5 s
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 5 s
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         join = model.pipelines[0].join
@@ -1860,15 +1819,15 @@ class TestJoinStage:
 
     def test_parse_join_nested_keys(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.user.address.id == other.profile.id
-                within 10 s
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.user.address.id == other.profile.id
+                WITHIN 10 s
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         join = model.pipelines[0].join
@@ -1877,16 +1836,16 @@ class TestJoinStage:
 
     def test_parse_join_with_filter(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 5 s
-            end
-            |> filter msg.value > 0
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 5 s
+            ;
+            |> FILTER msg.value > 0
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -1897,17 +1856,17 @@ class TestJoinStage:
 
     def test_parse_join_with_map(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 5 s
-            end
-            |> aggregate { n = count() }
-            |> map { total = n }
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 5 s
+            ;
+            |> AGGREGATE { n = count() }
+            |> MAP { total = n }
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -1918,15 +1877,15 @@ class TestJoinStage:
 
     def test_parse_join_window_minutes(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 5 m
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 5 m
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         join = model.pipelines[0].join
@@ -1935,15 +1894,15 @@ class TestJoinStage:
 
     def test_parse_join_window_milliseconds(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 500 ms
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 500 ms
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         join = model.pipelines[0].join
@@ -1952,15 +1911,15 @@ class TestJoinStage:
 
     def test_join_no_stages(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> join b :: "b"
-                on msg.id == other.id
-                within 10 s
-            end
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> JOIN b :: "b"
+                ON msg.id == other.id
+                WITHIN 10 s
+            ;
+            |> SINK TO b :: "out"
+        ;
     """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -1974,14 +1933,14 @@ class TestFmtFunction:
 
     def test_fmt_single_arg(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> MAP {
                 label = fmt("hello {}", msg.name)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -1995,42 +1954,38 @@ class TestFmtFunction:
 
     def test_fmt_multiple_args(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> MAP {
                 label = fmt("{} is {} degrees", msg.sensor, msg.value)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
         map_stage = stages[0]
-        atom = (
-            map_stage.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        atom = map_stage.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.name == "fmt"
         assert len(atom.args) == 3
 
     def test_fmt_no_args(self):
         """fmt() with just a format string (no substitution args) is valid."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> MAP {
                 label = fmt("static text")
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
         map_stage = stages[0]
-        atom = (
-            map_stage.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        atom = map_stage.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.name == "fmt"
         assert len(atom.args) == 1
 
@@ -2040,15 +1995,15 @@ class TestTypeAnnotations:
 
     def test_aggregate_with_float_annotation(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
                 total: float = sum(msg.value)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2059,15 +2014,15 @@ class TestTypeAnnotations:
 
     def test_aggregate_with_int_annotation(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
                 n: int = count()
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2076,15 +2031,15 @@ class TestTypeAnnotations:
 
     def test_aggregate_with_str_annotation(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
                 first_name: str = first(msg.name)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2094,15 +2049,15 @@ class TestTypeAnnotations:
     def test_aggregate_without_annotation(self):
         """Type annotation is optional — no annotation should still work."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
                 total = sum(msg.value)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2111,17 +2066,17 @@ class TestTypeAnnotations:
 
     def test_aggregate_mixed_annotated_and_not(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
-                total: float = sum(msg.value)
-                n = count()
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
+                total: float = sum(msg.value),
+                n = count(),
                 avg_val: float = avg(msg.value)
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2133,15 +2088,15 @@ class TestTypeAnnotations:
 
     def test_aggregate_bool_annotation(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> window tumbling(10 s)
-            |> aggregate {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> WINDOW tumbling(10 s)
+            |> AGGREGATE {
                 has_data: bool = count()
             }
-            |> sink to b :: "out"
-        end
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2156,17 +2111,17 @@ class TestSchemaDeclaration:
     def test_parse_simple_schema(self):
         """Schema with scalar fields (int, float, str, bool)."""
         src = """
-        schema Sensor
+        SCHEMA Sensor
             temp: float
             humidity: float
             sensor_id: str
             active: bool
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         assert len(model.schemas) == 1
@@ -2185,16 +2140,16 @@ class TestSchemaDeclaration:
     def test_parse_schema_with_optional_fields(self):
         """Fields with ? modifier."""
         src = """
-        schema Event
+        SCHEMA Event
             id: int
-            label: str?
+            LABEL: str?
             score: float?
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         s = model.schemas[0]
@@ -2205,18 +2160,18 @@ class TestSchemaDeclaration:
     def test_parse_schema_with_nested_object(self):
         """Schema containing { ... } nested object type."""
         src = """
-        schema Reading
+        SCHEMA Reading
             value: float
             location: {
                 lat: float,
                 lon: float
             }
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         s = model.schemas[0]
@@ -2231,16 +2186,16 @@ class TestSchemaDeclaration:
     def test_parse_schema_with_list_type(self):
         """Schema containing [str], [int] etc."""
         src = """
-        schema Tagged
+        SCHEMA Tagged
             name: str
             tags: [str]
             scores: [int]
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         s = model.schemas[0]
@@ -2256,44 +2211,44 @@ class TestSchemaDeclaration:
     def test_parse_schema_strict(self):
         """Schema with explicit strict keyword."""
         src = """
-        schema StrictSensor strict
+        SCHEMA StrictSensor STRICT
             temp: float
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        assert model.schemas[0].strictness == "strict"
+        assert model.schemas[0].strictness == "STRICT"
 
     def test_parse_schema_lenient(self):
         """Schema with explicit lenient keyword."""
         src = """
-        schema LenientSensor lenient
+        SCHEMA LenientSensor LENIENT
             temp: float
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        assert model.schemas[0].strictness == "lenient"
+        assert model.schemas[0].strictness == "LENIENT"
 
     def test_parse_schema_default_strictness(self):
         """Schema without strictness keyword (defaults to None/empty)."""
         src = """
-        schema DefaultSensor
+        SCHEMA DefaultSensor
             temp: float
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         s = model.schemas[0]
@@ -2302,16 +2257,16 @@ class TestSchemaDeclaration:
     def test_parse_source_with_schema_binding(self):
         """Source with schema: SchemaName."""
         src = """
-        schema Sensor
+        SCHEMA Sensor
             temp: float
             humidity: float
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in" schema: Sensor
-            |> filter msg.temp > 30.0
-            |> sink to b :: "out"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in" SCHEMA: Sensor
+            |> FILTER msg.temp > 30.0
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2321,7 +2276,7 @@ class TestSchemaDeclaration:
     def test_parse_schema_complex_nested(self):
         """Schema with nested object containing list and optional fields."""
         src = """
-        schema Reading
+        SCHEMA Reading
             value: float
             location: {
                 lat: float,
@@ -2329,15 +2284,15 @@ class TestSchemaDeclaration:
             }
             tags: [str]
             metadata: {
-                source: str,
+                SOURCE: str,
                 version: int
             }?
-        end
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        ;
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         s = model.schemas[0]
@@ -2357,15 +2312,15 @@ class TestSchemaDeclaration:
 
 class TestOnError:
     def test_parse_on_error_sink(self):
-        """Pipeline with on_error: sink to broker :: 'topic'."""
+        """Pipeline WITH ON_ERROR: SINK TO BROKER :: 'topic'."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> filter msg.value > 0
-            |> sink to b :: "out"
-            on_error: sink to b :: "errors/p"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> FILTER msg.value > 0
+            |> SINK TO b :: "out"
+            ON_ERROR: SINK TO b :: "errors/p"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2378,13 +2333,13 @@ class TestOnError:
     def test_parse_on_error_drop(self):
         """Pipeline with on_error: drop."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> filter msg.value > 0
-            |> sink to b :: "out"
-            on_error: drop
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> FILTER msg.value > 0
+            |> SINK TO b :: "out"
+            ON_ERROR: DROP
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2395,11 +2350,11 @@ class TestOnError:
     def test_parse_pipeline_without_on_error(self):
         """Pipeline without on_error (verify it's None/falsy)."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> sink to b :: "out"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2408,13 +2363,13 @@ class TestOnError:
     def test_parse_on_error_with_finally(self):
         """Both on_error and @finally in same pipeline."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "in"
-            |> sink to b :: "out"
-            on_error: sink to b :: "errors/p"
-            @finally { publish { status: "offline" } }
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+            ON_ERROR: SINK TO b :: "errors/p"
+            @FINALLY { PUBLISH { status: "offline" } }
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2433,12 +2388,12 @@ class TestNewStages:
 
     def test_flatten_basic(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> flatten msg.items
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FLATTEN msg.items
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2447,12 +2402,12 @@ class TestNewStages:
 
     def test_flatten_nested_field(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> flatten msg.data.items
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FLATTEN msg.data.items
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2461,12 +2416,12 @@ class TestNewStages:
 
     def test_distinct_basic(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> distinct msg.id within 5 m
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> DISTINCT msg.id WITHIN 5 m
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2477,12 +2432,12 @@ class TestNewStages:
 
     def test_distinct_with_seconds(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> distinct msg.event_id within 30 s
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> DISTINCT msg.event_id WITHIN 30 s
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2493,12 +2448,12 @@ class TestNewStages:
 
     def test_throttle_basic(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> throttle 100 per 1 s
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> THROTTLE 100 PER 1 s
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2511,43 +2466,43 @@ class TestNewStages:
 
     def test_throttle_with_overflow_drop(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> throttle 50 per 10 s overflow: drop
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> THROTTLE 50 PER 10 s OVERFLOW: DROP
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
         assert stage.__class__.__name__ == "ThrottleStage"
         assert stage.limit == 50
-        assert stage.overflow == "drop"
+        assert stage.overflow == "DROP"
 
     def test_throttle_with_buffer(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> throttle 10 per 1 s overflow: buffer buffer: 500
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> THROTTLE 10 PER 1 s OVERFLOW: BUFFER BUFFER: 500
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
         assert stage.__class__.__name__ == "ThrottleStage"
         assert stage.limit == 10
-        assert stage.overflow == "buffer"
+        assert stage.overflow == "BUFFER"
         assert stage.buffer_size == 500
 
     def test_sample_basic(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> sample 50 %
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> SAMPLE 50 %
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2556,12 +2511,12 @@ class TestNewStages:
 
     def test_sample_full(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> sample 100 %
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> SAMPLE 100 %
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2570,12 +2525,12 @@ class TestNewStages:
 
     def test_sample_minimal(self):
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> sample 1 %
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> SAMPLE 1 %
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage = _stages(model.pipelines[0])[0]
@@ -2583,20 +2538,20 @@ class TestNewStages:
         assert stage.percentage == 1
 
     def test_new_stages_correct_order(self):
-        """Parse pipeline with filter → flatten → distinct → throttle → sample → window → aggregate."""
+        """Parse PIPELINE WITH FILTER → FLATTEN → DISTINCT → THROTTLE → SAMPLE → WINDOW → AGGREGATE."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> filter msg.x > 0
-            |> flatten msg.items
-            |> distinct msg.id within 5 m
-            |> throttle 100 per 1 s
-            |> sample 50 %
-            |> window tumbling(5 m)
-            |> aggregate { n = count() }
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> FILTER msg.x > 0
+            |> FLATTEN msg.items
+            |> DISTINCT msg.id WITHIN 5 m
+            |> THROTTLE 100 PER 1 s
+            |> SAMPLE 50 %
+            |> WINDOW tumbling(5 m)
+            |> AGGREGATE { n = count() }
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage_names = [s.__class__.__name__ for s in _stages(model.pipelines[0])]
@@ -2613,22 +2568,22 @@ class TestNewStages:
     def test_all_stages_combined(self):
         """Parse pipeline with ALL stage types including the 4 new ones."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "t"
-            |> deduplicate msg.uid within 10 s
-            |> filter msg.x > 0
-            |> rate 100 per 1s
-            |> flatten msg.items
-            |> distinct msg.id within 5 m
-            |> throttle 50 per 10 s overflow: drop
-            |> sample 25 %
-            |> group_by msg.sensor_id
-            |> window tumbling(5 m)
-            |> aggregate { n = count() }
-            |> map { total = n }
-            |> sink to b :: "o"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "t"
+            |> DEDUPLICATE msg.uid WITHIN 10 s
+            |> FILTER msg.x > 0
+            |> RATE 100 PER 1s
+            |> FLATTEN msg.items
+            |> DISTINCT msg.id WITHIN 5 m
+            |> THROTTLE 50 PER 10 s OVERFLOW: DROP
+            |> SAMPLE 25 %
+            |> GROUP_BY msg.sensor_id
+            |> WINDOW tumbling(5 m)
+            |> AGGREGATE { n = count() }
+            |> MAP { total = n }
+            |> SINK TO b :: "o"
+        ;
         """
         model = parse_string(src)
         stage_names = [s.__class__.__name__ for s in _stages(model.pipelines[0])]
@@ -2656,12 +2611,12 @@ class TestRetryPolicy:
     def test_parse_retry_clause(self):
         """Parse retry clause with explicit values."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> sink to b :: "y"
-            retry: 5 with backoff 200 ms
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> SINK TO b :: "y"
+            RETRY: 5 WITH BACKOFF 200 ms
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2673,11 +2628,11 @@ class TestRetryPolicy:
     def test_parse_pipeline_without_retry(self):
         """Pipeline without retry clause — backward compat."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> sink to b :: "y"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2686,12 +2641,12 @@ class TestRetryPolicy:
     def test_parse_retry_with_seconds(self):
         """Retry with seconds duration unit."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> sink to b :: "y"
-            retry: 3 with backoff 1 s
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> SINK TO b :: "y"
+            RETRY: 3 WITH BACKOFF 1 s
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2703,13 +2658,13 @@ class TestRetryPolicy:
     def test_parse_retry_with_on_error(self):
         """Retry alongside on_error clause."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> sink to b :: "y"
-            on_error: drop
-            retry: 5 with backoff 200 ms
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> SINK TO b :: "y"
+            ON_ERROR: DROP
+            RETRY: 5 WITH BACKOFF 200 ms
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2720,13 +2675,13 @@ class TestRetryPolicy:
     def test_parse_retry_with_finally(self):
         """Retry alongside @finally hook."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> sink to b :: "y"
-            retry: 2 with backoff 500 ms
-            @finally { publish { status: "offline" } }
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> SINK TO b :: "y"
+            RETRY: 2 WITH BACKOFF 500 ms
+            @FINALLY { PUBLISH { status: "offline" } }
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2746,49 +2701,49 @@ class TestMultiWindow:
     def test_parse_single_unnamed_window(self):
         """Single unnamed window — backward compat."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window tumbling(1 m)
-            |> aggregate { n = count() }
-            |> sink to b :: "y"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW tumbling(1 m)
+            |> AGGREGATE { n = count() }
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        w = [s for s in stages if s.__class__.__name__ == "WindowStage"][0]
+        w = next(s for s in stages if s.__class__.__name__ == "WindowStage")
         assert w.wname is None or w.wname == ""
 
     def test_parse_single_named_window(self):
         """Single named window."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window short tumbling(1 m)
-            |> aggregate { n = count() }
-            |> sink to b :: "y"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW short tumbling(1 m)
+            |> AGGREGATE { n = count() }
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        w = [s for s in stages if s.__class__.__name__ == "WindowStage"][0]
+        w = next(s for s in stages if s.__class__.__name__ == "WindowStage")
         assert w.wname == "short"
 
     def test_parse_multiple_named_windows(self):
         """Multiple named windows."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window short tumbling(1 m)
-            |> window long tumbling(5 m)
-            |> aggregate {
-                avg_1m = avg(msg.value) over short
-                avg_5m = avg(msg.value) over long
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW short tumbling(1 m)
+            |> WINDOW long tumbling(5 m)
+            |> AGGREGATE {
+                avg_1m = avg(msg.value) OVER short,
+                avg_5m = avg(msg.value) OVER long
             }
-            |> sink to b :: "y"
-        end
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2800,53 +2755,51 @@ class TestMultiWindow:
     def test_parse_over_in_agg_assignment(self):
         """Aggregate assignment with 'over' clause."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window short tumbling(1 m)
-            |> aggregate {
-                avg_val = avg(msg.value) over short
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW short tumbling(1 m)
+            |> AGGREGATE {
+                avg_val = avg(msg.value) OVER short
             }
-            |> sink to b :: "y"
-        end
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
         assert agg.assignments[0].window_ref == "short"
 
     def test_parse_agg_without_over(self):
         """Aggregate assignment without 'over' — backward compat."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window tumbling(1 m)
-            |> aggregate { n = count() }
-            |> sink to b :: "y"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW tumbling(1 m)
+            |> AGGREGATE { n = count() }
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
-        assert (
-            agg.assignments[0].window_ref is None or agg.assignments[0].window_ref == ""
-        )
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
+        assert agg.assignments[0].window_ref is None or agg.assignments[0].window_ref == ""
 
     def test_parse_multi_window_mixed_types(self):
         """Multiple windows with different types (tumbling + sliding)."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window fast tumbling(30 s)
-            |> window slow sliding(10 m, step = 2 m)
-            |> aggregate {
-                avg_fast = avg(msg.value) over fast
-                avg_slow = avg(msg.value) over slow
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW fast tumbling(30 s)
+            |> WINDOW slow sliding(10 m, STEP = 2 m)
+            |> AGGREGATE {
+                avg_fast = avg(msg.value) OVER fast,
+                avg_slow = avg(msg.value) OVER slow
             }
-            |> sink to b :: "y"
-        end
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
@@ -2859,24 +2812,24 @@ class TestMultiWindow:
         assert windows[1].step is not None
 
     def test_parse_multi_window_all_aggs_have_over(self):
-        """All aggregate assignments reference a window via 'over'."""
+        """All AGGREGATE assignments reference a WINDOW VIA 'OVER'."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "x"
-            |> window short tumbling(1 m)
-            |> window long tumbling(5 m)
-            |> aggregate {
-                n_short = count() over short
-                n_long = count() over long
-                avg_short = avg(msg.value) over short
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "x"
+            |> WINDOW short tumbling(1 m)
+            |> WINDOW long tumbling(5 m)
+            |> AGGREGATE {
+                n_short = count() OVER short,
+                n_long = count() OVER long,
+                avg_short = avg(msg.value) OVER short
             }
-            |> sink to b :: "y"
-        end
+            |> SINK TO b :: "y"
+        ;
         """
         model = parse_string(src)
         stages = _stages(model.pipelines[0])
-        agg = [s for s in stages if s.__class__.__name__ == "AggregateStage"][0]
+        agg = next(s for s in stages if s.__class__.__name__ == "AggregateStage")
         assert len(agg.assignments) == 3
         assert agg.assignments[0].window_ref == "short"
         assert agg.assignments[1].window_ref == "long"
@@ -2890,12 +2843,12 @@ class TestFuncDef:
     def test_parse_func_single_param(self):
         """func with one parameter parses correctly."""
         src = """
-        broker b host: "h" port: 1 end
-        func celsius(t) = (t - 32) * 5 / 9
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC celsius(t) = (t - 32) * 5 / 9
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         assert len(model.functions) == 1
@@ -2907,12 +2860,12 @@ class TestFuncDef:
     def test_parse_func_multi_param(self):
         """func with multiple parameters."""
         src = """
-        broker b host: "h" port: 1 end
-        func add(a, b) = a + b
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC add(a, b) = a + b
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         assert len(model.functions) == 1
@@ -2924,12 +2877,12 @@ class TestFuncDef:
     def test_parse_func_no_params(self):
         """func with zero parameters."""
         src = """
-        broker b host: "h" port: 1 end
-        func pi() = 3.14159
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC pi() = 3.14159
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         assert len(model.functions) == 1
@@ -2941,14 +2894,14 @@ class TestFuncDef:
     def test_parse_multiple_func_defs(self):
         """Multiple function definitions in one model."""
         src = """
-        broker b host: "h" port: 1 end
-        func celsius(t) = (t - 32) * 5 / 9
-        func add(a, b) = a + b
-        func pi() = 3.14159
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC celsius(t) = (t - 32) * 5 / 9
+        FUNC add(a, b) = a + b
+        FUNC pi() = 3.14159
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         assert len(model.functions) == 3
@@ -2959,12 +2912,12 @@ class TestFuncDef:
     def test_parse_func_body_is_expression(self):
         """func body is a full expression (comparison)."""
         src = """
-        broker b host: "h" port: 1 end
-        func is_hot(t) = t > 100
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC is_hot(t) = t > 100
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         f = model.functions[0]
@@ -2981,13 +2934,13 @@ class TestPipelineLetBinding:
     def test_parse_single_let(self):
         """Single let binding before stages."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            let threshold = msg.value * 2
-            |> filter msg.value > 10
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            LET threshold = msg.value * 2
+            |> FILTER msg.value > 10
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -2999,15 +2952,15 @@ class TestPipelineLetBinding:
     def test_parse_multiple_lets(self):
         """Multiple let bindings before stages."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            let low = 10
-            let high = 100
-            let mid = 50
-            |> filter msg.value > 0
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            LET low = 10
+            LET high = 100
+            LET mid = 50
+            |> FILTER msg.value > 0
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -3019,12 +2972,12 @@ class TestPipelineLetBinding:
     def test_parse_let_with_field_ref(self):
         """Let binding using msg field reference."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            let x = msg.temperature
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            LET x = msg.temperature
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -3036,12 +2989,12 @@ class TestPipelineLetBinding:
     def test_parse_let_with_complex_expression(self):
         """Let binding with arithmetic expression."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            let offset = (msg.value - 32) * 5 / 9
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            LET offset = (msg.value - 32) * 5 / 9
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -3052,11 +3005,11 @@ class TestPipelineLetBinding:
     def test_parse_pipeline_no_lets(self):
         """Pipeline without let bindings has empty list."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         p = model.pipelines[0]
@@ -3070,28 +3023,24 @@ class TestMatchExpr:
     def test_parse_match_basic(self):
         """Basic match expression with two arms and else."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> aggregate { v = avg(msg.x) }
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> AGGREGATE { v = avg(msg.x) }
+            |> MAP {
                 out = match msg.type {
                     case "A" => 1
                     case "B" => 2
                     else => 0
                 }
             }
-            |> sink to b :: "b"
-        end
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         # Navigate expression tree to the MatchExpr atom
-        match_node = (
-            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert len(match_node.arms) == 2
         assert match_node.elseExpr is not None
@@ -3099,26 +3048,22 @@ class TestMatchExpr:
     def test_parse_match_without_else(self):
         """Match expression without else clause."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> aggregate { v = avg(msg.x) }
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> AGGREGATE { v = avg(msg.x) }
+            |> MAP {
                 out = match msg.type {
                     case "A" => 1
                     case "B" => 2
                 }
             }
-            |> sink to b :: "b"
-        end
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
-        match_node = (
-            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
+        match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert len(match_node.arms) == 2
         assert match_node.elseExpr is None
@@ -3126,26 +3071,22 @@ class TestMatchExpr:
     def test_parse_match_single_arm(self):
         """Match expression with a single arm."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> aggregate { v = avg(msg.x) }
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> AGGREGATE { v = avg(msg.x) }
+            |> MAP {
                 out = match msg.status {
                     case "ok" => 1
                     else => 0
                 }
             }
-            |> sink to b :: "b"
-        end
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
-        match_node = (
-            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
+        match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert len(match_node.arms) == 1
         assert match_node.elseExpr is not None
@@ -3153,27 +3094,23 @@ class TestMatchExpr:
     def test_parse_match_arm_structure(self):
         """MatchArm has pattern and result attributes."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> aggregate { v = avg(msg.x) }
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> AGGREGATE { v = avg(msg.x) }
+            |> MAP {
                 out = match msg.level {
                     case "high" => 100
                     case "low" => 10
                     else => 50
                 }
             }
-            |> sink to b :: "b"
-        end
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
-        match_node = (
-            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
+        match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         arm0 = match_node.arms[0]
         assert arm0.__class__.__name__ == "MatchArm"
@@ -3183,26 +3120,22 @@ class TestMatchExpr:
     def test_parse_match_subject_is_expression(self):
         """Match subject can be a complex expression."""
         src = """
-        broker b host: "h" port: 1 end
-        pipeline p
-            source from b :: "a"
-            |> aggregate { v = avg(msg.x) }
-            |> map {
+        BROKER b HOST: "h" PORT: 1 ;
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> AGGREGATE { v = avg(msg.x) }
+            |> MAP {
                 out = match msg.a + msg.b {
                     case 10 => "ten"
                     else => "other"
                 }
             }
-            |> sink to b :: "b"
-        end
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
-        match_node = (
-            m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
-        )
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
+        match_node = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert match_node.__class__.__name__ == "MatchExpr"
         assert match_node.subject is not None
 
@@ -3214,13 +3147,13 @@ class TestUserFuncCall:
     def test_parse_user_func_call_in_filter(self):
         """User function call in filter expression."""
         src = """
-        broker b host: "h" port: 1 end
-        func celsius(t) = (t - 32) * 5 / 9
-        pipeline p
-            source from b :: "a"
-            |> filter celsius(msg.temp) > 0
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC celsius(t) = (t - 32) * 5 / 9
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> FILTER celsius(msg.temp) > 0
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         f = _stages(model.pipelines[0])[0]
@@ -3235,13 +3168,13 @@ class TestUserFuncCall:
     def test_parse_user_func_call_multi_args(self):
         """User function call with multiple arguments."""
         src = """
-        broker b host: "h" port: 1 end
-        func add(a, b) = a + b
-        pipeline p
-            source from b :: "a"
-            |> filter add(msg.x, msg.y) > 0
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC add(a, b) = a + b
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> FILTER add(msg.x, msg.y) > 0
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
         f = _stages(model.pipelines[0])[0]
@@ -3254,18 +3187,16 @@ class TestUserFuncCall:
     def test_parse_user_func_call_in_map(self):
         """User function call in map expression."""
         src = """
-        broker b host: "h" port: 1 end
-        func double(x) = x * 2
-        pipeline p
-            source from b :: "a"
-            |> map { result = double(msg.value) }
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC double(x) = x * 2
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> MAP { result = double(msg.value) }
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.__class__.__name__ == "UserFuncCall"
         assert atom.name == "double"
@@ -3274,18 +3205,16 @@ class TestUserFuncCall:
     def test_parse_user_func_call_three_args(self):
         """User function call with three arguments."""
         src = """
-        broker b host: "h" port: 1 end
-        func clamp(val, lo, hi) = if val < lo then lo else if val > hi then hi else val
-        pipeline p
-            source from b :: "a"
-            |> map { clamped = clamp(msg.value, 0, 100) }
-            |> sink to b :: "b"
-        end
+        BROKER b HOST: "h" PORT: 1 ;
+        FUNC clamp(val, lo, hi) = if val < lo then lo else if val > hi then hi else val
+        PIPELINE p
+            SOURCE FROM b :: "a"
+            |> MAP { clamped = clamp(msg.value, 0, 100) }
+            |> SINK TO b :: "b"
+        ;
         """
         model = parse_string(src)
-        m = [
-            s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage"
-        ][0]
+        m = next(s for s in _stages(model.pipelines[0]) if s.__class__.__name__ == "MapStage")
         atom = m.mappings[0].value.operands[0].operands[0].left.left.left.left.atom
         assert atom.__class__.__name__ == "UserFuncCall"
         assert atom.name == "clamp"
@@ -3300,9 +3229,10 @@ class TestParseFile:
 
     def test_parse_file(self):
         """parse(path) reads a .sigil file and returns a model."""
-        import tempfile, os
+        import os
+        import tempfile
 
-        src = 'broker b host: "h" port: 1 end\npipeline p\n    source from b :: "t"\n    |> sink to b :: "o"\nend\n'
+        src = 'BROKER b HOST: "h" PORT: 1 ;\nPIPELINE p\n    SOURCE FROM b :: "t"\n    |> SINK TO b :: "o"\n;\n'
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sigil", delete=False) as f:
             f.write(src)
             f.flush()
@@ -3318,27 +3248,28 @@ class TestParseFile:
 
     def test_parse_file_nonexistent_raises(self):
         """parse() with a non-existent path raises an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(FileNotFoundError):
             parse("/tmp/_sigil_nonexistent_file_12345.sigil")
 
     def test_import_resolves_broker_from_helper(self):
         """import merges brokers from the imported file into the model."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             helper = os.path.join(td, "helper.sigil")
             with open(helper, "w") as f:
-                f.write('broker helper_broker host: "helper" port: 2 end\n')
+                f.write('BROKER helper_broker HOST: "helper" PORT: 2 ;\n')
 
             main = os.path.join(td, "main.sigil")
             with open(main, "w") as f:
                 f.write(
-                    'import "helper.sigil"\n'
-                    'broker b host: "h" port: 1 end\n'
-                    "pipeline p\n"
-                    '    source from b :: "t"\n'
-                    '    |> sink to b :: "o"\n'
-                    "end\n"
+                    'IMPORT "helper.sigil"\n'
+                    'BROKER b HOST: "h" PORT: 1;\n'
+                    "PIPELINE p\n"
+                    '    SOURCE FROM b :: "t"\n'
+                    '    |> SINK TO b :: "o"\n'
+                    ";\n"
                 )
 
             model = parse(main)
@@ -3349,26 +3280,28 @@ class TestParseFile:
 
     def test_import_file_not_found(self):
         """Importing a non-existent file raises FileNotFoundError."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             main = os.path.join(td, "main.sigil")
             with open(main, "w") as f:
                 f.write(
-                    'import "nonexistent.sigil"\n'
-                    'broker b host: "h" port: 1 end\n'
-                    "pipeline p\n"
-                    '    source from b :: "t"\n'
-                    '    |> sink to b :: "o"\n'
-                    "end\n"
+                    'IMPORT "nonexistent.sigil"\n'
+                    'BROKER b HOST: "h" PORT: 1 ;\n'
+                    "PIPELINE p\n"
+                    '    SOURCE FROM b :: "t"\n'
+                    '    |> SINK TO b :: "o"\n'
+                    ";\n"
                 )
 
-            with pytest.raises(FileNotFoundError, match="nonexistent.sigil"):
+            with pytest.raises(FileNotFoundError, match=r"nonexistent\.sigil"):
                 parse(main)
 
     def test_circular_import_direct(self):
         """Two files importing each other raises CircularImportError."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             a_path = os.path.join(td, "a.sigil")
@@ -3376,22 +3309,22 @@ class TestParseFile:
 
             with open(a_path, "w") as f:
                 f.write(
-                    'import "b.sigil"\n'
-                    'broker ba host: "h" port: 1 end\n'
-                    "pipeline pa\n"
-                    '    source from ba :: "t"\n'
-                    '    |> sink to ba :: "o"\n'
-                    "end\n"
+                    'IMPORT "b.sigil"\n'
+                    'BROKER ba HOST: "h" PORT: 1 ;\n'
+                    "PIPELINE pa\n"
+                    '    SOURCE FROM ba :: "t"\n'
+                    '    |> SINK TO ba :: "o"\n'
+                    ";\n"
                 )
 
             with open(b_path, "w") as f:
                 f.write(
-                    'import "a.sigil"\n'
-                    'broker bb host: "h" port: 2 end\n'
-                    "pipeline pb\n"
-                    '    source from bb :: "t2"\n'
-                    '    |> sink to bb :: "o2"\n'
-                    "end\n"
+                    'IMPORT "a.sigil"\n'
+                    'BROKER bb HOST: "h" PORT: 2 ;\n'
+                    "PIPELINE pb\n"
+                    '    SOURCE FROM bb :: "t2"\n'
+                    '    |> SINK TO bb :: "o2"\n'
+                    ";\n"
                 )
 
             with pytest.raises(CircularImportError, match="Circular import"):
@@ -3399,18 +3332,19 @@ class TestParseFile:
 
     def test_circular_import_self(self):
         """A file importing itself raises CircularImportError."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             self_path = os.path.join(td, "self.sigil")
             with open(self_path, "w") as f:
                 f.write(
-                    'import "self.sigil"\n'
-                    'broker b host: "h" port: 1 end\n'
-                    "pipeline p\n"
-                    '    source from b :: "t"\n'
-                    '    |> sink to b :: "o"\n'
-                    "end\n"
+                    'IMPORT "self.sigil"\n'
+                    'BROKER b HOST: "h" PORT: 1 ;\n'
+                    "PIPELINE p\n"
+                    '    SOURCE FROM b :: "t"\n'
+                    '    |> SINK TO b :: "o"\n'
+                    ";\n"
                 )
 
             with pytest.raises(CircularImportError, match="Circular import"):
@@ -3418,28 +3352,29 @@ class TestParseFile:
 
     def test_import_merges_constants_and_schemas(self):
         """Import merges brokers, constants, and schemas from helper."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             helper = os.path.join(td, "helper.sigil")
             with open(helper, "w") as f:
                 f.write(
-                    'broker helper_b host: "h2" port: 2 end\n'
-                    "const THRESHOLD = 42\n"
-                    "schema sensor\n"
+                    'BROKER helper_b HOST: "h2" PORT: 2 ;\n'
+                    "CONST THRESHOLD = 42\n"
+                    "SCHEMA sensor\n"
                     "    value: float\n"
-                    "end\n"
+                    ";\n"
                 )
 
             main = os.path.join(td, "main.sigil")
             with open(main, "w") as f:
                 f.write(
-                    'import "helper.sigil"\n'
-                    'broker b host: "h" port: 1 end\n'
-                    "pipeline p\n"
-                    '    source from b :: "t"\n'
-                    '    |> sink to b :: "o"\n'
-                    "end\n"
+                    'IMPORT "helper.sigil"\n'
+                    'BROKER b HOST: "h" PORT: 1 ;\n'
+                    "PIPELINE p\n"
+                    '    SOURCE FROM b :: "t"\n'
+                    '    |> SINK TO b :: "o"\n'
+                    ";\n"
                 )
 
             model = parse(main)
@@ -3454,28 +3389,29 @@ class TestParseFile:
 
     def test_import_merges_pipelines(self):
         """Imported pipelines are merged into the main model."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             helper = os.path.join(td, "helper.sigil")
             with open(helper, "w") as f:
                 f.write(
-                    'broker hb host: "h" port: 1 end\n'
-                    "pipeline helper_pipe\n"
-                    '    source from hb :: "t"\n'
-                    '    |> sink to hb :: "o"\n'
-                    "end\n"
+                    'BROKER hb HOST: "h" PORT: 1 ;\n'
+                    "PIPELINE helper_pipe\n"
+                    '    SOURCE FROM hb :: "t"\n'
+                    '    |> SINK TO hb :: "o"\n'
+                    ";\n"
                 )
 
             main = os.path.join(td, "main.sigil")
             with open(main, "w") as f:
                 f.write(
-                    'import "helper.sigil"\n'
-                    'broker mb host: "h" port: 2 end\n'
-                    "pipeline main_pipe\n"
-                    '    source from mb :: "t2"\n'
-                    '    |> sink to mb :: "o2"\n'
-                    "end\n"
+                    'IMPORT "helper.sigil"\n'
+                    'BROKER mb HOST: "h" PORT: 2 ;\n'
+                    "PIPELINE main_pipe\n"
+                    '    SOURCE FROM mb :: "t2"\n'
+                    '    |> SINK TO mb :: "o2"\n'
+                    ";\n"
                 )
 
             model = parse(main)
@@ -3484,34 +3420,35 @@ class TestParseFile:
 
     def test_transitive_imports(self):
         """a imports b, b imports c — transitive merge works."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             c_path = os.path.join(td, "c.sigil")
             with open(c_path, "w") as f:
-                f.write('broker cb host: "h" port: 1 end\nconst BASE = 10\n')
+                f.write('BROKER cb HOST: "h" PORT: 1 ;\nCONST BASE = 10\n')
 
             b_path = os.path.join(td, "b.sigil")
             with open(b_path, "w") as f:
                 f.write(
-                    'import "c.sigil"\n'
-                    'broker bb host: "h" port: 2 end\n'
-                    "const MULTIPLIER = 5\n"
-                    "pipeline bp\n"
-                    '    source from bb :: "t"\n'
-                    '    |> sink to bb :: "o"\n'
-                    "end\n"
+                    'IMPORT "c.sigil"\n'
+                    'BROKER bb HOST: "h" PORT: 2 ;\n'
+                    "CONST MULTIPLIER = 5\n"
+                    "PIPELINE bp\n"
+                    '    SOURCE FROM bb :: "t"\n'
+                    '    |> SINK TO bb :: "o"\n'
+                    ";\n"
                 )
 
             a_path = os.path.join(td, "a.sigil")
             with open(a_path, "w") as f:
                 f.write(
-                    'import "b.sigil"\n'
-                    'broker ab host: "h" port: 3 end\n'
-                    "pipeline ap\n"
-                    '    source from ab :: "t2"\n'
-                    '    |> sink to ab :: "o2"\n'
-                    "end\n"
+                    'IMPORT "b.sigil"\n'
+                    'BROKER ab HOST: "h" PORT: 3 ;\n'
+                    "PIPELINE ap\n"
+                    '    SOURCE FROM ab :: "t2"\n'
+                    '    |> SINK TO ab :: "o2"\n'
+                    ";\n"
                 )
 
             model = parse(a_path)
@@ -3530,17 +3467,18 @@ class TestParseFile:
 
     def test_import_no_imports_is_noop(self):
         """File with no import declarations — _resolve_imports is a no-op."""
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "standalone.sigil")
             with open(path, "w") as f:
                 f.write(
-                    'broker b host: "h" port: 1 end\n'
-                    "pipeline p\n"
-                    '    source from b :: "t"\n'
-                    '    |> sink to b :: "o"\n'
-                    "end\n"
+                    'BROKER b HOST: "h" PORT: 1;\n'
+                    "PIPELINE p\n"
+                    '    SOURCE FROM b :: "t"\n'
+                    '    |> SINK TO b :: "o"\n'
+                    ";\n"
                 )
 
             model = parse(path)
@@ -3551,7 +3489,7 @@ class TestParseFile:
 
 
 PREDICT_BASE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 """
 
 
@@ -3559,23 +3497,23 @@ def test_parse_model_def_full():
     src = (
         PREDICT_BASE
         + """
-model det
-    source: "models/anomaly.onnx"
-    runtime: onnx
-    features: [msg.temperature, msg.humidity, msg.pressure]
-    returns: [anomaly_score, is_anomaly]
-end
-pipeline p
-    source from b :: "in"
-    |> sink to b :: "out"
-end
+MODEL det
+    SOURCE: "models/anomaly.ONNX"
+    RUNTIME: ONNX
+    FEATURES: [msg.temperature, msg.humidity, msg.pressure]
+    RETURNS: [anomaly_score, is_anomaly]
+;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
     assert len(model.models) == 1
     m = model.models[0]
     assert m.name == "det"
-    assert m.runtime == "onnx"
+    assert m.runtime == "ONNX"
     assert len(m.features) == 3
     assert m.features[0].segments == ["msg", "temperature"]
     assert m.features[1].segments == ["msg", "humidity"]
@@ -3587,21 +3525,21 @@ def test_parse_model_def_minimal():
     src = (
         PREDICT_BASE
         + """
-model m
-    source: "model.pkl"
-    runtime: sklearn
-end
-pipeline p
-    source from b :: "in"
-    |> sink to b :: "out"
-end
+MODEL m
+    SOURCE: "MODEL.pkl"
+    RUNTIME: SKLEARN
+;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
     assert len(model.models) == 1
     m = model.models[0]
     assert m.name == "m"
-    assert m.runtime == "sklearn"
+    assert m.runtime == "SKLEARN"
     assert m.features == []
     assert m.returns == []
 
@@ -3610,67 +3548,67 @@ def test_parse_model_runtime_onnx():
     src = (
         PREDICT_BASE
         + """
-model m source: "x" runtime: onnx end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: "x" RUNTIME: ONNX ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
-    assert parse_string(src).models[0].runtime == "onnx"
+    assert parse_string(src).models[0].runtime == "ONNX"
 
 
 def test_parse_model_runtime_sklearn():
     src = (
         PREDICT_BASE
         + """
-model m source: "x" runtime: sklearn end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: "x" RUNTIME: SKLEARN ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
-    assert parse_string(src).models[0].runtime == "sklearn"
+    assert parse_string(src).models[0].runtime == "SKLEARN"
 
 
 def test_parse_model_runtime_torch():
     src = (
         PREDICT_BASE
         + """
-model m source: "x" runtime: torch end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: "x" RUNTIME: TORCH ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
-    assert parse_string(src).models[0].runtime == "torch"
+    assert parse_string(src).models[0].runtime == "TORCH"
 
 
 def test_parse_model_runtime_tflite():
     src = (
         PREDICT_BASE
         + """
-model m source: "x" runtime: tflite end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: "x" RUNTIME: TFLITE ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
-    assert parse_string(src).models[0].runtime == "tflite"
+    assert parse_string(src).models[0].runtime == "TFLITE"
 
 
 def test_parse_model_runtime_custom():
     src = (
         PREDICT_BASE
         + """
-model m source: "x" runtime: custom end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: "x" RUNTIME: CUSTOM ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
-    assert parse_string(src).models[0].runtime == "custom"
+    assert parse_string(src).models[0].runtime == "CUSTOM"
 
 
 def test_parse_predict_stage():
     src = (
         PREDICT_BASE
         + """
-model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
-pipeline p
-    source from b :: "in"
-    |> predict det
-    |> sink to b :: "out"
-end
+MODEL det SOURCE: "m.ONNX" RUNTIME: ONNX FEATURES: [msg.x] RETURNS: [y] ;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> PREDICT det
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3684,13 +3622,13 @@ def test_parse_predict_with_filter():
     src = (
         PREDICT_BASE
         + """
-model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [y] end
-pipeline p
-    source from b :: "in"
-    |> filter msg.x > 0
-    |> predict det
-    |> sink to b :: "out"
-end
+MODEL det SOURCE: "m.ONNX" RUNTIME: ONNX FEATURES: [msg.x] RETURNS: [y] ;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> FILTER msg.x > 0
+    |> PREDICT det
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3704,12 +3642,12 @@ def test_predict_model_cross_reference():
     src = (
         PREDICT_BASE
         + """
-model my_model source: "m.bin" runtime: sklearn features: [msg.a] returns: [b] end
-pipeline p
-    source from b :: "in"
-    |> predict my_model
-    |> sink to b :: "out"
-end
+MODEL my_model SOURCE: "m.bin" RUNTIME: SKLEARN FEATURES: [msg.a] RETURNS: [b] ;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> PREDICT my_model
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3722,8 +3660,8 @@ def test_model_source_as_env():
     src = (
         PREDICT_BASE
         + """
-model m source: env("MODEL_PATH", "default.onnx") runtime: onnx features: [msg.x] returns: [y] end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m SOURCE: env("MODEL_PATH", "DEFAULT.ONNX") RUNTIME: ONNX FEATURES: [msg.x] RETURNS: [y] ;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
     model = parse_string(src)
@@ -3735,13 +3673,13 @@ def test_model_multiple_inputs():
     src = (
         PREDICT_BASE
         + """
-model m
-    source: "m.onnx"
-    runtime: onnx
-    features: [msg.a, msg.b.c, msg.d]
-    returns: [out]
-end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m
+    SOURCE: "m.ONNX"
+    RUNTIME: ONNX
+    FEATURES: [msg.a, msg.b.c, msg.d]
+    RETURNS: [out]
+;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
     model = parse_string(src)
@@ -3754,13 +3692,13 @@ def test_model_multiple_outputs():
     src = (
         PREDICT_BASE
         + """
-model m
-    source: "m.onnx"
-    runtime: onnx
-    features: [msg.x]
-    returns: [a, b, c, d]
-end
-pipeline p source from b :: "in" |> sink to b :: "out" end
+MODEL m
+    SOURCE: "m.ONNX"
+    RUNTIME: ONNX
+    FEATURES: [msg.x]
+    RETURNS: [a, b, c, d]
+;
+PIPELINE p SOURCE FROM b :: "in" |> SINK TO b :: "out" ;
 """
     )
     model = parse_string(src)
@@ -3771,15 +3709,15 @@ def test_predict_and_downstream_map():
     src = (
         PREDICT_BASE
         + """
-model det source: "m.onnx" runtime: onnx features: [msg.x] returns: [score] end
-pipeline p
-    source from b :: "in"
-    |> predict det
-    |> map {
+MODEL det SOURCE: "m.ONNX" RUNTIME: ONNX FEATURES: [msg.x] RETURNS: [score] ;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> PREDICT det
+    |> MAP {
         result = msg.score
     }
-    |> sink to b :: "out"
-end
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3793,13 +3731,13 @@ def test_multiple_models():
     src = (
         PREDICT_BASE
         + """
-model m1 source: "a.onnx" runtime: onnx features: [msg.x] returns: [y] end
-model m2 source: "b.pkl" runtime: sklearn features: [msg.a] returns: [b] end
-pipeline p
-    source from b :: "in"
-    |> predict m1
-    |> sink to b :: "out"
-end
+MODEL m1 SOURCE: "a.ONNX" RUNTIME: ONNX FEATURES: [msg.x] RETURNS: [y] ;
+MODEL m2 SOURCE: "b.pkl" RUNTIME: SKLEARN FEATURES: [msg.a] RETURNS: [b] ;
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> PREDICT m1
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3810,36 +3748,37 @@ end
 
 def test_pipeline_no_sink():
     m = parse_string("""
-        broker local
-            host: "localhost"
-            port: 1883
-        end
-        pipeline hub
-            source from local :: "input/data"
-            |> filter msg.value > 0
-        end
+        BROKER local
+            HOST: "localhost"
+            PORT: 1883
+        ;
+        PIPELINE hub
+            SOURCE FROM local :: "input/data"
+            |> FILTER msg.value > 0
+        ;
     """)
     assert m.pipelines[0].sink is None
     assert m.pipelines[0].route is None
 
 
 def test_cross_file_broker_reference():
-    import tempfile, os
+    import os
+    import tempfile
 
     with tempfile.TemporaryDirectory() as td:
         brokers_file = os.path.join(td, "brokers.sigil")
         with open(brokers_file, "w") as f:
-            f.write('broker remote host: "remote.host" port: 1883 end\n')
+            f.write('BROKER remote HOST: "remote.host" PORT: 1883 ;\n')
 
         main_file = os.path.join(td, "main.sigil")
         with open(main_file, "w") as f:
             f.write(
-                'import "brokers.sigil"\n'
-                'broker local host: "localhost" port: 1883 end\n'
-                "pipeline p\n"
-                '    source from remote :: "input/topic"\n'
-                '    |> sink to local :: "output/topic"\n'
-                "end\n"
+                'IMPORT "brokers.sigil"\n'
+                'BROKER local HOST: "localhost" PORT: 1883 ;\n'
+                "PIPELINE p\n"
+                '    SOURCE FROM remote :: "input/topic"\n'
+                '    |> SINK TO local :: "output/topic"\n'
+                ";\n"
             )
 
         model = parse(main_file)
@@ -3850,7 +3789,7 @@ def test_cross_file_broker_reference():
 
 
 SELECT_BASE = """
-broker b host: "localhost" port: 1883 end
+BROKER b HOST: "localhost" PORT: 1883 ;
 """
 
 
@@ -3858,11 +3797,11 @@ def test_parse_select_passthrough_fields():
     src = (
         SELECT_BASE
         + """
-pipeline p
-    source from b :: "in"
-    |> select [field1, field2, field3]
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SELECT [field1, field2, field3]
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3881,11 +3820,11 @@ def test_parse_select_rename_fields():
     src = (
         SELECT_BASE
         + """
-pipeline p
-    source from b :: "in"
-    |> select [out_name: source_name, other: orig]
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SELECT [out_name: source_name, other: orig]
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3903,11 +3842,11 @@ def test_parse_select_mixed_fields():
     src = (
         SELECT_BASE
         + """
-pipeline p
-    source from b :: "in"
-    |> select [id, value: raw_value, ts]
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SELECT [id, value: raw_value, ts]
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3924,11 +3863,11 @@ def test_parse_select_single_field():
     src = (
         SELECT_BASE
         + """
-pipeline p
-    source from b :: "in"
-    |> select [value]
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> SELECT [value]
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3939,18 +3878,18 @@ end
 
 # ── Array indexing ──────────────────────────────────────────────────────────
 
-BASE_SUB = """broker b host: "h" port: 1883 end\n"""
+BASE_SUB = """BROKER b HOST: "h" PORT: 1883;\n"""
 
 
 def test_parse_field_subscript_positive():
     src = (
         BASE_SUB
         + """
-pipeline p
-    source from b :: "in"
-    |> filter msg.items[0] > 0
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> FILTER msg.items[0] > 0
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3961,11 +3900,11 @@ def test_parse_field_subscript_negative():
     src = (
         BASE_SUB
         + """
-pipeline p
-    source from b :: "in"
-    |> filter msg.readings[-1] > 0
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> FILTER msg.readings[-1] > 0
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3976,11 +3915,11 @@ def test_parse_field_subscript_nested():
     src = (
         BASE_SUB
         + """
-pipeline p
-    source from b :: "in"
-    |> filter msg.data.items[2] > 0
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> FILTER msg.data.items[2] > 0
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -3991,11 +3930,11 @@ def test_parse_field_subscript_in_map():
     src = (
         BASE_SUB
         + """
-pipeline p
-    source from b :: "in"
-    |> map { first = msg.items[0]; last = msg.items[-1] }
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> MAP { first = msg.items[0], last = msg.items[-1] }
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4004,18 +3943,18 @@ end
 
 # ── DebugStage ───────────────────────────────────────────────────────────────
 
-BASE_DBG = """broker b host: "h" port: 1883 end\n"""
+BASE_DBG = """BROKER b HOST: "h" PORT: 1883;\n"""
 
 
 def test_parse_debug_bare():
     src = (
         BASE_DBG
         + """
-pipeline p
-    source from b :: "in"
-    |> debug
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4027,11 +3966,11 @@ def test_parse_debug_with_label():
     src = (
         BASE_DBG
         + """
-pipeline p
-    source from b :: "in"
-    |> debug label: "checkpoint"
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG LABEL: "checkpoint"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4043,11 +3982,11 @@ def test_parse_debug_with_fields():
     src = (
         BASE_DBG
         + """
-pipeline p
-    source from b :: "in"
-    |> debug label: "arrived", fields: [msg.id, msg.value]
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG LABEL: "arrived", FIELDS: [msg.id, msg.value]
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4059,13 +3998,13 @@ def test_parse_multiple_debug_stages():
     src = (
         BASE_DBG
         + """
-pipeline p
-    source from b :: "in"
-    |> debug label: "pre"
-    |> filter msg.v > 0
-    |> debug label: "post"
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> DEBUG LABEL: "pre"
+    |> FILTER msg.v > 0
+    |> DEBUG LABEL: "post"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4076,19 +4015,19 @@ end
 
 # ── percentile / distinct_count ──────────────────────────────────────────────
 
-BASE_PCT = """broker b host: "h" port: 1883 end\n"""
+BASE_PCT = """BROKER b HOST: "h" PORT: 1883;\n"""
 
 
 def test_parse_percentile_aggregation():
     src = (
         BASE_PCT
         + """
-pipeline p
-    source from b :: "in"
-    |> window tumbling(1 m)
-    |> aggregate { p95 = percentile(msg.value, 95) }
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE { p95 = percentile(msg.value, 95) }
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4099,12 +4038,12 @@ def test_parse_distinct_count_aggregation():
     src = (
         BASE_PCT
         + """
-pipeline p
-    source from b :: "in"
-    |> window tumbling(1 m)
-    |> aggregate { n = distinct_count(msg.device_id) }
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE { n = distinct_count(msg.device_id) }
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4115,17 +4054,17 @@ def test_parse_percentile_and_regular_aggs():
     src = (
         BASE_PCT
         + """
-pipeline p
-    source from b :: "in"
-    |> window tumbling(1 m)
-    |> aggregate {
-        p95 = percentile(msg.value, 95)
-        p50 = percentile(msg.value, 50)
-        n = distinct_count(msg.device_id)
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE {
+        p95 = percentile(msg.value, 95),
+        p50 = percentile(msg.value, 50),
+        n = distinct_count(msg.device_id),
         total = sum(msg.value)
     }
-    |> sink to b :: "out"
-end
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4135,8 +4074,8 @@ end
 # ── ValidateStage ─────────────────────────────────────────────────────────────
 
 BASE_VAL = """
-broker b host: "h" port: 1883 end
-schema S strict id: str value: float active: bool? end
+BROKER b HOST: "h" PORT: 1883;
+SCHEMA S STRICT id: str value: float active: bool?;
 """
 
 
@@ -4144,11 +4083,11 @@ def test_parse_validate_drop():
     src = (
         BASE_VAL
         + """
-pipeline p
-    source from b :: "in"
-    |> validate schema: S on_error: drop
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> VALIDATE SCHEMA: S ON_ERROR: DROP
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4161,11 +4100,11 @@ def test_parse_validate_skip():
     src = (
         BASE_VAL
         + """
-pipeline p
-    source from b :: "in"
-    |> validate schema: S on_error: skip
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> VALIDATE SCHEMA: S ON_ERROR: SKIP
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4177,11 +4116,11 @@ def test_parse_validate_no_on_error():
     src = (
         BASE_VAL
         + """
-pipeline p
-    source from b :: "in"
-    |> validate schema: S
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> VALIDATE SCHEMA: S
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4193,11 +4132,11 @@ def test_parse_validate_sink_to_broker():
     src = (
         BASE_VAL
         + """
-pipeline p
-    source from b :: "in"
-    |> validate schema: S on_error: sink to b :: "dlq/errors"
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> VALIDATE SCHEMA: S ON_ERROR: SINK TO b :: "dlq/errors"
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4207,21 +4146,21 @@ end
 
 # ── EnrichStage ──────────────────────────────────────────────────────────────
 
-BASE_ENR = """broker b host: "h" port: 1883 end\n"""
+BASE_ENR = """BROKER b HOST: "h" PORT: 1883;\n"""
 
 
 def test_parse_enrich_minimal():
     src = (
         BASE_ENR
         + """
-pipeline p
-    source from b :: "in"
-    |> enrich via http
-        url: "https://api.example.com/data"
-        bind: info
-    end
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/data"
+        BIND: info
+    ;
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4234,17 +4173,17 @@ def test_parse_enrich_with_method_and_timeout():
     src = (
         BASE_ENR
         + """
-pipeline p
-    source from b :: "in"
-    |> enrich via http
-        url: "https://api.example.com/data"
-        method: GET
-        timeout: 2 s
-        bind: meta
-        on_error: skip
-    end
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/data"
+        METHOD: GET
+        TIMEOUT: 2 s
+        BIND: meta
+        ON_ERROR: SKIP
+    ;
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4256,15 +4195,15 @@ def test_parse_enrich_on_error_default():
     src = (
         BASE_ENR
         + """
-pipeline p
-    source from b :: "in"
-    |> enrich via http
-        url: "https://api.example.com/data"
-        bind: meta
-        on_error: default { name: "unknown" }
-    end
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/data"
+        BIND: meta
+        ON_ERROR: DEFAULT { name: "unknown" }
+    ;
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)
@@ -4276,18 +4215,18 @@ def test_parse_multiple_enrich_stages():
     src = (
         BASE_ENR
         + """
-pipeline p
-    source from b :: "in"
-    |> enrich via http
-        url: "https://api.example.com/a"
-        bind: meta_a
-    end
-    |> enrich via http
-        url: "https://api.example.com/b"
-        bind: meta_b
-    end
-    |> sink to b :: "out"
-end
+PIPELINE p
+    SOURCE FROM b :: "in"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/a"
+        BIND: meta_a
+    ;
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/b"
+        BIND: meta_b
+    ;
+    |> SINK TO b :: "out"
+;
 """
     )
     model = parse_string(src)

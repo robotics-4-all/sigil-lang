@@ -1,9 +1,9 @@
 /*
  * Example 36 — AMQP and Kafka Transports
  * ========================================
- * Demonstrates broker definitions using the `amqp` and `kafka`
+ * Demonstrates BROKER definitions using the `amqp` and `kafka`
  * transports alongside `mqtt` and `redis`. All four transports are
- * shown in a single multi-pipeline file.
+ * shown in a single multi-PIPELINE file.
  *
  * SUPPORTED TRANSPORTS:
  *   mqtt   — MQTT 3.1.1/5.0 (Mosquitto, EMQX, HiveMQ, AWS IoT, …)
@@ -36,102 +36,102 @@
  */
 
 // ── Kafka: high-throughput transaction event log ────────────────────────────
-broker kafka_payments
-    transport: kafka
-    host: "kafka.payments.internal"
-    port: 9092
-end
+BROKER kafka_payments
+    TRANSPORT: KAFKA
+    HOST: "kafka.payments.internal"
+    PORT: 9092
+;
 
 // ── AMQP: reliable delivery for compliance review queue ────────────────────
-broker amqp_compliance
-    transport: amqp
-    host: "rabbit.compliance.internal"
-    port: 5672
-    auth: {
-        username: "compliance_svc"
-        password: "amqp-s3cr3t"
+BROKER amqp_compliance
+    TRANSPORT: AMQP
+    HOST: "rabbit.compliance.internal"
+    PORT: 5672
+    AUTH: {
+        USERNAME: "compliance_svc"
+        PASSWORD: "amqp-s3cr3t"
     }
-end
+;
 
 // ── Redis: low-latency merchant dashboard cache ─────────────────────────────
-broker redis_dashboard
-    transport: redis
-    host: "redis.dashboard.internal"
-    port: 6379
-end
+BROKER redis_dashboard
+    TRANSPORT: REDIS
+    HOST: "redis.dashboard.internal"
+    PORT: 6379
+;
 
-// ── MQTT: mobile push notification broker ──────────────────────────────────
-broker mqtt_notify
-    transport: mqtt
-    host: "notify.example.com"
-    port: 1883
-    ssl: true
-end
+// ── MQTT: mobile push notification BROKER ──────────────────────────────────
+BROKER mqtt_notify
+    TRANSPORT: MQTT
+    HOST: "notify.example.com"
+    PORT: 1883
+    SSL: true
+;
 
-const HIGH_VALUE_USD  = 5000
-const HIGH_RISK_SCORE = 0.7
-const WINDOW_SECONDS  = 5
+CONST HIGH_VALUE_USD  = 5000
+CONST HIGH_RISK_SCORE = 0.7
+CONST WINDOW_SECONDS  = 5
 
-// ── Pipeline 1: Validate and route transactions ─────────────────────────────
-pipeline validate_and_route
-    source from kafka_payments :: "payments.raw" format: json
+// ── Pipeline 1: Validate and ROUTE transactions ─────────────────────────────
+PIPELINE validate_and_route
+    SOURCE FROM kafka_payments :: "payments.raw" FORMAT: json
 
     // Drop messages missing required fields or with impossible amounts
-    |> filter msg.tx_id is not null and
+    |> FILTER msg.tx_id is not null and
               msg.amount_usd > 0 and
               msg.merchant_id is not null
 
     // Annotate with a risk flag before routing
-    |> map {
-        let flagged = msg.amount_usd > HIGH_VALUE_USD or
-                      msg.risk_score > HIGH_RISK_SCORE;
+    |> MAP {
+        LET flagged = msg.amount_usd > HIGH_VALUE_USD or
+                      msg.risk_score > HIGH_RISK_SCORE,
 
-        tx_id       = msg.tx_id;
-        merchant_id = msg.merchant_id;
-        amount_usd  = msg.amount_usd;
-        currency    = msg.currency ?? "USD";
-        risk_score  = msg.risk_score ?? 0.0;
+        tx_id       = msg.tx_id,
+        merchant_id = msg.merchant_id,
+        amount_usd  = msg.amount_usd,
+        currency    = msg.currency ?? "USD",
+        risk_score  = msg.risk_score ?? 0.0,
         flagged     = flagged
     }
 
     // High-value or high-risk → AMQP compliance queue
     // All others             → MQTT push notification
-    |> route
-        when msg.flagged == true => sink to amqp_compliance :: "payments.review"
-        default                  => sink to mqtt_notify :: "payments/notify"
-    end
-end
+    |> ROUTE
+        when msg.flagged == true => SINK TO amqp_compliance :: "payments.review"
+        DEFAULT                  => SINK TO mqtt_notify :: "payments/notify"
+    ;
+;
 
-// ── Pipeline 2: Per-merchant 5-minute aggregate → Redis dashboard ──────────
-pipeline merchant_summary
-    source from kafka_payments :: "payments.raw" format: json
+// ── Pipeline 2: Per-merchant 5-minute AGGREGATE → Redis dashboard ──────────
+PIPELINE merchant_summary
+    SOURCE FROM kafka_payments :: "payments.raw" FORMAT: json
 
-    |> filter msg.merchant_id is not null and msg.amount_usd > 0
+    |> FILTER msg.merchant_id is not null and msg.amount_usd > 0
 
-    |> group_by msg.merchant_id
+    |> GROUP_BY msg.merchant_id
 
-    |> window tumbling(5 m)
+    |> WINDOW tumbling(5 m)
 
-    |> aggregate {
-        tx_count    = count()
-        total_usd   = sum(msg.amount_usd)
-        avg_usd     = avg(msg.amount_usd)
-        max_usd     = max(msg.amount_usd)
+    |> AGGREGATE {
+        tx_count    = count(),
+        total_usd   = sum(msg.amount_usd),
+        avg_usd     = avg(msg.amount_usd),
+        max_usd     = max(msg.amount_usd),
         avg_risk    = avg(msg.risk_score)
     }
 
-    |> having tx_count >= 1
+    |> HAVING tx_count >= 1
 
-    |> map {
-        merchant    = msg.merchant_id;
-        volume_usd  = total_usd;
-        average_usd = avg_usd;
-        peak_usd    = max_usd;
-        tx_count    = tx_count;
-        avg_risk    = avg_risk;
+    |> MAP {
+        merchant    = msg.merchant_id,
+        volume_usd  = total_usd,
+        average_usd = avg_usd,
+        peak_usd    = max_usd,
+        tx_count    = tx_count,
+        avg_risk    = avg_risk,
         alert_risk  = if avg_risk > HIGH_RISK_SCORE then true else false
     }
 
     // Publish summary to Redis for dashboard consumption
-    |> sink to redis_dashboard :: "merchants:summary:5m"
-end
+    |> SINK TO redis_dashboard :: "merchants:summary:5m"
+;

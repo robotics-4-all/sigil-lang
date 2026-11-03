@@ -1,51 +1,51 @@
 // Example 15 — Pipeline Chaining
 //
-// Demonstrates DAG-style pipeline composition using `pipe:` source.
-// The "enrich" pipeline receives messages from "clean" pipeline
-// via in-memory handoff (no broker round-trip).
+// Demonstrates DAG-style PIPELINE composition using `pipe:` SOURCE.
+// The "enrich" PIPELINE receives messages from "clean" PIPELINE
+// via in-memory handoff (no BROKER round-trip).
 //
-// Data flow: MQTT → clean → enrich → MQTT
+// Data flow: MQTT → clean → ENRICH → MQTT
 //
-//   sensors/raw → [clean] → [enrich] → analytics/enriched
+//   sensors/raw → [clean] → [ENRICH] → analytics/enriched
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
 // Stage 1: Clean raw sensor data
-pipeline clean
-    source from local :: "sensors/raw"
+PIPELINE clean
+    SOURCE FROM local :: "sensors/raw"
 
     // Dedup by sensor + timestamp
-    |> deduplicate msg.event_id within 10 s
+    |> DEDUPLICATE msg.event_id WITHIN 10 s
 
     // Drop invalid readings
-    |> filter msg.value is not null and msg.value > -100 and msg.value < 200
+    |> FILTER msg.value is not null and msg.value > -100 and msg.value < 200
 
-    |> sink to local :: "sensors/clean"
-end
+    |> SINK TO local :: "sensors/clean"
+;
 
 // Stage 2: Enrich clean data with aggregation
-// Source is the "clean" pipeline — receives messages directly
-pipeline enrich
-    source from pipe clean
+// Source is the "clean" PIPELINE — receives messages directly
+PIPELINE ENRICH
+    SOURCE FROM PIPE clean
 
-    |> window tumbling(1 m)
+    |> WINDOW tumbling(1 m)
 
-    |> aggregate {
-        avg_temp = avg(msg.value)
-        max_temp = max(msg.value)
-        min_temp = min(msg.value)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
+        min_temp = min(msg.value),
         n = count()
     }
 
-    |> map {
-        average = avg_temp;
-        range = max_temp - min_temp;
+    |> MAP {
+        average = avg_temp,
+        range = max_temp - min_temp,
         samples = n
     }
 
-    |> sink to local :: "analytics/enriched"
-end
+    |> SINK TO local :: "analytics/enriched"
+;
 

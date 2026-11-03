@@ -72,7 +72,7 @@ FUNCS_NO_FIELD = {"count"}
 FUNCS_REQUIRING_PARAM = {"percentile"}
 VALID_QOS = {0, 1, 2}
 VALID_FORMATS = {"json", "csv", "raw"}
-VALID_TRANSPORTS = {"mqtt", "redis", "amqp", "kafka"}
+VALID_TRANSPORTS = {"MQTT", "REDIS", "AMQP", "KAFKA"}
 
 
 def _unwrap_stages(pipeline):
@@ -228,7 +228,7 @@ class SemanticValidationError(Exception):
 
 def _check_unique_broker_names(model):
     seen = {}
-    errors = []
+    errors: list[SemanticError] = []
     for b in model.brokers:
         if b.name in seen:
             errors.append(
@@ -240,7 +240,7 @@ def _check_unique_broker_names(model):
 
 def _check_unique_pipeline_names(model):
     seen = {}
-    errors = []
+    errors: list[SemanticError] = []
     for p in model.pipelines:
         if p.name in seen:
             errors.append(
@@ -251,7 +251,7 @@ def _check_unique_pipeline_names(model):
 
 
 def _check_brokers(model):
-    errors = []
+    errors: list[SemanticError] = []
     for broker in model.brokers:
         if broker.port < 1 or broker.port > 65535:
             errors.append(
@@ -269,7 +269,7 @@ def _check_brokers(model):
 
 
 def _check_source(pipeline, model=None):
-    errors = []
+    errors: list[SemanticError] = []
     src = pipeline.source
     if src.pipe:
         return errors
@@ -285,7 +285,7 @@ def _check_source(pipeline, model=None):
 
 
 def _check_sink_or_route(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if pipeline.sink:
         snk = pipeline.sink
         if snk.qos is not None and snk.qos not in VALID_QOS:
@@ -302,7 +302,7 @@ def _check_sink_or_route(pipeline):
 
 
 def _check_stage_order(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     last_order = -2
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
@@ -324,7 +324,7 @@ def _check_stage_order(pipeline):
 
 
 def _check_aggregations(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "AggregateStage":
             continue
@@ -418,7 +418,7 @@ def _extract_literal_number(expr_node):
 
 
 def _check_map_references(pipeline, const_names=None):
-    errors = []
+    errors: list[SemanticError] = []
     agg_names = set()
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ == "AggregateStage":
@@ -452,15 +452,14 @@ def _check_map_expr_refs(node, agg_names, pipeline_name, errors):
     cls = node.__class__.__name__
     if cls == "FieldRef":
         segments = node.segments
-        if segments[0] != "msg" and len(segments) == 1:
-            if segments[0] not in agg_names:
-                errors.append(
-                    SemanticError(
-                        f"Pipeline '{pipeline_name}': map references "
-                        f"undefined aggregation '{segments[0]}'. "
-                        f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
-                    )
+        if segments[0] != "msg" and len(segments) == 1 and segments[0] not in agg_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': map references "
+                    f"undefined aggregation '{segments[0]}'. "
+                    f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
                 )
+            )
         return
 
     if cls in ("ForallExpr", "ExistsExpr"):
@@ -476,27 +475,27 @@ def _check_map_expr_refs(node, agg_names, pipeline_name, errors):
 
 
 def _check_duplicate_stages(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     seen = set()
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
         if cls in seen and cls not in ("WindowStage", "DebugStage", "EnrichStage"):
             # Map class name to DSL keyword for readable error messages
             stage_keyword = {
-                "DeduplicateStage": "deduplicate",
-                "FilterStage": "filter",
-                "RateStage": "rate",
-                "FlattenStage": "flatten",
-                "DistinctStage": "distinct",
-                "ThrottleStage": "throttle",
-                "SampleStage": "sample",
-                "GroupByStage": "group_by",
-                "AggregateStage": "aggregate",
-                "AccumulateStage": "accumulate",
-                "HavingStage": "having",
-                "MapStage": "map",
-                "SelectStage": "select",
-                "PredictStage": "predict",
+                "DeduplicateStage": "DEDUPLICATE",
+                "FilterStage": "FILTER",
+                "RateStage": "RATE",
+                "FlattenStage": "FLATTEN",
+                "DistinctStage": "DISTINCT",
+                "ThrottleStage": "THROTTLE",
+                "SampleStage": "SAMPLE",
+                "GroupByStage": "GROUP_BY",
+                "AggregateStage": "AGGREGATE",
+                "AccumulateStage": "ACCUMULATE",
+                "HavingStage": "HAVING",
+                "MapStage": "MAP",
+                "SelectStage": "SELECT",
+                "PredictStage": "PREDICT",
             }.get(cls, cls)
             errors.append(
                 SemanticError(
@@ -509,7 +508,7 @@ def _check_duplicate_stages(pipeline):
 
 
 def _check_unused_aggregations(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     agg_names = set()
     has_map = False
     has_having = False
@@ -560,7 +559,7 @@ def _collect_map_refs(node, refs):
         return
 
     if cls in ("ForallExpr", "ExistsExpr"):
-        quantifier_refs = set()
+        quantifier_refs: set[str] = set()
         _collect_map_refs(node.predicate, quantifier_refs)
         quantifier_refs.discard(node.var)
         refs.update(quantifier_refs)
@@ -573,7 +572,7 @@ def _collect_map_refs(node, refs):
 
 
 def _check_window_constraints(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "WindowStage":
             continue
@@ -600,7 +599,7 @@ def _check_window_constraints(pipeline):
 
 
 def _check_multi_window(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     windows = [s for s in _unwrap_stages(pipeline) if s.__class__.__name__ == "WindowStage"]
     if not windows:
         for stage in _unwrap_stages(pipeline):
@@ -739,11 +738,13 @@ UNIT_MULTIPLIERS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 def _duration_to_seconds(dur) -> float:
-    return dur.value * UNIT_MULTIPLIERS.get(dur.unit, 1)
+    mult = UNIT_MULTIPLIERS.get(dur.unit, 1)
+    result: float = dur.value * mult
+    return result
 
 
 def _check_scalar_funcs(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_funcs(stage, pipeline.name, errors)
     return errors
@@ -757,10 +758,7 @@ def _walk_expr_for_funcs(node, pipeline_name, errors):
         if bounds:
             lo, hi = bounds
             if nargs < lo or nargs > hi:
-                if lo == hi:
-                    expect = f"exactly {lo}"
-                else:
-                    expect = f"{lo}-{hi}"
+                expect = f"exactly {lo}" if lo == hi else f"{lo}-{hi}"
                 errors.append(
                     SemanticError(
                         f"Pipeline '{pipeline_name}': function '{node.name}' "
@@ -772,7 +770,7 @@ def _walk_expr_for_funcs(node, pipeline_name, errors):
 
 
 def _check_let_bindings(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "MapStage":
             continue
@@ -805,7 +803,7 @@ def _check_let_bindings(pipeline):
 
 
 def _check_stage_dependencies(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     stage_names = {s.__class__.__name__ for s in _unwrap_stages(pipeline)}
     has_window = "WindowStage" in stage_names
     has_aggregate = "AggregateStage" in stage_names
@@ -854,7 +852,7 @@ def _check_stage_dependencies(pipeline):
 
 
 def _check_duplicate_agg_names(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "AggregateStage":
             continue
@@ -871,7 +869,7 @@ def _check_duplicate_agg_names(pipeline):
 
 
 def _check_duplicate_map_targets(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "MapStage":
             continue
@@ -888,7 +886,7 @@ def _check_duplicate_map_targets(pipeline):
 
 
 def _check_unique_const_names(model):
-    errors = []
+    errors: list[SemanticError] = []
     seen = set()
     for c in model.constants:
         if c.name in seen:
@@ -900,7 +898,7 @@ def _check_unique_const_names(model):
 
 
 def _check_having_references(pipeline, const_names=None):
-    errors = []
+    errors: list[SemanticError] = []
     agg_names = set()
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ == "AggregateStage":
@@ -928,15 +926,14 @@ def _check_having_expr_refs(node, agg_names, pipeline_name, errors):
     cls = node.__class__.__name__
     if cls == "FieldRef":
         segments = node.segments
-        if segments[0] != "msg" and len(segments) == 1:
-            if segments[0] not in agg_names:
-                errors.append(
-                    SemanticError(
-                        f"Pipeline '{pipeline_name}': having references "
-                        f"undefined aggregation '{segments[0]}'. "
-                        f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
-                    )
+        if segments[0] != "msg" and len(segments) == 1 and segments[0] not in agg_names:
+            errors.append(
+                SemanticError(
+                    f"Pipeline '{pipeline_name}': having references "
+                    f"undefined aggregation '{segments[0]}'. "
+                    f"Available: {', '.join(sorted(agg_names)) or '(none)'}."
                 )
+            )
         return
 
     if cls in ("ForallExpr", "ExistsExpr"):
@@ -952,7 +949,7 @@ def _check_having_expr_refs(node, agg_names, pipeline_name, errors):
 
 
 def _check_dedup_constraints(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "DeduplicateStage":
             continue
@@ -972,7 +969,7 @@ def _check_dedup_constraints(pipeline):
 
 
 def _check_case_exprs(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_case(stage, pipeline.name, errors)
     return errors
@@ -1002,7 +999,7 @@ def _walk_expr_for_case(node, pipeline_name, errors):
 
 
 def _check_temporal_refs(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
         if cls in ("FilterStage", "HavingStage"):
@@ -1053,7 +1050,7 @@ def _walk_expr_for_temporal(node, pipeline_name, stage_cls, errors):
 
 
 def _check_temporal_field_validity(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
         if cls not in ("FilterStage", "HavingStage"):
@@ -1064,29 +1061,27 @@ def _check_temporal_field_validity(pipeline):
 
 def _walk_expr_for_temporal_fields(node, pipeline_name, errors):
     cls = node.__class__.__name__
-    if cls == "OldRef":
-        if node.field.segments[0] != "msg" or len(node.field.segments) < 2:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': old() requires a message "
-                    f"field path (e.g. old(msg.status))."
-                )
+    if cls == "OldRef" and (node.field.segments[0] != "msg" or len(node.field.segments) < 2):
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': old() requires a message "
+                f"field path (e.g. old(msg.status))."
             )
-    if cls == "ChangedRef":
-        if node.field.segments[0] != "msg" or len(node.field.segments) < 2:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': changed() requires a message "
-                    f"field path (e.g. changed(msg.status))."
-                )
+        )
+    if cls == "ChangedRef" and (node.field.segments[0] != "msg" or len(node.field.segments) < 2):
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': changed() requires a message "
+                f"field path (e.g. changed(msg.status))."
             )
+        )
 
     for child in _iter_expr_children(node):
         _walk_expr_for_temporal_fields(child, pipeline_name, errors)
 
 
 def _check_env_refs(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_env(stage, pipeline.name, errors)
     return errors
@@ -1094,20 +1089,19 @@ def _check_env_refs(pipeline):
 
 def _walk_expr_for_env(node, pipeline_name, errors):
     cls = node.__class__.__name__
-    if cls == "EnvRef":
-        if not node.key:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': env() requires a non-empty string key argument."
-                )
+    if cls == "EnvRef" and not node.key:
+        errors.append(
+            SemanticError(
+                f"Pipeline '{pipeline_name}': env() requires a non-empty string key argument."
             )
+        )
 
     for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS):
         _walk_expr_for_env(child, pipeline_name, errors)
 
 
 def _check_quantifier_refs(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     stages = _unwrap_stages(pipeline)
     stage_names = {s.__class__.__name__ for s in stages}
     has_window = "WindowStage" in stage_names
@@ -1161,7 +1155,7 @@ def _walk_expr_for_quantifiers(node, pipeline_name, stage_kind, has_window, erro
 
 
 def _check_object_literal_fields(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if pipeline.initially:
         _check_object_field_uniqueness(pipeline.initially.body, pipeline.name, "@initially", errors)
     if pipeline.finally_:
@@ -1171,19 +1165,19 @@ def _check_object_literal_fields(pipeline):
 
 def _check_object_field_uniqueness(obj_literal, pipeline_name, hook_name, errors):
     seen = set()
-    for field in obj_literal.fields:
-        if field.name in seen:
+    for obj_field in obj_literal.fields:
+        if obj_field.name in seen:
             errors.append(
                 SemanticError(
                     f"Pipeline '{pipeline_name}': {hook_name} has duplicate "
-                    f"field '{field.name}' in object literal."
+                    f"field '{obj_field.name}' in object literal."
                 )
             )
-        seen.add(field.name)
+        seen.add(obj_field.name)
 
 
 def _check_sink_batch(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if not pipeline.sink:
         return errors
     snk = pipeline.sink
@@ -1218,7 +1212,7 @@ def _check_sink_batch(pipeline):
 
 
 def _check_stage_annotations(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for annotated in pipeline.stages:
         if annotated.__class__.__name__ != "AnnotatedStage":
             continue
@@ -1227,14 +1221,14 @@ def _check_stage_annotations(pipeline):
                 SemanticError(
                     f"Pipeline '{pipeline.name}': @{ann.severity} on "
                     f"{annotated.stage.__class__.__name__}: {ann.message}",
-                    severity=("warning" if ann.severity == "warn" else "error"),
+                    severity=("warning" if ann.severity == "WARN" else "error"),
                 )
             )
     return errors
 
 
 def _check_route_block(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if not pipeline.route:
         return errors
     route = pipeline.route
@@ -1272,7 +1266,7 @@ def _check_route_block(pipeline):
 
 
 def _check_rate(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "RateStage":
             continue
@@ -1290,7 +1284,7 @@ def _check_rate(pipeline):
 
 
 def _check_accumulate(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     agg_names = set()
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ == "AggregateStage":
@@ -1347,7 +1341,7 @@ def _check_accumulate(pipeline):
 
 
 def _check_flatten(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "FlattenStage":
             continue
@@ -1364,7 +1358,7 @@ def _check_flatten(pipeline):
 
 
 def _check_distinct(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "DistinctStage":
             continue
@@ -1385,7 +1379,7 @@ def _check_distinct(pipeline):
 
 
 def _check_throttle(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "ThrottleStage":
             continue
@@ -1400,7 +1394,7 @@ def _check_throttle(pipeline):
             errors.append(
                 SemanticError(f"Pipeline '{pipeline.name}': throttle period must be positive.")
             )
-        if stage.overflow == "buffer" and stage.buffer_size and stage.buffer_size <= 0:
+        if stage.overflow == "BUFFER" and stage.buffer_size and stage.buffer_size <= 0:
             errors.append(
                 SemanticError(
                     f"Pipeline '{pipeline.name}': throttle buffer size must be "
@@ -1411,7 +1405,7 @@ def _check_throttle(pipeline):
 
 
 def _check_sample(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "SampleStage":
             continue
@@ -1426,7 +1420,7 @@ def _check_sample(pipeline):
 
 
 def _check_pipeline_chaining(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     src = pipeline.source
     if not src.pipe:
         return errors
@@ -1447,7 +1441,7 @@ def _check_pipeline_chaining(pipeline, model):
 
 
 def _check_join(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     join = pipeline.join
     if not join:
         return errors
@@ -1489,15 +1483,14 @@ def _check_join(pipeline):
 
 
 def _check_on_error(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if not pipeline.on_error:
         return errors
     oe = pipeline.on_error
-    if oe.broker:
-        if not oe.topic:
-            errors.append(
-                SemanticError(f"Pipeline '{pipeline.name}': on_error sink topic must not be empty.")
-            )
+    if oe.broker and not oe.topic:
+        errors.append(
+            SemanticError(f"Pipeline '{pipeline.name}': on_error sink topic must not be empty.")
+        )
     if not oe.broker and oe.topic:
         errors.append(
             SemanticError(f"Pipeline '{pipeline.name}': on_error has topic but no broker.")
@@ -1506,7 +1499,7 @@ def _check_on_error(pipeline):
 
 
 def _check_retry(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     if not pipeline.retry:
         return errors
     retry = pipeline.retry
@@ -1528,7 +1521,7 @@ def _check_retry(pipeline):
 
 
 def _check_pipeline_let_bindings(pipeline, const_names=None):
-    errors = []
+    errors: list[SemanticError] = []
     if not pipeline.pipeline_lets:
         return errors
 
@@ -1557,7 +1550,7 @@ _BUILTIN_FUNC_NAMES = {"abs", "round", "len", "lower", "upper", "floor", "ceil",
 
 
 def _check_func_defs(model):
-    errors = []
+    errors: list[SemanticError] = []
     if not model.functions:
         return errors
 
@@ -1584,7 +1577,7 @@ def _check_func_defs(model):
 
 
 def _check_user_func_calls(pipeline, func_names):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_user_func_calls(stage, pipeline.name, func_names, errors)
     if pipeline.pipeline_lets:
@@ -1595,13 +1588,10 @@ def _check_user_func_calls(pipeline, func_names):
 
 def _walk_expr_for_user_func_calls(node, pipeline_name, func_names, errors):
     cls = node.__class__.__name__
-    if cls == "UserFuncCall":
-        if node.name not in func_names:
-            errors.append(
-                SemanticError(
-                    f"Pipeline '{pipeline_name}': call to undefined function '{node.name}'."
-                )
-            )
+    if cls == "UserFuncCall" and node.name not in func_names:
+        errors.append(
+            SemanticError(f"Pipeline '{pipeline_name}': call to undefined function '{node.name}'.")
+        )
 
     for child in _iter_expr_children(node, extra_attrs=_EXTRA_BLOCK_ATTRS + _EXTRA_MATCH_ATTRS):
         _walk_expr_for_user_func_calls(child, pipeline_name, func_names, errors)
@@ -1611,7 +1601,7 @@ def _walk_expr_for_user_func_calls(node, pipeline_name, func_names, errors):
 
 
 def _check_match_exprs(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_match(stage, pipeline.name, errors)
     if pipeline.pipeline_lets:
@@ -1647,7 +1637,7 @@ def _walk_expr_for_match(node, pipeline_name, errors):
 
 
 def _check_unique_schema_names(model):
-    errors = []
+    errors: list[SemanticError] = []
     seen = set()
     for s in model.schemas:
         if s.name in seen:
@@ -1659,7 +1649,7 @@ def _check_unique_schema_names(model):
 
 
 def _check_schema_fields(model):
-    errors = []
+    errors: list[SemanticError] = []
     for s in model.schemas:
         if not s.fields:
             errors.append(SemanticError(f"Schema '{s.name}' must have at least one field."))
@@ -1671,13 +1661,13 @@ def _check_schema_field_uniqueness(fields, schema_name, path, errors):
     seen = set()
     for f in fields:
         if f.name in seen:
-            location = ".".join(path + [f.name]) if path else f.name
+            location = ".".join([*path, f.name]) if path else f.name
             errors.append(
                 SemanticError(f"Schema '{schema_name}': duplicate field name '{location}'.")
             )
         seen.add(f.name)
         if f.type.__class__.__name__ == "SchemaObjectType":
-            _check_schema_field_uniqueness(f.type.fields, schema_name, path + [f.name], errors)
+            _check_schema_field_uniqueness(f.type.fields, schema_name, [*path, f.name], errors)
 
 
 def _resolve_schema_field(schema, field_segments):
@@ -1705,24 +1695,22 @@ def _resolve_schema_field(schema, field_segments):
 
 
 def _schema_type_name(schema_type):
-    cls = schema_type.__class__.__name__
-    if cls == "SchemaScalarType":
-        return schema_type.name
-    elif cls == "SchemaObjectType":
-        return "object"
-    elif cls == "SchemaListType":
-        return "list"
-    return "unknown"
+    type_names = {
+        "SchemaScalarType": schema_type.name,
+        "SchemaObjectType": "object",
+        "SchemaListType": "list",
+    }
+    return type_names.get(schema_type.__class__.__name__, "unknown")
 
 
 def _check_schema_references(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     src = pipeline.source
     if src.pipe or not src.schema:
         return errors
 
     schema = src.schema
-    is_strict = schema.strictness != "lenient"
+    is_strict = schema.strictness != "LENIENT"
 
     for stage in _unwrap_stages(pipeline):
         _walk_expr_for_schema(stage, pipeline.name, schema, is_strict, errors)
@@ -1803,7 +1791,7 @@ def _walk_expr_for_schema(node, pipeline_name, schema, is_strict, errors):
 
 
 def _check_models(model):
-    errors = []
+    errors: list[SemanticError] = []
     seen = set()
     for m in model.models:
         if m.name in seen:
@@ -1819,7 +1807,7 @@ def _check_models(model):
                     errors.append(SemanticError(f"Model '{m.name}': duplicate output name '{o}'."))
                 output_seen.add(o)
 
-        if m.runtime != "custom":
+        if m.runtime.lower() != "custom":
             if not m.features:
                 errors.append(
                     SemanticError(
@@ -1840,7 +1828,7 @@ def _check_models(model):
 
 
 def _check_predict_stages(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     model_names = {m.name for m in model.models}
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "PredictStage":
@@ -1863,7 +1851,7 @@ def _check_predict_stages(pipeline, model):
 
 
 def _check_select_stage(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     stage_names = {s.__class__.__name__ for s in _unwrap_stages(pipeline)}
     has_map = "MapStage" in stage_names
     has_select = "SelectStage" in stage_names
@@ -1878,7 +1866,7 @@ def _check_select_stage(pipeline):
 
 
 def _check_debug_stage(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "DebugStage":
             continue
@@ -1896,7 +1884,7 @@ def _check_debug_stage(pipeline):
 
 
 def _check_subscript_keys(pipeline):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         cls = stage.__class__.__name__
         if cls == "DeduplicateStage":
@@ -1937,7 +1925,7 @@ def _check_subscript_keys(pipeline):
 
 
 def _check_validate_stage(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     schema_names = {s.name for s in model.schemas}
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "ValidateStage":
@@ -1972,7 +1960,7 @@ def _check_validate_stage(pipeline, model):
 
 
 def _check_enrich_stage(pipeline, model):
-    errors = []
+    errors: list[SemanticError] = []
     for stage in _unwrap_stages(pipeline):
         if stage.__class__.__name__ != "EnrichStage":
             continue

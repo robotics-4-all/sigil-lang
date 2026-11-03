@@ -1,31 +1,31 @@
 // ─── Example 21: Schema Declarations ────────────────────────────────
 //
 // Schemas define typed message shapes for compile-time field validation.
-// When a schema is bound to a pipeline source, the compiler checks that
-// all msg.X references exist in the schema and have compatible types.
+// When a SCHEMA is bound to a PIPELINE SOURCE, the compiler checks that
+// all msg.X references exist in the SCHEMA and have compatible types.
 //
 // Difficulty: Intermediate
-// Features:  schema, strict/lenient, nested objects, lists, optional fields
+// Features:  SCHEMA, strict/lenient, nested objects, lists, optional fields
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
 // ─── Schema with scalar fields ──────────────────────────────────────
 // Defines the expected shape of sensor messages.
 // Fields: temp (float), humidity (float), sensor_id (str), active (bool)
-schema SensorReading strict
+SCHEMA SensorReading STRICT
     temp: float
     humidity: float
     sensor_id: str
     active: bool
     timestamp: int
-end
+;
 
 // ─── Schema with nested objects and lists ───────────────────────────
 // Demonstrates complex type hierarchies.
-schema EnrichedReading
+SCHEMA EnrichedReading
     value: float
     unit: str
     location: {
@@ -35,53 +35,53 @@ schema EnrichedReading
     }
     tags: [str]
     metadata: {
-        source: str,
+        SOURCE: str,
         version: int,
         calibrated: bool?
     }
-end
+;
 
 // ─── Schema with lenient mode ───────────────────────────────────────
 // Lenient schemas produce warnings (not errors) for unknown fields.
 // Use lenient when messages may contain extra dynamic fields.
-schema FlexibleEvent lenient
+SCHEMA FlexibleEvent LENIENT
     event_type: str
     severity: int
     message: str
-end
+;
 
-// ─── Pipeline with strict schema binding ────────────────────────────
+// ─── Pipeline with strict SCHEMA binding ────────────────────────────
 // The compiler validates that msg.temp, msg.humidity, msg.sensor_id
 // all exist in SensorReading and have the expected types.
-pipeline sensor_monitor
-    source from local :: "sensors/data" schema: SensorReading
-    |> filter msg.active == true and msg.temp > -40.0
-    |> window tumbling(1 m)
-    |> aggregate {
-        avg_temp: float = avg(msg.temp)
-        avg_humidity: float = avg(msg.humidity)
+PIPELINE sensor_monitor
+    SOURCE FROM local :: "sensors/data" SCHEMA: SensorReading
+    |> FILTER msg.active == true and msg.temp > -40.0
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE {
+        avg_temp: float = avg(msg.temp),
+        avg_humidity: float = avg(msg.humidity),
         readings = count()
     }
-    |> map {
-        temperature = avg_temp;
-        humidity = avg_humidity;
+    |> MAP {
+        temperature = avg_temp,
+        humidity = avg_humidity,
         sample_count = readings
     }
-    |> sink to local :: "sensors/aggregated"
-end
+    |> SINK TO local :: "sensors/aggregated"
+;
 
-// ─── Pipeline with nested schema fields ─────────────────────────────
+// ─── Pipeline with nested SCHEMA fields ─────────────────────────────
 // Access nested fields like msg.location.lat — the compiler verifies
 // that 'location' is an object type containing 'lat'.
-pipeline geo_filter
-    source from local :: "sensors/enriched" schema: EnrichedReading
-    |> filter msg.location.lat > 35.0 and msg.location.lon < 25.0
-    |> sink to local :: "sensors/greece"
-end
+PIPELINE geo_filter
+    SOURCE FROM local :: "sensors/enriched" SCHEMA: EnrichedReading
+    |> FILTER msg.location.lat > 35.0 and msg.location.lon < 25.0
+    |> SINK TO local :: "sensors/greece"
+;
 
-// ─── Pipeline without schema binding ────────────────────────────────
-// No schema = no compile-time field validation (dynamic messages).
-pipeline passthrough
-    source from local :: "events/raw"
-    |> sink to local :: "events/forwarded"
-end
+// ─── Pipeline without SCHEMA binding ────────────────────────────────
+// No SCHEMA = no compile-time field validation (dynamic messages).
+PIPELINE passthrough
+    SOURCE FROM local :: "events/raw"
+    |> SINK TO local :: "events/forwarded"
+;
