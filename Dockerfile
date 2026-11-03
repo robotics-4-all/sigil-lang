@@ -9,10 +9,9 @@ RUN apt-get update && \
 COPY requirements.txt pyproject.toml ./
 COPY sigil/ ./sigil/
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir "commlib-py[redis,mqtt,amqp,kafka]>=0.13.0"
 
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .[api,integration]
 
 EXPOSE 8080
 
