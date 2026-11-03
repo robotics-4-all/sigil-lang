@@ -6,9 +6,9 @@
  * available in all pipelines of that file.
  */
 
-const TEMP_MIN      = -40
-const TEMP_MAX      = 125
-const HUMIDITY_MIN  = 0
-const HUMIDITY_MAX  = 100
-const ALERT_TEMP    = 80
-const WINDOW_MIN    = 5
+CONST TEMP_MIN      = -40
+CONST TEMP_MAX      = 125
+CONST HUMIDITY_MIN  = 0
+CONST HUMIDITY_MAX  = 100
+CONST ALERT_TEMP    = 80
+CONST WINDOW_MIN    = 5

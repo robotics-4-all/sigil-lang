@@ -5,20 +5,20 @@
  * Defines the three brokers used across the multi-file pipeline.
  */
 
-broker edge
-    transport: mqtt
-    host: "10.0.1.1"
-    port: 1883
-end
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "10.0.1.1"
+    PORT: 1883
+;
 
-broker analytics
-    transport: redis
-    host: "redis.internal"
-    port: 6379
-end
+BROKER analytics
+    TRANSPORT: REDIS
+    HOST: "redis.internal"
+    PORT: 6379
+;
 
-broker events
-    transport: amqp
-    host: "rabbit.example.com"
-    port: 5672
-end
+BROKER events
+    TRANSPORT: AMQP
+    HOST: "rabbit.example.com"
+    PORT: 5672
+;

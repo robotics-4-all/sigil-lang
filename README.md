@@ -46,15 +46,15 @@ pip install -e .
 Create a simple pipeline in `hello.sigil`:
 
 ```sigil
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline relay
-    source from local :: "sensors/temperature"
-    |> sink to local :: "mirror/temperature"
-end
+PIPELINE relay
+    SOURCE FROM local :: "sensors/temperature"
+    |> SINK TO local :: "mirror/temperature"
+;
 ```
 
 Validate and generate the Python application:
@@ -74,80 +74,80 @@ python generated/main.py
 
 ### Basic Filter Pipeline
 ```sigil
-pipeline temperature_filter
-    source from edge :: "sensors/+/temperature"
-    |> filter msg.value > -40 and msg.value < 85
-    |> sink to edge :: "filtered/temperature"
-end
+PIPELINE temperature_filter
+    SOURCE FROM edge :: "sensors/+/temperature"
+    |> FILTER msg.value > -40 and msg.value < 85
+    |> SINK TO edge :: "filtered/temperature"
+;
 ```
 
 ### Window + Aggregate Pipeline
 ```sigil
-pipeline fleet_summary
-    source from fleet :: "trucks/+/telemetry"
-    |> filter msg.speed_kmh >= 5
-    |> group_by msg.region
-    |> window tumbling(5 m)
-    |> aggregate {
-        avg_speed = avg(msg.speed_kmh)
-        top_speed = max(msg.speed_kmh)
+PIPELINE fleet_summary
+    SOURCE FROM fleet :: "trucks/+/telemetry"
+    |> FILTER msg.speed_kmh >= 5
+    |> GROUP_BY msg.region
+    |> WINDOW tumbling(5 M)
+    |> AGGREGATE {
+        avg_speed = avg(msg.speed_kmh),
+        top_speed = max(msg.speed_kmh),
         active_trucks = count()
     }
-    |> sink to fleet :: "analytics/fleet/regional"
-end
+    |> SINK TO fleet :: "analytics/fleet/regional"
+;
 ```
 
 ### Stream Join
 ```sigil
-pipeline enrich_orders
-    source from local :: "orders/new"
-    |> join local :: "customers/profiles"
-        on msg.customer_id == other.id
-        within 30 s
-        type: inner
-    end
-    |> map {
+PIPELINE enrich_orders
+    SOURCE FROM local :: "orders/new"
+    |> JOIN local :: "customers/profiles"
+        ON msg.customer_id == other.id
+        WITHIN 30 S
+        TYPE: INNER
+    ;
+    |> MAP {
         order_id = msg.order_id;
         customer_name = other.name ?? "unknown";
         amount = msg.amount
     }
-    |> sink to local :: "orders/enriched"
-end
+    |> SINK TO local :: "orders/enriched"
+;
 ```
 
 ### ML Inference
 ```sigil
-model anomaly_detector
-    source: "models/anomaly.onnx"
-    runtime: onnx
-    features: [msg.temperature, msg.humidity, msg.pressure]
-    returns: [anomaly_score, is_anomaly]
-end
+MODEL anomaly_detector
+    SOURCE: "models/anomaly.onnx"
+    RUNTIME: ONNX
+    FEATURES: [msg.temperature, msg.humidity, msg.pressure]
+    RETURNS: [anomaly_score, is_anomaly]
+;
 
-pipeline sensor_monitoring
-    source from edge :: "sensors/+/data"
-    |> filter msg.temperature is not null
-    |> predict anomaly_detector
-    |> map {
+PIPELINE sensor_monitoring
+    SOURCE FROM edge :: "sensors/+/data"
+    |> FILTER msg.temperature is not null
+    |> PREDICT anomaly_detector
+    |> MAP {
         device_id = msg.device_id;
         score = msg.anomaly_score;
         temperature = msg.temperature
     }
-    |> sink to cloud :: "alerts/anomaly"
-end
+    |> SINK TO cloud :: "alerts/anomaly"
+;
 ```
 
 ### Conditional Routing
 ```sigil
-pipeline classify
-    source from local :: "sensors/all"
-    |> filter msg.value is not null
-    |> route
-        when msg.value > 90 => sink to alerts :: "priority.high"
-        when msg.value > 50 => sink to local :: "priority/medium"
-        default => sink to local :: "priority/low"
-    end
-end
+PIPELINE classify
+    SOURCE FROM local :: "sensors/all"
+    |> FILTER msg.value is not null
+    |> ROUTE
+        WHEN msg.value > 90 => SINK TO alerts :: "priority.high"
+        WHEN msg.value > 50 => SINK TO local :: "priority/medium"
+        DEFAULT => SINK TO local :: "priority/low"
+    ;
+;
 ```
 
 ## CLI Reference
@@ -161,27 +161,27 @@ end
 
 ## Pipeline Stages
 
-Sigil enforces a fixed stage order: `source` → `join` → `deduplicate` → `filter`/`predict` → `rate` → `flatten` → `distinct` → `throttle` → `sample` → `group_by` → `window` → `aggregate` → `accumulate` → `having` → `map` → `sink`.
+Sigil enforces a fixed stage order: `SOURCE` → `JOIN` → `DEDUPLICATE` → `FILTER`/`PREDICT` → `RATE` → `FLATTEN` → `DISTINCT` → `THROTTLE` → `SAMPLE` → `GROUP_BY` → `WINDOW` → `AGGREGATE` → `ACCUMULATE` → `HAVING` → `MAP` → `SINK`.
 
 | Stage | Description | Syntax Snippet |
 |-------|-------------|----------------|
-| `source` | Define message entry point | `source from broker :: "topic"` |
-| `join` | Enrich stream with another stream | `|> join broker :: "topic" on ... end` |
-| `deduplicate` | Drop duplicates by key within TTL | `|> deduplicate msg.id within 5 s` |
-| `filter` | Drop messages by condition | `|> filter msg.val > 10` |
-| `predict` | ML model inference | `|> predict my_model` |
-| `rate` | Limit message frequency | `|> rate 100 per 1 s` |
-| `flatten` | Expand array field into messages | `|> flatten msg.items` |
-| `distinct` | Drop duplicate values within TTL | `|> distinct msg.val within 1 m` |
-| `throttle` | Token-bucket rate limiting | `|> throttle 10 per 1 s` |
-| `sample` | Probabilistic sampling | `|> sample 10 %` |
-| `group_by` | Partition for aggregation | `|> group_by msg.region` |
-| `window` | Define aggregation buffer | `|> window tumbling(1 m)` |
-| `aggregate` | Perform window calculations | `|> aggregate { total = sum(msg.v) }` |
-| `accumulate` | Running accumulators across windows | `|> accumulate { s = ema(msg.v, 0.3) }` |
-| `having` | Filter aggregation results | `|> having total > 100` |
-| `map` | Transform output structure | `|> map { val = total }` |
-| `sink` | Define message destination | `|> sink to broker :: "topic"` |
+| `SOURCE` | Define message entry point | `SOURCE FROM broker :: "topic"` |
+| `JOIN` | Enrich stream with another stream | `|> JOIN broker :: "topic" on ... ;` |
+| `DEDUPLICATE` | Drop duplicates by key within TTL | `|> DEDUPLICATE msg.id within 5 s` |
+| `FILTER` | Drop messages by condition | `|> FILTER msg.val > 10` |
+| `PREDICT` | ML model inference | `|> PREDICT my_model` |
+| `RATE` | Limit message frequency | `|> RATE 100 per 1 s` |
+| `FLATTEN` | Expand array field into messages | `|> FLATTEN msg.items` |
+| `DISTINCT` | Drop duplicate values within TTL | `|> DISTINCT msg.val within 1 m` |
+| `THROTTLE` | Token-bucket rate limiting | `|> THROTTLE 10 per 1 s` |
+| `SAMPLE` | Probabilistic sampling | `|> SAMPLE 10 %` |
+| `GROUP_BY` | Partition for aggregation | `|> GROUP_BY msg.region` |
+| `WINDOW` | Define aggregation buffer | `|> WINDOW tumbling(1 m)` |
+| `AGGREGATE` | Perform window calculations | `|> AGGREGATE { total = sum(msg.v) }` |
+| `ACCUMULATE` | Running accumulators across windows | `|> ACCUMULATE { s = ema(msg.v, 0.3) }` |
+| `HAVING` | Filter aggregation results | `|> HAVING total > 100` |
+| `MAP` | Transform output structure | `|> MAP { val = total }` |
+| `SINK` | Define message destination | `|> SINK TO broker :: "topic"` |
 
 ## Docker
 

@@ -5,39 +5,49 @@
  * Grammar IS the metamodel — each rule defines both syntax and the AST class.
  *
  * Syntax highlights:
- *   - Structural blocks (broker, pipeline, route) use `end` keyword
+ *   - Structural blocks (BROKER, PIPELINE, ROUTE, JOIN, ENRICH, MODEL, SCHEMA)
+ *     terminate with `;`
+ *   - Brace-delimited blocks (AGGREGATE, ACCUMULATE, MAP, AUTH, BATCH,
+ *     ObjectLiteral, hooks) keep `{}` and do NOT use `;`
  *   - Stages are chained with `|>` pipe operator
- *   - Source: `source from <broker> :: "<topic>"` or `source from pipe <name>`
- *   - Sink: `sink to <broker> :: "<topic>"`
- *   - Data blocks (aggregate, map, accumulate, auth, batch, ObjectLiteral) keep `{}`
+ *   - Source: `SOURCE FROM <broker> :: "<topic>"` or `SOURCE FROM PIPE <name>`
+ *   - Sink: `SINK TO <broker> :: "<topic>"`
  *
  * Precedence (low → high):
  *   or  →  and  →  comparison  →  +,-  →  *,/,%  →  ??  →  unary(-,not)  →  atom
  *
  * Reserved keywords (cannot be used as identifiers):
- *   if, then, else, let, in, is, null, const, env, case, when,
- *   having, deduplicate, within, old, changed, forall, exists,
- *   initially, finally, publish, batch, import, route, default,
- *   warn, error, accumulate, rate, per, on_excess, on_error, drop,
- *   ema, cumsum, delta,
- *   abs, round, len, lower, upper, floor, ceil, fmt,
- *   trim, contains, starts_with, ends_with, split, replace, substring,
- *   sqrt, pow, log, log10, exp,
- *   to_int, to_float, to_str, to_bool,
- *   now, timestamp_ms, date_format, date_diff,
- *   matches, extract,
- *   from, to, end, pipe, source, sink, pipeline, broker,
- *   join, on, other, inner, left, type,
- *   schema, strict, lenient,
- *   flatten, distinct, throttle, sample, overflow, buffer,
- *   retry, backoff, with, over,
- *   int, float, str, bool,
- *   func, match,
- *   model, predict, runtime, features, returns,
- *   onnx, sklearn, torch, tflite, custom,
- *   debug, label, fields,
- *   validate, enrich, via, http, bind, method, GET, POST, PUT,
- *   percentile, distinct_count
+ *   STRUCTURAL (UPPERCASE):
+ *     PIPELINE, BROKER, SOURCE, SINK, FILTER, WINDOW, AGGREGATE, ACCUMULATE,
+ *     MAP, HAVING, DEDUPLICATE, FLATTEN, DISTINCT, THROTTLE, SAMPLE,
+ *     GROUP_BY, RATE, PREDICT, DEBUG, VALIDATE, ENRICH, JOIN, ROUTE,
+ *     CONST, FUNC, MODEL, SCHEMA, IMPORT, LET, SELECT, BATCH, RETRY,
+ *     WITH, BACKOFF, ON_ERROR, INITIALLY, FINALLY, PUBLISH, OVER, STEP,
+ *     QOS, FORMAT, SSL, AUTH, USERNAME, PASSWORD, HOST, PORT, TRANSPORT,
+ *     SIZE, TIMEOUT, FROM, TO, PIPE, ON, TYPE, VIA, HTTP, URL,
+ *     METHOD, BIND, GET, POST, PUT, FEATURES, RETURNS, RUNTIME, STRICT,
+ *     LENIENT, WITHIN, PER, ON_EXCESS, OVERFLOW, BUFFER, WARN, ERROR,
+ *     DROP, DEFAULT, SKIP, ROUTE, DEBUG, LABEL, FIELDS, SCHEMA,
+ *     ONNX, SKLEARN, TORCH, TFLITE, CUSTOM,
+ *     MQTT, REDIS, AMQP, KAFKA
+ *
+ *   EXPRESSION (lowercase):
+ *     and, or, is, not, null, if, then, else, case, when, match,
+ *     forall, exists, old, changed, env, fmt, in
+ *
+ *   FUNCTIONS (lowercase):
+ *     avg, sum, min, max, count, stddev, first, last, percentile, distinct_count,
+ *     ema, cumsum, delta,
+ *     abs, round, len, lower, upper, floor, ceil, fmt, trim, contains,
+ *     starts_with, ends_with, split, replace, substring, sqrt, pow, log, log10, exp,
+ *     to_int, to_float, to_str, to_bool, now, timestamp_ms, date_format, date_diff,
+ *     matches, extract
+ *
+ *   TYPES (lowercase):
+ *     int, float, str, bool
+ *
+ *   VALUES (lowercase):
+ *     tumbling, sliding, inner, left, json, csv, raw
  */
 
 Model:
@@ -46,12 +56,12 @@ Model:
 
 // ─── Imports ────────────────────────────────────────────────────────
 ImportDecl:
-    'import' path=STRING
+    'IMPORT' path=STRING
 ;
 
 // ─── Constants ──────────────────────────────────────────────────────
 ConstDef:
-    'const' name=ID '=' value=ConstValue
+    'CONST' name=ID '=' value=ConstValue
 ;
 
 ConstValue:
@@ -60,30 +70,30 @@ ConstValue:
 
 // ─── User-defined functions ────────────────────────────────────────
 FuncDef:
-    'func' name=ID '(' (params+=ID[','])? ')' '=' body=Expression
+    'FUNC' name=ID '(' (params+=ID[','])? ')' '=' body=Expression
 ;
 
 // ─── Broker connection ──────────────────────────────────────────────
 Broker:
-    'broker' name=ID
-        ('transport' ':' transport=Transport)?
-        'host'  ':' host=STRING
-        'port'  ':' port=INT
-        ('ssl'  ':' ssl=BOOL)?
-        ('auth' ':' '{'
-            'username' ':' username=STRING
-            'password' ':' password=STRING
+    'BROKER' name=ID
+        ('TRANSPORT' ':' transport=Transport)?
+        'HOST'  ':' host=STRING
+        'PORT'  ':' port=INT
+        ('SSL'  ':' ssl=BOOL)?
+        ('AUTH' ':' '{'
+            'USERNAME' ':' username=STRING
+            'PASSWORD' ':' password=STRING
         '}')?
-    'end'
+    ';'
 ;
 
 Transport:
-    'mqtt' | 'redis' | 'amqp' | 'kafka'
+    'MQTT' | 'REDIS' | 'AMQP' | 'KAFKA'
 ;
 
 // ─── Pipeline ───────────────────────────────────────────────────────
 Pipeline:
-    'pipeline' name=ID
+    'PIPELINE' name=ID
         (initially=InitiallyHook)?
         source=Source
         ('|>' join=JoinStage)?
@@ -93,11 +103,11 @@ Pipeline:
         (on_error=OnErrorClause)?
         (retry=RetryPolicy)?
         (finally_=FinallyHook)?
-    'end'
+    ';'
 ;
 
 PipelineLetBinding:
-    'let' name=ID '=' value=Expression
+    'LET' name=ID '=' value=Expression
 ;
 
 // ─── Stage annotations ─────────────────────────────────────────────
@@ -110,15 +120,15 @@ StageAnnotation:
 ;
 
 AnnotationSeverity:
-    'warn' | 'error'
+    'WARN' | 'ERROR'
 ;
 
 // ─── Conditional routing ────────────────────────────────────────────
 RouteBlock:
-    'route' ('via' via_broker=[Broker])?
+    'ROUTE' ('VIA' via_broker=[Broker])?
         arms+=RouteArm
-        ('default' '=>' (default_sink=RouteSink | default_topic=STRING))?
-    'end'
+        ('DEFAULT' '=>' (default_sink=RouteSink | default_topic=STRING))?
+    ';'
 ;
 
 RouteArm:
@@ -126,17 +136,17 @@ RouteArm:
 ;
 
 RouteSink:
-    'sink' 'to' broker=[Broker] '::' topic=STRING
-    ('qos' ':' qos=INT)?
+    'SINK' 'TO' broker=[Broker] '::' topic=STRING
+    ('QOS' ':' qos=INT)?
 ;
 
 // ─── Join (second stream) ───────────────────────────────────────────
 JoinStage:
-    'join' broker=[Broker] '::' topic=STRING
-        'on' left_key=FieldRef '==' right_key=FieldRef
-        'within' window=Duration
-        ('type' ':' type=JoinType)?
-    'end'
+    'JOIN' broker=[Broker] '::' topic=STRING
+        'ON' left_key=FieldRef '==' right_key=FieldRef
+        'WITHIN' window=Duration
+        ('TYPE' ':' type=JoinType)?
+    ';'
 ;
 
 JoinType:
@@ -145,11 +155,11 @@ JoinType:
 
 // ─── Lifecycle hooks ────────────────────────────────────────────────
 InitiallyHook:
-    '@initially' '{' 'publish' body=ObjectLiteral '}'
+    '@INITIALLY' '{' 'PUBLISH' body=ObjectLiteral '}'
 ;
 
 FinallyHook:
-    '@finally' '{' 'publish' body=ObjectLiteral '}'
+    '@FINALLY' '{' 'PUBLISH' body=ObjectLiteral '}'
 ;
 
 ObjectLiteral:
@@ -163,28 +173,28 @@ ObjectField:
 
 // ─── On-error / DLQ routing ─────────────────────────────────────────
 OnErrorClause:
-    'on_error' ':' (
-        'drop'
+    'ON_ERROR' ':' (
+        'DROP'
     |
-        'sink' 'to' broker=[Broker] '::' topic=STRING
+        'SINK' 'TO' broker=[Broker] '::' topic=STRING
     )
 ;
 
 // ─── Retry policy ───────────────────────────────────────────────────
 RetryPolicy:
-    'retry' ':' max_retries=INT 'with' 'backoff' base=Duration
+    'RETRY' ':' max_retries=INT 'WITH' 'BACKOFF' base=Duration
 ;
 
 // ─── Source / Sink ──────────────────────────────────────────────────
 Source:
-    'source' 'from'
+    'SOURCE' 'FROM'
     (
-        'pipe' pipe=ID
+        'PIPE' pipe=ID
     |
         broker=[Broker] '::' topic=STRING
-        ('qos' ':' qos=INT)?
-        ('format' ':' format=Format)?
-        ('schema' ':' schema=[SchemaDef])?
+        ('QOS' ':' qos=INT)?
+        ('FORMAT' ':' format=Format)?
+        ('SCHEMA' ':' schema=[SchemaDef])?
     )
 ;
 
@@ -193,15 +203,15 @@ Format:
 ;
 
 Sink:
-    'sink' 'to' broker=[Broker] '::' topic=STRING
-    ('qos' ':' qos=INT)?
-    ('format' ':' format=Format)?
-    ('batch' ':' '{' batch=BatchConfig '}')?
+    'SINK' 'TO' broker=[Broker] '::' topic=STRING
+    ('QOS' ':' qos=INT)?
+    ('FORMAT' ':' format=Format)?
+    ('BATCH' ':' '{' batch=BatchConfig '}')?
 ;
 
 BatchConfig:
-    ('size' ':' size=INT)?
-    ('timeout' ':' timeout=Duration)?
+    ('SIZE' ':' size=INT)?
+    ('TIMEOUT' ':' timeout=Duration)?
 ;
 
 // ─── Pipeline stages (abstract) ────────────────────────────────────
@@ -213,22 +223,22 @@ Stage:
 ;
 
 DeduplicateStage:
-    'deduplicate' key=FieldRef 'within' ttl=Duration
+    'DEDUPLICATE' key=FieldRef 'WITHIN' ttl=Duration
 ;
 
 FilterStage:
-    'filter' condition=Expression
+    'FILTER' condition=Expression
 ;
 
 GroupByStage:
-    'group_by' fields+=FieldRef[',']
+    'GROUP_BY' fields+=FieldRef[',']
 ;
 
 WindowStage:
-    'window' wname=ID type=WindowType
-        '(' size=Duration (',' 'step' '=' step=Duration)? ')'
-    | 'window' type=WindowType
-        '(' size=Duration (',' 'step' '=' step=Duration)? ')'
+    'WINDOW' wname=ID type=WindowType
+        '(' size=Duration (',' 'STEP' '=' step=Duration)? ')'
+    | 'WINDOW' type=WindowType
+        '(' size=Duration (',' 'STEP' '=' step=Duration)? ')'
 ;
 
 WindowType:
@@ -240,13 +250,13 @@ Duration:
 ;
 
 AggregateStage:
-    'aggregate' '{'
-        assignments+=AggAssignment
+    'AGGREGATE' '{'
+        assignments+=AggAssignment[',']
     '}'
 ;
 
 AggAssignment:
-    name=ID (':' type=TypeAnnotation)? '=' func=AggFunc '(' (field=FieldRef)? (',' param=Expression)? ')' ('over' window_ref=ID)?
+    name=ID (':' type=TypeAnnotation)? '=' func=AggFunc '(' (field=FieldRef)? (',' param=Expression)? ')' ('OVER' window_ref=ID)?
 ;
 
 TypeAnnotation:
@@ -260,8 +270,8 @@ AggFunc:
 ;
 
 AccumulateStage:
-    'accumulate' '{'
-        assignments+=AccumAssignment
+    'ACCUMULATE' '{'
+        assignments+=AccumAssignment[',']
     '}'
 ;
 
@@ -274,49 +284,49 @@ AccumFunc:
 ;
 
 RateStage:
-    'rate' limit=INT 'per' period=Duration
-    ('on_excess' ':' on_excess=ExcessBehavior)?
+    'RATE' limit=INT 'PER' period=Duration
+    ('ON_EXCESS' ':' on_excess=ExcessBehavior)?
 ;
 
 ExcessBehavior:
-    'drop' | 'warn' | 'error'
+    'DROP' | 'WARN' | 'ERROR'
 ;
 
 FlattenStage:
-    'flatten' field=FieldRef
+    'FLATTEN' field=FieldRef
 ;
 
 DistinctStage:
-    'distinct' field=FieldRef 'within' ttl=Duration
+    'DISTINCT' field=FieldRef 'WITHIN' ttl=Duration
 ;
 
 ThrottleStage:
-    'throttle' limit=INT 'per' period=Duration
-    ('overflow' ':' overflow=OverflowBehavior)?
-    ('buffer' ':' buffer_size=INT)?
+    'THROTTLE' limit=INT 'PER' period=Duration
+    ('OVERFLOW' ':' overflow=OverflowBehavior)?
+    ('BUFFER' ':' buffer_size=INT)?
 ;
 
 OverflowBehavior:
-    'drop' | 'buffer'
+    'DROP' | 'BUFFER'
 ;
 
 SampleStage:
-    'sample' percentage=INT '%'
+    'SAMPLE' percentage=INT '%'
 ;
 
 HavingStage:
-    'having' condition=Expression
+    'HAVING' condition=Expression
 ;
 
 MapStage:
-    'map' '{'
-        (bindings+=LetBinding[';'] ';')?
-        mappings+=MapAssignment[';'] ';'?
+    'MAP' '{'
+        (bindings+=LetBinding[','] ',')?
+        mappings+=MapAssignment[','] ','?
     '}'
 ;
 
 LetBinding:
-    'let' name=ID '=' value=Expression
+    'LET' name=ID '=' value=Expression
 ;
 
 MapAssignment:
@@ -324,7 +334,7 @@ MapAssignment:
 ;
 
 SelectStage:
-    'select' '[' fields+=SelectField[','] ']'
+    'SELECT' '[' fields+=SelectField[','] ']'
 ;
 
 SelectField:
@@ -333,35 +343,35 @@ SelectField:
 ;
 
 PredictStage:
-    'predict' model=[ModelDef]
+    'PREDICT' model=[ModelDef]
 ;
 
 DebugStage:
-    'debug' ('label' ':' label=STRING ','?)? ('fields' ':' '[' fields+=FieldRef[','] ']')?
+    'DEBUG' ('LABEL' ':' label=STRING ','?)? ('FIELDS' ':' '[' fields+=FieldRef[','] ']')?
 ;
 
 ValidateStage:
-    'validate' 'schema' ':' schema=[SchemaDef]
-    ('on_error' ':' validate_err=ValidateError)?
+    'VALIDATE' 'SCHEMA' ':' schema=[SchemaDef]
+    ('ON_ERROR' ':' validate_err=ValidateError)?
 ;
 
 ValidateError:
-    'sink' 'to' broker=[Broker] '::' topic=STRING
+    'SINK' 'TO' broker=[Broker] '::' topic=STRING
   | action=ValidateErrorAction
 ;
 
 ValidateErrorAction:
-    'skip' | 'drop'
+    'SKIP' | 'DROP'
 ;
 
 EnrichStage:
-    'enrich' 'via' 'http'
-        'url' ':' url=Expression
-        ('method' ':' method=HttpMethod)?
-        ('timeout' ':' timeout=Duration)?
-        'bind' ':' bind=ID
-        ('on_error' ':' enrich_err=EnrichError)?
-    'end'
+    'ENRICH' 'VIA' 'HTTP'
+        'URL' ':' url=Expression
+        ('METHOD' ':' method=HttpMethod)?
+        ('TIMEOUT' ':' timeout=Duration)?
+        'BIND' ':' bind=ID
+        ('ON_ERROR' ':' enrich_err=EnrichError)?
+    ';'
 ;
 
 HttpMethod:
@@ -369,27 +379,27 @@ HttpMethod:
 ;
 
 EnrichError:
-    'sink' 'to' broker=[Broker] '::' topic=STRING
-  | 'default' body=ObjectLiteral
+    'SINK' 'TO' broker=[Broker] '::' topic=STRING
+  | 'DEFAULT' body=ObjectLiteral
   | action=EnrichErrorAction
 ;
 
 EnrichErrorAction:
-    'skip' | 'drop'
+    'SKIP' | 'DROP'
 ;
 
 // ─── ML model declarations ─────────────────────────────────────────
 ModelDef:
-    'model' name=ID
-        'source' ':' source=Expression
-        'runtime' ':' runtime=ModelRuntime
-        ('features' ':' '[' features+=FieldRef[','] ']')?
-        ('returns' ':' '[' returns+=ID[','] ']')?
-    'end'
+    'MODEL' name=ID
+        'SOURCE' ':' source=Expression
+        'RUNTIME' ':' runtime=ModelRuntime
+        ('FEATURES' ':' '[' features+=FieldRef[','] ']')?
+        ('RETURNS' ':' '[' returns+=ID[','] ']')?
+    ';'
 ;
 
 ModelRuntime:
-    'onnx' | 'sklearn' | 'torch' | 'tflite' | 'custom'
+    'ONNX' | 'SKLEARN' | 'TORCH' | 'TFLITE' | 'CUSTOM'
 ;
 
 // ─── Expression grammar (precedence climbing) ──────────────────────
@@ -546,13 +556,13 @@ FieldSubscript:
 
 // ─── Schema declarations ───────────────────────────────────────────
 SchemaDef:
-    'schema' name=ID (strictness=SchemaStrictness)?
+    'SCHEMA' name=ID (strictness=SchemaStrictness)?
         fields+=SchemaField
-    'end'
+    ';'
 ;
 
 SchemaStrictness:
-    'strict' | 'lenient'
+    'STRICT' | 'LENIENT'
 ;
 
 SchemaField:

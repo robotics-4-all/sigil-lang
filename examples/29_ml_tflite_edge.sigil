@@ -1,7 +1,7 @@
 /*
  * Example 29 — Edge ML Inference with TensorFlow Lite
  * ====================================================
- * Runs a lightweight TFLite model on an edge gateway for
+ * Runs a lightweight TFLite MODEL on an edge gateway for
  * real-time predictive maintenance of industrial pumps.
  *
  * RUNTIME: tflite — uses tflite-runtime for minimal footprint
@@ -9,7 +9,7 @@
  *
  * SCENARIO:
  *   Vibration and temperature sensors on industrial pumps publish
- *   readings at 1 Hz.  A quantized TFLite model predicts remaining
+ *   readings at 1 Hz.  A quantized TFLite MODEL predicts remaining
  *   useful life (RUL) and failure probability locally on the edge
  *   gateway.  Only readings with elevated failure risk are forwarded
  *   to the cloud, saving bandwidth.
@@ -20,46 +20,46 @@
  *          "bearing_temp": 72.1}
  */
 
-broker edge_gateway
-    host: "localhost"
-    port: 1883
-end
+BROKER edge_gateway
+    HOST: "localhost"
+    PORT: 1883
+;
 
-broker cloud_hub
-    host: "iot.cloud-provider.com"
-    port: 8883
-    ssl: true
-    auth: {
-        username: "edge-gw-07"
-        password: "gw-auth-token"
+BROKER cloud_hub
+    HOST: "iot.cloud-provider.com"
+    PORT: 8883
+    SSL: true
+    AUTH: {
+        USERNAME: "edge-gw-07"
+        PASSWORD: "gw-auth-token"
     }
-end
+;
 
-model pump_health
-    source: "models/pump_rul_quantized.tflite"
-    runtime: tflite
-    features: [msg.vibration_x, msg.vibration_y, msg.vibration_z,
+MODEL pump_health
+    SOURCE: "models/pump_rul_quantized.tflite"
+    RUNTIME: TFLITE
+    FEATURES: [msg.vibration_x, msg.vibration_y, msg.vibration_z,
                msg.bearing_temp, msg.flow_rate]
-    returns: [failure_prob, rul_hours]
-end
+    RETURNS: [failure_prob, rul_hours]
+;
 
-pipeline predictive_maintenance
-    source from edge_gateway :: "pumps/+/sensors"
+PIPELINE predictive_maintenance
+    SOURCE FROM edge_gateway :: "pumps/+/sensors"
 
-    |> deduplicate msg.pump_id within 2 s
+    |> DEDUPLICATE msg.pump_id WITHIN 2 s
 
-    |> predict pump_health
+    |> PREDICT pump_health
 
-    |> filter msg.failure_prob > 0.5
+    |> FILTER msg.failure_prob > 0.5
 
-    |> map {
-        pump_id      = msg.pump_id;
-        failure_prob = msg.failure_prob;
-        rul_hours    = msg.rul_hours;
+    |> MAP {
+        pump_id      = msg.pump_id,
+        failure_prob = msg.failure_prob,
+        rul_hours    = msg.rul_hours,
         bearing_temp = msg.bearing_temp
     }
 
-    |> sink to cloud_hub :: "maintenance/alerts"
+    |> SINK TO cloud_hub :: "maintenance/alerts"
 
-    on_error: drop
-end
+    ON_ERROR: DROP
+;

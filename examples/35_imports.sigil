@@ -1,11 +1,11 @@
 /*
  * Example 35 — Multi-File Imports
  * =================================
- * Demonstrates `import` declarations that merge constants, schemas,
- * and pipelines from external .sigil files into the current model.
+ * Demonstrates `IMPORT` declarations that merge constants, schemas,
+ * and pipelines from external .sigil files into the current MODEL.
  *
  * NEW FEATURES:
- *   import "path/to/file.sigil"
+ *   IMPORT "path/to/file.sigil"
  *       — path is relative to the importing file's directory
  *       — merges all top-level declarations from the target file:
  *           brokers, constants, schemas, functions, pipelines
@@ -15,9 +15,9 @@
  *         exactly as if they were declared inline
  *
  * IMPORT RESOLUTION SEMANTICS:
- *   Brokers that are cross-referenced (e.g. `source from BROKER`) must
- *   be defined in the same file as the pipeline using them — textX
- *   resolves cross-references at parse time, before import merging.
+ *   Brokers that are cross-referenced (e.g. `SOURCE from BROKER`) must
+ *   be defined in the same file as the PIPELINE using them — textX
+ *   resolves cross-references at parse time, before IMPORT merging.
  *   Brokers imported from another file are available for reference ONLY
  *   by pipelines defined in THAT imported file itself.
  *
@@ -26,8 +26,8 @@
  *
  * WHY USE IMPORTS:
  *   - Keep threshold constants in one place, update once across files
- *   - Reuse schema declarations without copy-paste
- *   - Share utility functions across multiple pipeline files
+ *   - Reuse SCHEMA declarations without copy-paste
+ *   - Share utility functions across multiple PIPELINE files
  *   - Include pre-built pipelines from a shared library
  *
  * FILE LAYOUT:
@@ -38,9 +38,9 @@
  *       schemas.sigil           ← SensorReading, AlertPayload schemas
  *
  * SCENARIO:
- *   A factory floor monitoring system. Thresholds and schema definitions
+ *   A factory floor monitoring system. Thresholds and SCHEMA definitions
  *   live in shared files (imported here). Brokers are declared locally
- *   because they are referenced as cross-references in source/sink.
+ *   because they are referenced as cross-references in SOURCE/SINK.
  *
  * INPUT:  {"device_id": "S-12", "value": 87.5, "unit": "celsius",
  *           "ts": 1711234567, "tags": ["furnace", "zone-A"]}
@@ -49,79 +49,79 @@
  */
 
 // Import shared constants and schemas.
-// Constants and schema names defined in these files are available
+// Constants and SCHEMA names defined in these files are available
 // throughout this file's pipelines just as if declared here.
-import "shared/constants.sigil"
-import "shared/schemas.sigil"
+IMPORT "shared/constants.sigil"
+IMPORT "shared/schemas.sigil"
 
 // Brokers must be defined here (not in an imported file) when they are
-// referenced in source/sink cross-references by pipelines in this file.
-broker edge
-    transport: mqtt
-    host: "10.0.1.1"
-    port: 1883
-end
+// referenced in SOURCE/SINK cross-references by pipelines in this file.
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "10.0.1.1"
+    PORT: 1883
+;
 
-broker analytics
-    transport: redis
-    host: "redis.internal"
-    port: 6379
-end
+BROKER analytics
+    TRANSPORT: REDIS
+    HOST: "redis.internal"
+    PORT: 6379
+;
 
-// Local function (could also be shared via a func-only import file)
-func celsius_to_fahrenheit(c) = c * 9.0 / 5.0 + 32.0
+// Local function (could also be shared via a FUNC-only IMPORT file)
+FUNC celsius_to_fahrenheit(c) = c * 9.0 / 5.0 + 32.0
 
 // ── Pipeline 1: Immediate alerts for high-temperature readings ──────────────
-pipeline temp_alerts
+PIPELINE temp_alerts
     // Constants ALERT_TEMP and TEMP_MAX come from shared/constants.sigil.
-    // Schema cross-references (schema: SensorReading) must reference schemas
+    // Schema cross-references (SCHEMA: SensorReading) must reference schemas
     // defined in the SAME file; imported schemas cannot be cross-referenced
     // at parse time (see shared/schemas.sigil for the definitions).
-    source from edge :: "factory/+/temperature" qos: 1 format: json
+    SOURCE FROM edge :: "factory/+/temperature" QOS: 1 FORMAT: json
 
-    |> filter msg.value > ALERT_TEMP and msg.value <= TEMP_MAX
+    |> FILTER msg.value > ALERT_TEMP and msg.value <= TEMP_MAX
 
-    |> map {
-        // celsius_to_fahrenheit() is a local func defined above
-        let fahrenheit = celsius_to_fahrenheit(msg.value);
-        let severity   = if msg.value > 100 then "critical" else "high";
+    |> MAP {
+        // celsius_to_fahrenheit() is a local FUNC defined above
+        LET fahrenheit = celsius_to_fahrenheit(msg.value),
+        LET severity   = if msg.value > 100 then "critical" else "high",
 
-        device   = msg.device_id;
-        temp_c   = msg.value;
-        temp_f   = fahrenheit;
-        severity = severity;
+        device   = msg.device_id,
+        temp_c   = msg.value,
+        temp_f   = fahrenheit,
+        severity = severity,
         ts       = msg.ts
     }
 
-    |> sink to edge :: "factory/alerts/temperature" qos: 1
-end
+    |> SINK TO edge :: "factory/alerts/temperature" QOS: 1
+;
 
 // ── Pipeline 2: Per-device 5-minute temperature summary ────────────────────
-pipeline device_summary
-    source from edge :: "factory/+/temperature" qos: 1 format: json
+PIPELINE device_summary
+    SOURCE FROM edge :: "factory/+/temperature" QOS: 1 FORMAT: json
 
     // Filter using imported constants — valid physical range only
-    |> filter msg.value >= TEMP_MIN and msg.value <= TEMP_MAX
+    |> FILTER msg.value >= TEMP_MIN and msg.value <= TEMP_MAX
 
-    |> group_by msg.device_id
+    |> GROUP_BY msg.device_id
 
     // WINDOW_MIN is imported from shared/constants.sigil (value: 5)
-    |> window tumbling(5 m)
+    |> WINDOW tumbling(5 m)
 
-    |> aggregate {
-        avg_temp = avg(msg.value)
-        max_temp = max(msg.value)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
         readings = count()
     }
 
-    |> having readings >= 5
+    |> HAVING readings >= 5
 
-    |> map {
-        device   = msg.device_id;
-        avg_temp = avg_temp;
-        peak     = max_temp;
+    |> MAP {
+        device   = msg.device_id,
+        avg_temp = avg_temp,
+        peak     = max_temp,
         n        = readings
     }
 
-    |> sink to analytics :: "factory:device:summary"
-end
+    |> SINK TO analytics :: "factory:device:summary"
+;
