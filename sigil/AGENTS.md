@@ -52,7 +52,7 @@ DSL compiler core: textX grammar -> parse -> validate -> generate standalone Pyt
 STAGE_ORDER = {
     "DeduplicateStage": -1,
     "FilterStage": 0,
-    "PredictStage": 0,   # runs alongside filter phase
+    "PredictStage": 0,  # runs alongside filter phase
     "RateStage": 1,
     "FlattenStage": 2,
     "DistinctStage": 3,
