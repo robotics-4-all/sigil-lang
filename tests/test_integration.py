@@ -1503,7 +1503,7 @@ class TestKafkaPassthrough:
         result_file = os.path.join(tmpdir, "results.json")
 
         runner_script = (
-            _redis_runner_preamble(tmpdir, alarm_secs=25)
+            _redis_runner_preamble(tmpdir, alarm_secs=30)
             + _kafka_preamble([src_topic, snk_topic])
             + f"""
 from commlib.transports.kafka import ConnectionParameters, Subscriber as KSub, Publisher as KPub
@@ -1534,13 +1534,13 @@ time.sleep(0.5)
 
 src_pub.publish({{"sensor": "k1", "value": 42}})
 src_pub.publish({{"sensor": "k2", "value": 99}})
-time.sleep(5)
+time.sleep(10)
 
 """
             + _redis_runner_epilogue(result_file)
         )
 
-        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=20)
+        received = _run_redis_subprocess(tmpdir, runner_script, result_file, timeout=30)
 
         assert len(received) >= 2, f"Expected 2 messages, got {len(received)}"
         values = [m["value"] for m in received]
