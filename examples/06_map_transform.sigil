@@ -4,8 +4,8 @@
  * Reshape and rename aggregated fields before publishing.
  *
  * CONCEPTS INTRODUCED:
- *   - map stage         — transform the output with expressions
- *   - Field references  — in map, bare names refer to aggregation results
+ *   - MAP stage         — transform the output with expressions
+ *   - Field references  — in MAP, bare names refer to aggregation results
  *   - Arithmetic        — compute derived values from aggregates
  *
  * WHAT IT DOES:
@@ -13,12 +13,12 @@
  *   then renames fields and computes a cost estimate before publishing.
  *
  * MAP EXPRESSION CONTEXT:
- *   Inside a map stage, field references work differently:
+ *   Inside a MAP stage, field references work differently:
  *     bare_name      → reads from aggregation results (e.g., total_kwh)
  *     msg.field      → reads from the original message
  *
  *   You can use arithmetic to compute derived values:
- *     cost = total_kwh * 0.12    → multiply aggregate by price per kWh
+ *     cost = total_kwh * 0.12    → multiply AGGREGATE by price per kWh
  *
  *   Separate multiple assignments with semicolons (;).
  *
@@ -26,34 +26,34 @@
  * WITH MAP:     {"energy": 45.2, "peak_demand": 3.1, "cost_eur": 5.424, "samples": 360}
  */
 
-broker meters
-    host: "localhost"
-    port: 1883
-end
+BROKER meters
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline energy_report
-    source from meters :: "meters/+/energy" format: json
+PIPELINE energy_report
+    SOURCE FROM meters :: "meters/+/energy" FORMAT: json
 
-    |> window tumbling(1 h)
+    |> WINDOW tumbling(1 h)
 
-    |> aggregate {
-        total_kwh = sum(msg.kwh)       // total energy consumed
-        peak_kw   = max(msg.kw)        // peak demand
+    |> AGGREGATE {
+        total_kwh = sum(msg.kwh), // total energy consumed
+        peak_kw   = max(msg.kw), // peak demand
         readings  = count()            // number of meter readings
     }
 
     /*
      * Rename fields and compute derived values.
-     * Inside a map, bare names refer to aggregation outputs.
+     * Inside a MAP, bare names refer to aggregation outputs.
      * You can use arithmetic to derive new values.
      */
-    |> map {
-        energy      = total_kwh;
-        peak_demand = peak_kw;
-        cost_eur    = total_kwh * 0.12;
+    |> MAP {
+        energy      = total_kwh,
+        peak_demand = peak_kw,
+        cost_eur    = total_kwh * 0.12,
         samples     = readings
     }
 
-    |> sink to meters :: "reports/energy/hourly"
-end
+    |> SINK TO meters :: "reports/energy/hourly"
+;
 

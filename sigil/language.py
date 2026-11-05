@@ -1,6 +1,7 @@
 import os
 import re
 from functools import lru_cache
+
 from textx import metamodel_from_file
 
 _GRAMMAR_PATH = os.path.join(os.path.dirname(__file__), "grammar.tx")
@@ -54,7 +55,10 @@ def parse(source_path: str):
             "JoinStage.broker": _broker_scope,
             "RouteSink.broker": _broker_scope,
             "OnErrorClause.broker": _broker_scope,
+            "ValidateError.broker": _broker_scope,
+            "EnrichError.broker": _broker_scope,
             "Source.schema": _schema_scope,
+            "ValidateStage.schema": _schema_scope,
             "PredictStage.model": _model_scope,
         }
     )
@@ -119,14 +123,14 @@ def _scan_import_paths(abs_path: str) -> list[str]:
         with open(abs_path) as f:
             content = f.read()
     except FileNotFoundError:
-        raise FileNotFoundError(f"Import error: file not found: '{abs_path}'.")
+        raise FileNotFoundError(f"Import error: file not found: '{abs_path}'.") from None
 
     content_stripped = re.sub(r"//[^\n]*", "", content)
     content_stripped = re.sub(r"/\*.*?\*/", "", content_stripped, flags=re.DOTALL)
 
     base_dir = os.path.dirname(abs_path)
     result: list[str] = []
-    for m in re.finditer(r'import\s+"([^"]+)"', content_stripped):
+    for m in re.finditer(r'IMPORT\s+"([^"]+)"', content_stripped):
         imp_rel = m.group(1)
         imp_abs = os.path.normpath(os.path.join(base_dir, imp_rel))
         if not os.path.isfile(imp_abs):

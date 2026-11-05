@@ -21,13 +21,13 @@
  *       — compare with forall() which requires ALL elements to match
  *
  * SCENARIO:
- *   A content moderation pipeline for user-generated product reviews.
+ *   A content moderation PIPELINE for user-generated product reviews.
  *   Each message carries:
  *     - A numeric rating (1-5)
  *     - A list of string tags attached by the review system
  *     - A raw text excerpt
  *
- *   The pipeline:
+ *   The PIPELINE:
  *     1. Drops messages missing required fields or out-of-range rating
  *     2. Uses `exists()` to flag reviews with a blocked tag
  *     3. Uses scalar funcs to normalise text fields and compute metrics
@@ -42,61 +42,61 @@
  *                       "clean_excerpt": "great quality.", "flagged": false}
  */
 
-const BLOCKED_TAG  = "spam"
-const MIN_EXCERPT  = 5
-const MAX_EXCERPT  = 500
+CONST BLOCKED_TAG  = "spam"
+CONST MIN_EXCERPT  = 5
+CONST MAX_EXCERPT  = 500
 
-broker reviews
-    transport: mqtt
-    host: "reviews.example.com"
-    port: 1883
-end
+BROKER reviews
+    TRANSPORT: MQTT
+    HOST: "reviews.example.com"
+    PORT: 1883
+;
 
-broker moderation
-    transport: amqp
-    host: "rabbit.example.com"
-    port: 5672
-end
+BROKER moderation
+    TRANSPORT: AMQP
+    HOST: "rabbit.example.com"
+    PORT: 5672
+;
 
-pipeline review_moderation
-    source from reviews :: "reviews/submitted" format: json
+PIPELINE review_moderation
+    SOURCE FROM reviews :: "reviews/submitted" FORMAT: json
 
     // Drop incomplete or invalid reviews
-    |> filter msg.review_id is not null and
+    |> FILTER msg.review_id is not null and
               msg.rating >= 1 and msg.rating <= 5 and
               msg.excerpt is not null
 
-    |> map {
+    |> MAP {
         // Scalar string functions: trim via lower/upper isn't exact but
         // lower() + len() demonstrate the built-in set clearly.
-        let clean   = lower(msg.excerpt);
-        let ex_len  = len(msg.excerpt);
-        let n_tags  = len(msg.tags);
+        LET clean   = lower(msg.excerpt),
+        LET ex_len  = len(msg.excerpt),
+        LET n_tags  = len(msg.tags),
 
         // exists() — check if any tag in the array equals the blocked value
-        let has_blocked = exists(t in msg.tags => t == BLOCKED_TAG);
+        LET has_blocked = exists(t in msg.tags => t == BLOCKED_TAG),
 
         // round() and abs() — normalise rating deviation from midpoint
-        let deviation   = round(abs(msg.rating - 3.0), 2);
+        LET deviation   = round(abs(msg.rating - 3.0), 2),
 
         // floor/ceil to produce integer bounds of the normalised score
-        let score_floor = floor(msg.rating / 5.0 * 100.0);
-        let score_ceil  = ceil(msg.rating  / 5.0 * 100.0);
+        LET score_floor = floor(msg.rating / 5.0 * 100.0),
+        LET score_ceil  = ceil(msg.rating  / 5.0 * 100.0),
 
-        id            = msg.review_id;
-        rating        = msg.rating;
-        tag_count     = n_tags;
-        excerpt_len   = ex_len;
-        clean_excerpt = clean;
-        deviation     = deviation;
-        score_pct_lo  = score_floor;
-        score_pct_hi  = score_ceil;
+        id            = msg.review_id,
+        rating        = msg.rating,
+        tag_count     = n_tags,
+        excerpt_len   = ex_len,
+        clean_excerpt = clean,
+        deviation     = deviation,
+        score_pct_lo  = score_floor,
+        score_pct_hi  = score_ceil,
         flagged       = has_blocked
     }
 
     // Route: flagged reviews go to moderation; clean reviews go to publish
-    |> route
-        when msg.flagged == true => sink to moderation :: "reviews.flagged"
-        default                  => sink to reviews :: "reviews/published"
-    end
-end
+    |> ROUTE
+        when msg.flagged == true => SINK TO moderation :: "reviews.flagged"
+        DEFAULT                  => SINK TO reviews :: "reviews/published"
+    ;
+;

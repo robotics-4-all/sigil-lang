@@ -4,18 +4,18 @@
  * Uses a user-provided Python module as the inference backend.
  *
  * RUNTIME: custom — loads an arbitrary Python file via importlib.
- *   The module must expose:  predict(input_dict) -> list
+ *   The module must expose:  PREDICT(input_dict) -> list
  *
  * SCENARIO:
  *   An energy trading platform receives market tick data.
- *   A proprietary pricing model (not ONNX/sklearn/torch-compatible)
- *   is wrapped in a Python module that implements predict().
- *   The model outputs a fair-value estimate and a confidence band.
+ *   A proprietary pricing MODEL (not ONNX/sklearn/torch-compatible)
+ *   is wrapped in a Python module that implements PREDICT().
+ *   The MODEL outputs a fair-value estimate and a confidence band.
  *   Ticks where the market price deviates significantly from the
- *   model's fair value are flagged as trading signals.
+ *   MODEL's fair value are flagged as trading signals.
  *
  * CUSTOM MODULE INTERFACE (models/pricing_model.py):
- *   def predict(features: dict) -> list:
+ *   def PREDICT(features: dict) -> list:
  *       # features = {"spot_price": 42.1, "volume": 1200, ...}
  *       fair_value = ...
  *       confidence = ...
@@ -27,38 +27,38 @@
  *          "fair_value": 190.10, "deviation_pct": -0.36}
  */
 
-const DEVIATION_THRESHOLD = 0.5
+CONST DEVIATION_THRESHOLD = 0.5
 
-broker market
-    transport: kafka
-    host: "kafka.trading.internal"
-    port: 9092
-end
+BROKER market
+    TRANSPORT: KAFKA
+    HOST: "kafka.trading.internal"
+    PORT: 9092
+;
 
-model pricing_model
-    source: env("PRICING_MODEL_PATH", "models/pricing_model.py")
-    runtime: custom
-    features: [msg.spot_price, msg.volume, msg.bid_ask_spread, msg.volatility_1h]
-    returns: [fair_value, confidence]
-end
+MODEL pricing_model
+    SOURCE: env("PRICING_MODEL_PATH", "models/pricing_model.py")
+    RUNTIME: CUSTOM
+    FEATURES: [msg.spot_price, msg.volume, msg.bid_ask_spread, msg.volatility_1h]
+    RETURNS: [fair_value, confidence]
+;
 
-pipeline signal_detector
-    source from market :: "market/ticks"
+PIPELINE signal_detector
+    SOURCE FROM market :: "market/ticks"
 
-    |> filter msg.spot_price > 0
+    |> FILTER msg.spot_price > 0
 
-    |> predict pricing_model
+    |> PREDICT pricing_model
 
-    |> sample 25%
+    |> SAMPLE 25%
 
-    |> map {
-        symbol        = msg.symbol;
-        spot_price    = msg.spot_price;
-        fair_value    = msg.fair_value;
+    |> MAP {
+        symbol        = msg.symbol,
+        spot_price    = msg.spot_price,
+        fair_value    = msg.fair_value,
         deviation_pct = (msg.spot_price - msg.fair_value) / msg.fair_value * 100
     }
 
-    |> sink to market :: "signals/pricing"
+    |> SINK TO market :: "signals/pricing"
 
-    retry: 5 with backoff 200 ms
-end
+    RETRY: 5 WITH BACKOFF 200 ms
+;

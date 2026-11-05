@@ -1,0 +1,207 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sigil"
+version = "0.1.0"
+description = "A domain-specific language for stream-processing aggregation pipelines that compile to standalone Python applications."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Sigil contributors" },
+]
+keywords = [
+    "dsl",
+    "stream-processing",
+    "iot",
+    "mqtt",
+    "kafka",
+    "redis",
+    "amqp",
+    "textx",
+    "code-generation",
+    "edge-computing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: System :: Distributed Computing",
+]
+dependencies = [
+    "textX>=3.1.0",
+    "Jinja2>=3.1.0",
+]
+
+[project.optional-dependencies]
+# HTTP compiler service (sigil.api) + server runner.
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
+# Pretty CLI output (colors, source-position carets in error reports).
+cli = [
+    "rich>=13.0",
+]
+# Developer toolchain: lint, type-check, hooks.
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.5.0",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+# Snapshot / golden-file / property-based testing helpers, plus the
+# fastapi TestClient stack needed by tests/test_api.py.
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.1",
+    "syrupy>=4.6",
+    "hypothesis>=6.100",
+    "pytest-benchmark>=4.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+]
+# Broker clients for tests/test_integration.py (real MQTT/Redis/AMQP/Kafka).
+integration = [
+    "commlib-py[redis,mqtt,amqp,kafka]>=0.13.0",
+]
+# Docs site (MkDocs Material) — published separately.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+]
+
+[project.urls]
+Homepage = "https://github.com/robotics-4-all/sigil-lang"
+Repository = "https://github.com/robotics-4-all/sigil-lang"
+Documentation = "https://github.com/robotics-4-all/sigil-lang/tree/main/docs"
+Issues = "https://github.com/robotics-4-all/sigil-lang/issues"
+Changelog = "https://github.com/robotics-4-all/sigil-lang/blob/main/CHANGELOG.md"
+
+[project.scripts]
+sigil = "sigil.cli:main"
+
+# ---------------------------------------------------------------------------
+# Setuptools configuration
+# ---------------------------------------------------------------------------
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["sigil*"]
+exclude = ["tests*", "examples*", "docs*"]
+
+[tool.setuptools.package-data]
+sigil = ["grammar.tx", "templates/*.j2"]
+
+# ---------------------------------------------------------------------------
+# Ruff (lint + format)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    "sigil.egg-info",
+    "build",
+    "dist",
+    ".benchmarks",
+    "examples",
+    "tests/golden",
+]
+
+[tool.ruff.lint]
+# Curated rule set: pycodestyle (E,W), pyflakes (F), bugbear (B),
+# pyupgrade (UP), simplify (SIM), isort (I), pep8-naming (N).
+select = ["E", "W", "F", "B", "UP", "SIM", "I", "N", "RUF"]
+ignore = [
+    "E501",   # line length governed by formatter; soft warning only
+    "N806",   # local variable in function should be lowercase — we generate
+              # template-local names like _vals_AggName which mirror DSL identifiers
+    "B008",   # function call in default arg — used for dataclass field(default_factory=...)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "B011",  # asserts are intentional
+    "N802",  # test_<Op>Expression style names are deliberate
+    "N803",  # capitalized fixture names from textX class introspection
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sigil"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# Mypy (type checker) — non-strict baseline; tighten incrementally.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+files = ["sigil"]
+ignore_missing_imports = true            # textX, Jinja2, optional ML deps
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_any_generics = false            # too noisy at baseline
+disallow_untyped_defs = false            # gate per-module after baseline lands
+disallow_incomplete_defs = false
+
+# Tests + examples are exempt from strict checks for now.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
+
+# ---------------------------------------------------------------------------
+# Pytest configuration
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+]
+markers = [
+    "integration: requires running message brokers (skipped by default unit job)",
+    "slow: long-running tests",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["sigil"]
+omit = [
+    "sigil/templates/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+skip_covered = false

@@ -9,11 +9,11 @@ Before you start, make sure you have Python 3.10 or newer installed. You'll also
 1. Clone the repository from GitHub:
    `git clone https://github.com/robotics-4-all/sigil-lang`
 
-2. Install the package in development mode:
-   `pip install -e .`
+2. Install the package in development mode (all canonical dependencies live in `pyproject.toml`):
+   `pip install -r requirements.txt`
 
-3. Install the testing tools:
-   `pip install pytest`
+   This installs the package editable with its `dev` + `test` extras. For the HTTP service and broker-backed integration tests, add the remaining extras:
+   `pip install -e .[api,integration]`
 
 4. Start the required Docker services. These include EMQX (1883), Redis (6379), RabbitMQ (5672), and Kafka (9092):
    `docker-compose up -d`

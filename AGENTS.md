@@ -23,7 +23,9 @@ sigil-lang/
 +-- examples/              # 32 progressive .sigil examples (01-30 + simple + multi_pipeline)
 +-- tests/                 # pytest suite (~718 unit + ~26 integration tests)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
-+-- setup.py               # Package config, console_scripts entry point
++-- pyproject.toml         # Package config (PEP 621); console_scripts entry point; ruff/mypy/pytest/coverage tool config
++-- requirements.txt       # Thin shim that resolves to `-e .[dev,test]` (legacy compat)
++-- .pre-commit-config.yaml  # ruff + ruff-format + mypy hooks
 +-- Makefile               # Docker-based build/test/run targets (+ validate-examples)
 +-- Dockerfile             # App container (python:3.12-slim)
 +-- docker-compose.yml     # Full dev stack (EMQX, Redis, RabbitMQ, Kafka)
@@ -59,8 +61,8 @@ sigil-lang/
 - **Relative imports within sigil/**: `from .module import ...` (e.g., `from .expressions import ...`, `from .semantics import ...`). External imports use absolute paths.
 - **Map assignment separators**: Multiple `map` assignments use `;` as separator. `AggregateStage` does NOT use semicolons (`}` provides unambiguous boundaries).
 - **Python >=3.10**: Uses `str | None` union syntax throughout.
-- **No linter/formatter config**: No ruff/flake8/mypy/black config files. No `# type: ignore`, `# noqa`, or `# pylint: disable` anywhere.
-- **Setup.py only**: No pyproject.toml or setup.cfg. Uses `setuptools` with `package_data` for grammar.tx and templates.
+- **Lint / type-check / format config in `pyproject.toml`** (`[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`, `[tool.coverage.*]`). No `# type: ignore`, `# noqa`, or `# pylint: disable` anywhere; the only tooling directive in use is `# pragma: no cover` for genuinely unreachable fallbacks.
+- **Build backend**: PEP 621 `pyproject.toml` driving `setuptools` (no `setup.py`, no `setup.cfg`). Package data (`grammar.tx`, `templates/*.j2`) declared via `[tool.setuptools.package-data]`. Optional dependency groups: `api` (fastapi/uvicorn), `cli` (rich), `dev` (ruff/mypy/pre-commit/pytest), `test` (syrupy/hypothesis/pytest-benchmark + fastapi/httpx for API tests), `integration` (commlib-py with all transports), `docs` (mkdocs-material). `requirements.txt` is only a `-e .[dev,test]` shim.
 - **AST walking**: `_AST_WALK_ATTRS` tuple in codegen.py defines attribute names for recursive AST traversal (`_has_temporal_ref`, `_has_env_ref`, etc.).
 - **Duration handling**: `UNIT_MULTIPLIERS` dict defined in `semantics.py`, imported by `codegen.py` via `from .semantics import UNIT_MULTIPLIERS`.
 - **Grammar changes cascade**: Any grammar.tx change requires checking semantics, codegen, expressions, explain, visualize, and templates.
@@ -225,5 +227,5 @@ GitHub Actions (`.github/workflows/ci.yml`):
 - `pipeline.py.j2` is the largest template at 1254 lines.
 - 14 codegen context dataclasses (was 11): added `FanoutBranchCtx`, `ModelCtx`, `PredictCtx`.
 - ML predict stage: `|> predict using MODEL_NAME`. Runtimes: `onnx`, `sklearn`, `torch`, `tflite`, custom Python module. ML deps conditionally included in `requirements.txt.j2`.
-- Version: `0.1.0` (defined in both `setup.py` and `sigil/__init__.py`).
+- Version: `0.1.0` (single source of truth in `pyproject.toml`; `sigil/__init__.py` reads it via `importlib.metadata.version("sigil")` with a `0.0.0+local` fallback for uninstalled checkouts).
 - Visual designer lives in the separate `sigil-designer` repository (React/Vite). Does NOT currently support predict stage in UI.

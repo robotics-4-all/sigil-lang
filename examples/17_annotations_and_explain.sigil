@@ -7,39 +7,39 @@
 // Try: sigil explain examples/17_annotations_and_explain.sigil
 // Try: sigil check examples/17_annotations_and_explain.sigil
 
-const TEMP_LIMIT = 120
+CONST TEMP_LIMIT = 120
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
-pipeline monitored
-    source from local :: "sensors/temperature"
+PIPELINE monitored
+    SOURCE FROM local :: "sensors/temperature"
 
     // @warn annotations emit warnings during validation
-    |> @warn("large window may cause memory pressure") window tumbling(1 h)
+    |> @WARN("large window may cause memory pressure") WINDOW tumbling(1 h)
 
-    |> aggregate {
-        avg_temp = avg(msg.value)
-        max_temp = max(msg.value)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
         n = count()
     }
 
-    |> @warn("having with > 100 threshold may filter most windows") having n > 100
+    |> @WARN("having with > 100 threshold may filter most windows") HAVING n > 100
 
-    |> map {
-        let severity = case {
+    |> MAP {
+        LET severity = case {
             when max_temp > TEMP_LIMIT => "critical"
             when max_temp > 80 => "warning"
             else => "normal"
-        };
-        average = avg_temp;
-        peak = max_temp;
-        level = severity;
+        },
+        average = avg_temp,
+        peak = max_temp,
+        level = severity,
         samples = n
     }
 
-    |> sink to local :: "analytics/temperature"
-end
+    |> SINK TO local :: "analytics/temperature"
+;
 

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, devel]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, devel]
 
 jobs:
   unit:
@@ -17,8 +17,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements.txt && pip install -e .
+      - run: pip install -e .[dev,test]
       - run: pytest tests/ -v --ignore=tests/test_integration.py
+      - run: make validate-examples
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .[dev]
+      - run: ruff check sigil tests
+      - run: ruff format --check sigil tests
+      - run: mypy sigil
 
   integration:
     runs-on: ubuntu-latest

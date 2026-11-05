@@ -3,42 +3,42 @@
 // fmt(pattern, arg1, arg2, ...) formats a string using Python's str.format().
 // Use {} placeholders for positional arguments.
 //
-// Type annotations on aggregate assignments coerce the result at runtime:
+// Type annotations on AGGREGATE assignments coerce the result at runtime:
 //   total: float = sum(msg.value)   →  float(sum_result)
 //   n: int = count()                →  int(count_result)
 
-broker local
-    host: "localhost"
-    port: 1883
-end
+BROKER local
+    HOST: "localhost"
+    PORT: 1883
+;
 
 // Format sensor readings into human-readable labels
-pipeline sensor_labels
-    source from local :: "sensors/+/reading"
-    |> filter msg.value is not null
-    |> map {
-        label = fmt("Sensor {} reads {} at location {}", msg.sensor_id, msg.value, msg.location);
+PIPELINE sensor_labels
+    SOURCE FROM local :: "sensors/+/reading"
+    |> FILTER msg.value is not null
+    |> MAP {
+        label = fmt("Sensor {} reads {} at location {}", msg.sensor_id, msg.value, msg.location),
         short = fmt("[{}] {}", msg.sensor_id, msg.value)
     }
-    |> sink to local :: "display/readings"
-end
+    |> SINK TO local :: "display/readings"
+;
 
-// Use type annotations to ensure aggregate outputs have correct types
-pipeline typed_aggregation
-    source from local :: "sensors/+/temperature"
-    |> window tumbling(1 m)
-    |> aggregate {
-        avg_temp: float = avg(msg.temperature)
-        max_temp: float = max(msg.temperature)
-        min_temp: float = min(msg.temperature)
+// Use type annotations to ensure AGGREGATE outputs have correct types
+PIPELINE typed_aggregation
+    SOURCE FROM local :: "sensors/+/temperature"
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE {
+        avg_temp: float = avg(msg.temperature),
+        max_temp: float = max(msg.temperature),
+        min_temp: float = min(msg.temperature),
         sample_count: int = count()
     }
-    |> map {
+    |> MAP {
         summary = fmt("Avg: {}, Min: {}, Max: {} ({} samples)",
-            avg_temp, min_temp, max_temp, sample_count);
-        average = avg_temp;
-        range_spread = max_temp - min_temp;
+            avg_temp, min_temp, max_temp, sample_count),
+        average = avg_temp,
+        range_spread = max_temp - min_temp,
         samples = sample_count
     }
-    |> sink to local :: "analytics/temperature_summary"
-end
+    |> SINK TO local :: "analytics/temperature_summary"
+;

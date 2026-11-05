@@ -25,11 +25,11 @@
  *
  * SCENARIO:
  *   A logistics event router that processes parcel status updates.
- *   The pipeline:
+ *   The PIPELINE:
  *     1. Translates numeric status codes to human-readable labels (match)
  *     2. Computes a priority flag using if/then/else based on carrier SLA tier
  *     3. Aggregates parcel counts per warehouse region
- *     4. Routes output to region-specific alert topics via route block
+ *     4. Routes output to region-specific alert topics via ROUTE block
  *
  * INPUT:  {"parcel_id": "P-001", "status_code": 3, "carrier_tier": "express",
  *           "weight_kg": 12.5, "region": "EMEA"}
@@ -37,27 +37,27 @@
  *           "high_priority": true, "region": "EMEA"}
  */
 
-broker logistics
-    transport: mqtt
-    host: "logistics.example.com"
-    port: 1883
-end
+BROKER logistics
+    TRANSPORT: MQTT
+    HOST: "logistics.example.com"
+    PORT: 1883
+;
 
-broker alerts
-    transport: amqp
-    host: "rabbit.example.com"
-    port: 5672
-end
+BROKER alerts
+    TRANSPORT: AMQP
+    HOST: "rabbit.example.com"
+    PORT: 5672
+;
 
-pipeline parcel_status
-    source from logistics :: "parcels/+/events" qos: 1 format: json
+PIPELINE parcel_status
+    SOURCE FROM logistics :: "parcels/+/events" QOS: 1 FORMAT: json
 
     // Only process recognised status codes (0-6)
-    |> filter msg.status_code >= 0 and msg.status_code <= 6
+    |> FILTER msg.status_code >= 0 and msg.status_code <= 6
 
-    |> map {
+    |> MAP {
         // match: translate integer status code to a readable label
-        let status_label = match msg.status_code {
+        LET status_label = match msg.status_code {
             case 0 => "registered"
             case 1 => "collected"
             case 2 => "in_warehouse"
@@ -66,33 +66,33 @@ pipeline parcel_status
             case 5 => "delivered"
             case 6 => "returned"
             else   => "unknown"
-        };
+        },
 
         // if/then/else: express delivery or heavy parcel → high priority
-        let high_priority = if msg.carrier_tier == "express" or msg.weight_kg > 30.0
+        LET high_priority = if msg.carrier_tier == "express" or msg.weight_kg > 30.0
                             then true
-                            else false;
+                            else false,
 
         // match on string region code → human-readable zone name
-        let zone = match msg.region {
+        LET zone = match msg.region {
             case "EMEA" => "Europe, Middle East & Africa"
             case "APAC" => "Asia-Pacific"
             case "AMER" => "Americas"
             else        => msg.region
-        };
+        },
 
-        parcel        = msg.parcel_id;
-        status        = status_label;
-        high_priority = high_priority;
-        zone          = zone;
-        weight_kg     = msg.weight_kg;
+        parcel        = msg.parcel_id,
+        status        = status_label,
+        high_priority = high_priority,
+        zone          = zone,
+        weight_kg     = msg.weight_kg,
         region        = msg.region
     }
 
-    |> route
-        when msg.region == "EMEA" => sink to alerts :: "logistics/emea/events"
-        when msg.region == "APAC" => sink to alerts :: "logistics/apac/events"
-        when msg.region == "AMER" => sink to alerts :: "logistics/amer/events"
-        default => sink to logistics :: "logistics/other/events"
-    end
-end
+    |> ROUTE
+        when msg.region == "EMEA" => SINK TO alerts :: "logistics/emea/events"
+        when msg.region == "APAC" => SINK TO alerts :: "logistics/apac/events"
+        when msg.region == "AMER" => SINK TO alerts :: "logistics/amer/events"
+        DEFAULT => SINK TO logistics :: "logistics/other/events"
+    ;
+;
