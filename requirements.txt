@@ -3,4 +3,3 @@
 # extras, so existing tooling that runs `pip install -r requirements.txt`
 # continues to work.
 -e .[dev,test]
-
