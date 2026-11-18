@@ -228,28 +228,33 @@ class PipelineCtx:
     enrich_stages: list[EnrichStageCtx] = dc_field(default_factory=list)
 
 
+@dataclass
+class ContextBundle:
+    """Everything ``generate()`` derives from a model before rendering."""
+
+    const_map: dict[str, str]
+    func_defs: dict
+    model_map: dict[str, ModelCtx]
+    raw_const_map: dict[str, str]
+    pipeline_contexts: list[PipelineCtx]
+    ml_runtimes: set[str]
+
+
 def generate(model, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "pipelines"), exist_ok=True)
 
-    const_map = _build_const_map(model)
-    func_defs = _build_func_defs(model)
-    model_map = _build_model_map(model, const_map, func_defs)
-    raw_const_map = _build_raw_const_map(model)
+    ctxs = build_contexts(model)
     env = _create_jinja_env()
-    pipeline_contexts = [
-        _build_pipeline_ctx(p, const_map, func_defs, model_map, raw_const_map)
-        for p in model.pipelines
-    ]
 
     _render_file(
         env,
         "app.py.j2",
         os.path.join(output_dir, "app.py"),
-        pipelines=pipeline_contexts,
+        pipelines=ctxs.pipeline_contexts,
     )
 
-    for pctx in pipeline_contexts:
+    for pctx in ctxs.pipeline_contexts:
         path = os.path.join(output_dir, "pipelines", f"{pctx.name}.py")
         _render_file(env, "pipeline.py.j2", path, p=pctx)
 
@@ -257,19 +262,116 @@ def generate(model, output_dir: str):
     with open(init_path, "w") as f:
         f.write("")
 
-    ml_runtimes = set()
-    for pctx in pipeline_contexts:
-        for pred in pctx.predictions:
-            ml_runtimes.add(pred.model.runtime)
-
     _render_file(
         env,
         "requirements.txt.j2",
         os.path.join(output_dir, "requirements.txt"),
-        ml_runtimes=ml_runtimes,
+        ml_runtimes=ctxs.ml_runtimes,
     )
 
     return output_dir
+
+
+def build_contexts(model) -> ContextBundle:
+    """Build the const, function, model and pipeline contexts for ``model``."""
+    const_map = _build_const_map(model)
+    func_defs = _build_func_defs(model)
+    model_map = _build_model_map(model, const_map, func_defs)
+    raw_const_map = _build_raw_const_map(model)
+    pipeline_contexts = [
+        _build_pipeline_ctx(p, const_map, func_defs, model_map, raw_const_map)
+        for p in model.pipelines
+    ]
+    runtimes = {pred.model.runtime for pctx in pipeline_contexts for pred in pctx.predictions}
+    return ContextBundle(
+        const_map=const_map,
+        func_defs=func_defs,
+        model_map=model_map,
+        raw_const_map=raw_const_map,
+        pipeline_contexts=pipeline_contexts,
+        ml_runtimes=runtimes,
+    )
+
+
+def render_pipeline_source(pctx: PipelineCtx) -> str:
+    """Render ``pipeline.py.j2`` for one pipeline context, without writing a file."""
+    env = _create_jinja_env()
+    return str(env.get_template("pipeline.py.j2").render(p=pctx))
+
+
+def ml_runtimes(model) -> set[str]:
+    """Return the ML runtimes referenced by the model's ``PREDICT`` stages."""
+    return build_contexts(model).ml_runtimes
+
+
+def env_keys(model) -> set[str]:
+    """Return every key read by an ``env("KEY", ...)`` expression in the model."""
+    return {node.key for node in _walk_ast(model) if node.__class__.__name__ == "EnvRef"}
+
+
+def _walk_ast(node):
+    """Yield every textX node reachable from ``node``, skipping parent back-references."""
+    stack = [node]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if current.__class__.__module__ == "builtins":
+            continue
+        yield current
+        for name, value in vars(current).items():
+            if name.startswith("_") or name == "parent":
+                continue
+            if isinstance(value, list):
+                stack.extend(
+                    item
+                    for item in value
+                    if item is not None and item.__class__.__module__ != "builtins"
+                )
+            elif value is not None and value.__class__.__module__ != "builtins":
+                stack.append(value)
+
+
+_ML_PACKAGES = {
+    "onnx": ("onnxruntime",),
+    "sklearn": ("scikit-learn", "joblib"),
+    "torch": ("torch",),
+    "tflite": ("tflite-runtime",),
+}
+
+
+def ml_packages(runtimes: set[str]) -> list[str]:
+    """Map ML runtimes to the pip packages the rendered pipeline imports."""
+    packages: list[str] = []
+    requested = {runtime.lower() for runtime in runtimes}
+    for runtime, runtime_packages in _ML_PACKAGES.items():
+        if runtime not in requested:
+            continue
+        for package in runtime_packages:
+            if package not in packages:
+                packages.append(package)
+    return packages
+
+
+def _override_transports(ctxs: ContextBundle, transport: str) -> None:
+    """Point every broker reachable from ``ctxs`` at ``transport``, in place."""
+    target = transport.lower()
+    for pctx in ctxs.pipeline_contexts:
+        brokers: list[BrokerCtx | None] = [pctx.source_broker, pctx.sink_broker]
+        if pctx.join is not None:
+            brokers.append(pctx.join.broker)
+        brokers.extend(arm.broker for arm in pctx.route_arms)
+        if pctx.route_default is not None:
+            brokers.append(pctx.route_default.broker)
+        brokers.append(pctx.on_error_broker)
+        if pctx.validate_stage is not None:
+            brokers.append(pctx.validate_stage.on_error_broker)
+        brokers.extend(stage.on_error_broker for stage in pctx.enrich_stages)
+        for broker in brokers:
+            if broker is not None:
+                broker.transport = target
 
 
 def _create_jinja_env():
