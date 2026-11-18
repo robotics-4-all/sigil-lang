@@ -374,6 +374,33 @@ def _override_transports(ctxs: ContextBundle, transport: str) -> None:
                 broker.transport = target
 
 
+def _redact_broker_auth(ctxs: ContextBundle) -> None:
+    """Clear the credentials and TLS flags reachable from ``ctxs``, in place.
+
+    The in-process mock transport ignores AUTH and TLS entirely, so a mock
+    notebook that kept them would ship plain-text credentials that can never be
+    used: dead weight that only widens the leak surface of a shared ``.ipynb``.
+    The notebook generator calls this for ``mode="mock"`` only; ``generate()``
+    never does, so generated applications keep their declared auth.
+    """
+    for pctx in ctxs.pipeline_contexts:
+        brokers: list[BrokerCtx | None] = [pctx.source_broker, pctx.sink_broker]
+        if pctx.join is not None:
+            brokers.append(pctx.join.broker)
+        brokers.extend(arm.broker for arm in pctx.route_arms)
+        if pctx.route_default is not None:
+            brokers.append(pctx.route_default.broker)
+        brokers.append(pctx.on_error_broker)
+        if pctx.validate_stage is not None:
+            brokers.append(pctx.validate_stage.on_error_broker)
+        brokers.extend(stage.on_error_broker for stage in pctx.enrich_stages)
+        for broker in brokers:
+            if broker is not None:
+                broker.username = None
+                broker.password = None
+                broker.ssl = False
+
+
 def _create_jinja_env():
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
