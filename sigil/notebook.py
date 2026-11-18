@@ -316,6 +316,77 @@ def _source_topics(ctxs: ContextBundle) -> list[tuple[str, str]]:
     return pairs
 
 
+def _topic_brokers(ctxs: ContextBundle) -> list[tuple[str, BrokerCtx]]:
+    """Return ``(topic, broker)`` for every output topic a pipeline publishes.
+
+    Mirrors ``_output_topics``: a route replaces the sink and a DLQ endpoint
+    exists only when its ``on_error`` clause names a broker. When two pipelines
+    publish the same topic, the first broker seen wins, matching ``_dedupe``.
+    """
+    pairs: list[tuple[str, BrokerCtx]] = []
+    seen: set[str] = set()
+    for pctx in ctxs.pipeline_contexts:
+        candidates: list[tuple[str, BrokerCtx]] = []
+        if pctx.has_route:
+            candidates.extend((arm.topic, arm.broker) for arm in pctx.route_arms)
+            if pctx.route_default is not None:
+                candidates.append((pctx.route_default.topic, pctx.route_default.broker))
+        elif pctx.has_sink:
+            candidates.append((pctx.sink_topic, pctx.sink_broker))
+        if pctx.has_on_error and not pctx.on_error_drop and pctx.on_error_broker is not None:
+            candidates.append((pctx.on_error_topic, pctx.on_error_broker))
+        if pctx.validate_stage is not None and pctx.validate_stage.on_error == "sink":
+            validate_broker = pctx.validate_stage.on_error_broker
+            if validate_broker is not None:
+                candidates.append((pctx.validate_stage.on_error_topic, validate_broker))
+        for stage in pctx.enrich_stages:
+            if stage.on_error == "sink" and stage.on_error_broker is not None:
+                candidates.append((stage.on_error_topic, stage.on_error_broker))
+        for topic, broker in candidates:
+            if topic and topic not in seen:
+                seen.add(topic)
+                pairs.append((topic, broker))
+    return pairs
+
+
+def _source_brokers(ctxs: ContextBundle) -> list[tuple[str, str, BrokerCtx]]:
+    """Return ``(topic, pipeline, source broker)`` pairs for sample messages.
+
+    ``_source_topics`` drops a repeated topic outright; a broker cell keys on
+    ``(broker, topic)`` instead because two brokers may carry the same topic
+    name. Pipe sources are skipped: their input arrives in-process.
+    """
+    pairs: list[tuple[str, str, BrokerCtx]] = []
+    seen: set[tuple[str, str]] = set()
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_pipe_source:
+            continue
+        key = (pctx.source_broker.name, pctx.source_topic)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((pctx.source_topic, pctx.name, pctx.source_broker))
+    return pairs
+
+
+def _transport_import(transport: str, names: tuple[str, ...]) -> str:
+    """Render one import line with ``<Transport>``-prefixed aliases."""
+    prefix = transport.title()
+    imported = ", ".join(f"{name} as {prefix}{name}" for name in names)
+    return f"from commlib.transports.{transport.lower()} import " + imported
+
+
+def _connection_params(broker: BrokerCtx) -> str:
+    """Render ``ConnectionParameters(...)`` exactly as ``pipeline.py.j2`` does."""
+    args = [f"host={json.dumps(broker.host)}", f"port={broker.port}"]
+    if broker.ssl:
+        args.append("ssl=True")
+    if broker.username:
+        args.append(f"username={json.dumps(broker.username)}")
+        args.append(f"password={json.dumps(broker.password or '')}")
+    return f"{broker.transport.title()}ConnectionParameters({', '.join(args)})"
+
+
 _GUARD_SOURCE = """def _guard_recursion(pipe, limit=32):
     sub = getattr(pipe, "_subscriber", None)
     if sub is None or sub.onmessage is None:
@@ -361,6 +432,39 @@ for _s in _collectors:
 clear_mock_bus()
 _clear_modules()
 print("mock bus cleared, pipeline modules dropped")
+for _t, _msgs in COLLECTED.items():
+    print(f"final {_t}: {len(_msgs)} message(s)")  # @finally publishes during stop()
+"""
+
+
+_BROKER_OUTPUTS_SOURCE = """# Brokers are asynchronous: give the transport time to deliver before draining.
+time.sleep(0.5)
+for _p in pipeline_instances.values():
+    _p.drain()
+time.sleep(0.1)
+try:
+    from IPython.display import display
+except ImportError:  # plain-python runs (tests, scripts) have no IPython
+    display = print
+
+for _t, _msgs in COLLECTED.items():
+    print(f"{_t}: {len(_msgs)} message(s)")
+    display(_msgs[-5:])
+"""
+
+_BROKER_CLEANUP_SOURCE = """for _p in pipeline_instances.values():
+    try:
+        _p.drain()
+    except Exception as _exc:
+        print("drain failed:", _exc)
+    try:
+        _p.stop()
+    except Exception as _exc:
+        print("stop failed:", _exc)
+for _s in _collectors:
+    _s.stop()
+_clear_modules()
+print("pipeline modules dropped")
 for _t, _msgs in COLLECTED.items():
     print(f"final {_t}: {len(_msgs)} message(s)")  # @finally publishes during stop()
 """
@@ -474,6 +578,102 @@ def _cleanup_cell(ctxs: ContextBundle) -> _CodeCell:
     return _code_cell(_CLEANUP_SOURCE)
 
 
+def _broker_start_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker start cell: collect on declared brokers, guard, start."""
+    lines = [
+        "# Broker mode: each collector subscribes on the broker that publishes",
+        "# its output topic. The recursion guard and the _callback_registered",
+        "# reset are identical to mock mode.",
+    ]
+    for transport in _declared_transports(ctxs):
+        lines.append(_transport_import(transport, ("ConnectionParameters", "Subscriber")))
+    lines.extend(
+        [
+            "",
+            "COLLECTED = {}",
+            "_collectors = []",
+            "",
+            "",
+            "def _collect(topic, subscriber_cls, conn_params):",
+            "    COLLECTED.setdefault(topic, [])",
+            "",
+            "    def _cb(data):",
+            "        COLLECTED[topic].append(data)",
+            "",
+            "    sub = subscriber_cls(",
+            "        topic=topic,",
+            "        on_message=_cb,",
+            "        conn_params=conn_params,",
+            "    )",
+            "    sub.run()",
+            "    _collectors.append(sub)",
+            "",
+            "",
+        ]
+    )
+    for topic, broker in _topic_brokers(ctxs):
+        subscriber = f"{broker.transport.title()}Subscriber"
+        lines.append(f"_collect({json.dumps(topic)}, {subscriber}, {_connection_params(broker)})")
+    lines.extend(
+        [
+            "",
+            "",
+            *_GUARD_SOURCE.splitlines(),
+            "",
+            "_endpoints = list(pipeline_instances.values()) + _collectors",
+            "for _ep in _endpoints:",
+            '    _sub = getattr(_ep, "_subscriber", None)',
+            "    if _sub is not None:",
+            "        _sub._callback_registered = False",
+            "for _p in pipeline_instances.values():",
+            "    _guard_recursion(_p)",
+            "    _p.start()",
+        ]
+    )
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _broker_inputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker inputs cell: publish three samples on each source broker."""
+    lines: list[str] = []
+    for transport in _declared_transports(ctxs):
+        lines.append(_transport_import(transport, ("ConnectionParameters", "Publisher")))
+    if lines:
+        lines.append("")
+    pairs = _source_brokers(ctxs)
+    for topic, pipeline, broker in pairs:
+        publisher = f"{broker.transport.title()}Publisher"
+        lines.extend(
+            [
+                f"_pub = {publisher}(",
+                f"    topic={json.dumps(topic)},",
+                f"    conn_params={_connection_params(broker)},",
+                ")",
+                "_pub.run()",
+                "for _v in (12, 25, 5):",
+                f'    _pub.publish({{"value": _v, "sensor": {json.dumps(pipeline)}, '
+                '"ts": time.time()})',
+                "",
+            ]
+        )
+    if not pairs:
+        lines.append("# no broker source topics: this model is fed through pipe listeners")
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.append("time.sleep(0.5)")
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _broker_outputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker outputs cell; the leading wait lets the broker deliver."""
+    return _code_cell(_BROKER_OUTPUTS_SOURCE)
+
+
+def _broker_cleanup_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker cleanup cell; the trailing re-display captures ``@finally``."""
+    return _code_cell(_BROKER_CLEANUP_SOURCE)
+
+
 def _model_filename(model) -> str | None:
     """Return the real source filename of ``model``, or ``None`` for strings."""
     filename = getattr(model, "_tx_filename", None)
@@ -554,15 +754,22 @@ def generate_notebook(
         _code_cell(_preamble_source()),
     ]
     cells.extend(_pipeline_cell(pctx) for pctx in ctxs.pipeline_contexts)
-    cells.extend(
-        [
-            _instantiate_cell(ctxs),
+    if mode == "broker":
+        driver_cells = [
+            _broker_start_cell(ctxs),
+            _broker_inputs_cell(ctxs),
+            _broker_outputs_cell(ctxs),
+            _broker_cleanup_cell(ctxs),
+        ]
+    else:
+        driver_cells = [
             _start_cell(ctxs),
             _inputs_cell(ctxs),
             _outputs_cell(ctxs),
             _cleanup_cell(ctxs),
         ]
-    )
+    cells.append(_instantiate_cell(ctxs))
+    cells.extend(driver_cells)
 
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(_notebook(cells), handle, indent=1, ensure_ascii=False)

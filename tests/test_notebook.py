@@ -248,3 +248,45 @@ def test_cli_notebook_subcommand():
     assert os.path.isfile(os.path.join(out_dir, "cli_pipeline.ipynb"))
     missing = os.path.join(_tmpdir(), "absent.sigil")
     assert main(["notebook", missing, "-o", out_dir]) != 0
+
+
+def _driver_cell(doc: dict, offset: int) -> str:
+    """Return a driver cell's source, counting back from the last cell."""
+    return _text(doc["cells"][len(doc["cells"]) - offset])
+
+
+def test_broker_mode_uses_dsl_transport():
+    doc, _ = _nb(_SINGLE, mode="broker")
+    inputs = _driver_cell(doc, 3)
+    assert "from commlib.transports.mqtt import" in inputs
+    assert "clear_mock_bus" not in inputs
+    # The publisher carries the broker's real connection parameters, never the
+    # mock placeholder, and no broker cell clears the mock bus.
+    assert 'host="localhost"' in inputs
+    assert "port=1883" in inputs
+    driver_blob = "\n".join(_text(cell) for cell in _code_cells(doc)[3:])
+    assert "clear_mock_bus" not in driver_blob
+    assert "mock_transport" not in driver_blob
+
+    mock_doc, _ = _nb(_SINGLE, mode="mock")
+    assert "commlib.transports.mqtt" not in json.dumps(mock_doc)
+
+
+def test_broker_mode_mixed_transports_use_each_broker():
+    doc, _ = _nb(_MIXED, mode="broker")
+    inputs = _driver_cell(doc, 3)
+    start = _driver_cell(doc, 4)
+    for cell in (inputs, start):
+        assert "from commlib.transports.mqtt import" in cell
+        assert "from commlib.transports.redis import" in cell
+
+    # Each source publisher uses its own broker's connection parameters.
+    assert 'MqttConnectionParameters(host="mqtt.local", port=1883)' in inputs
+    assert 'RedisConnectionParameters(host="redis.local", port=6379)' in inputs
+    # Each collector subscribes on the broker that publishes its topic.
+    assert 'MqttConnectionParameters(host="mqtt.local", port=1883)' in start
+    assert 'RedisConnectionParameters(host="redis.local", port=6379)' in start
+    assert "clear_mock_bus" not in "\n".join((inputs, start))
+
+    for cell in _code_cells(doc):
+        ast.parse(_strip_magics(_text(cell)))
