@@ -2,9 +2,9 @@
 
 A generated notebook is an nbformat-4 document (``nbformat_minor`` 5) whose
 code cells bootstrap a private ``pipelines`` package inside the kernel and load
-one rendered pipeline module per pipeline. The M1 cell set is the title cell,
-the install cell, the preamble cell and one ``_load_pipeline`` cell per
-pipeline; driver cells are appended by later milestones.
+one rendered pipeline module per pipeline. After the pipeline cells the
+driver cells follow in a fixed order: instantiate, start, inputs, outputs and
+cleanup.
 """
 
 from __future__ import annotations
@@ -264,6 +264,216 @@ def _pipeline_cell(pctx: PipelineCtx) -> _CodeCell:
     return _code_cell(f"_load_pipeline({json.dumps(pctx.name)}, {json.dumps(source)})\n")
 
 
+def _dedupe(topics: list[str]) -> list[str]:
+    """Return ``topics`` with blanks and repeats dropped, first-seen order kept."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    for topic in topics:
+        if topic and topic not in seen:
+            seen.add(topic)
+            kept.append(topic)
+    return kept
+
+
+def _output_topics(ctxs: ContextBundle) -> list[str]:
+    """Collect every topic a generated pipeline can publish to.
+
+    The conditions mirror ``pipeline.py.j2``: a route replaces the sink, and a
+    DLQ endpoint exists only when its ``on_error`` clause names a broker.
+    """
+    topics: list[str] = []
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_route:
+            topics.extend(arm.topic for arm in pctx.route_arms)
+            if pctx.route_default is not None:
+                topics.append(pctx.route_default.topic)
+        elif pctx.has_sink:
+            topics.append(pctx.sink_topic)
+        if pctx.has_on_error and not pctx.on_error_drop:
+            topics.append(pctx.on_error_topic)
+        if pctx.validate_stage is not None and pctx.validate_stage.on_error == "sink":
+            topics.append(pctx.validate_stage.on_error_topic)
+        topics.extend(
+            stage.on_error_topic for stage in pctx.enrich_stages if stage.on_error == "sink"
+        )
+    return _dedupe(topics)
+
+
+def _source_topics(ctxs: ContextBundle) -> list[tuple[str, str]]:
+    """Collect ``(topic, pipeline)`` pairs that sample messages go to.
+
+    Pipe sources are skipped because their input arrives through
+    ``_downstream_listeners``. A topic shared by several pipelines is published
+    once, attributed to the first pipeline that subscribes to it.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_pipe_source or pctx.source_topic in seen:
+            continue
+        seen.add(pctx.source_topic)
+        pairs.append((pctx.source_topic, pctx.name))
+    return pairs
+
+
+_GUARD_SOURCE = """def _guard_recursion(pipe, limit=32):
+    sub = getattr(pipe, "_subscriber", None)
+    if sub is None or sub.onmessage is None:
+        return
+    orig, state = sub.onmessage, {"depth": 0}
+
+    def _wrapped(data):
+        state["depth"] += 1
+        try:
+            if state["depth"] > limit:
+                raise RuntimeError("mock self-loop: sink topic feeds its own source")
+            return orig(data)
+        finally:
+            state["depth"] -= 1
+
+    sub.onmessage = _wrapped
+"""
+
+_OUTPUTS_SOURCE = """for _p in pipeline_instances.values():
+    _p.drain()
+time.sleep(0.1)
+try:
+    from IPython.display import display
+except ImportError:  # plain-python runs (tests, scripts) have no IPython
+    display = print
+
+for _t, _msgs in COLLECTED.items():
+    print(f"{_t}: {len(_msgs)} message(s)")
+    display(_msgs[-5:])
+"""
+
+_CLEANUP_SOURCE = """for _p in pipeline_instances.values():
+    try:
+        _p.drain()
+    except Exception as _exc:
+        print("drain failed:", _exc)
+    try:
+        _p.stop()
+    except Exception as _exc:
+        print("stop failed:", _exc)
+for _s in _collectors:
+    _s.stop()
+clear_mock_bus()
+_clear_modules()
+print("mock bus cleared, pipeline modules dropped")
+for _t, _msgs in COLLECTED.items():
+    print(f"final {_t}: {len(_msgs)} message(s)")  # @finally publishes during stop()
+"""
+
+
+def _instantiate_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that constructs every pipeline and wires pipe sources."""
+    lines = [
+        f"from pipelines.{pctx.name} import {pctx.class_name}Pipeline"
+        for pctx in ctxs.pipeline_contexts
+    ]
+    lines.extend(["", "pipeline_instances = {"])
+    lines.extend(
+        f"    {json.dumps(pctx.name)}: {pctx.class_name}Pipeline(),"
+        for pctx in ctxs.pipeline_contexts
+    )
+    lines.extend(["}", "COLLECTED = {}"])
+    for pctx in ctxs.pipeline_contexts:
+        if not pctx.has_pipe_source:
+            continue
+        source = json.dumps(pctx.pipe_source_name)
+        target = json.dumps(pctx.name)
+        lines.extend(
+            [
+                "",
+                f"pipeline_instances[{source}]._downstream_listeners.append(",
+                f"    pipeline_instances[{target}]._on_message",
+                ")",
+            ]
+        )
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _start_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the start cell: clear the bus, collect outputs, guard, then start."""
+    topic_list = "[" + ", ".join(json.dumps(topic) for topic in _output_topics(ctxs)) + "]"
+    lines = [
+        "# Load-bearing order: clear_mock_bus() -> collectors -> recursion guards ->",
+        "# _callback_registered reset -> start() -> inputs. Publishing before the",
+        "# subscribers run drops the message, and the preamble's RLock patch is what",
+        "# makes a sink publish from inside _on_message safe.",
+        "clear_mock_bus()",
+        "COLLECTED = {}",
+        "_collectors = []",
+        "",
+        "",
+        "def _collect(topic):",
+        "    COLLECTED.setdefault(topic, [])",
+        "",
+        "    def _cb(data):",
+        "        COLLECTED[topic].append(data)",
+        "",
+        "    sub = Subscriber(",
+        "        topic=topic,",
+        "        on_message=_cb,",
+        '        conn_params=ConnectionParameters(host="mock", port=0),',
+        "    )",
+        "    sub.run()",
+        "    _collectors.append(sub)",
+        "",
+        "",
+        f"for _t in {topic_list}:",
+        "    _collect(_t)",
+        "",
+        "",
+        *_GUARD_SOURCE.splitlines(),
+        "",
+        "_endpoints = list(pipeline_instances.values()) + _collectors",
+        "for _ep in _endpoints:",
+        '    _sub = getattr(_ep, "_subscriber", None)',
+        "    if _sub is not None:",
+        "        _sub._callback_registered = False",
+        "for _p in pipeline_instances.values():",
+        "    _guard_recursion(_p)",
+        "    _p.start()",
+    ]
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _inputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that publishes three sample messages per source topic."""
+    pairs = _source_topics(ctxs)
+    lines: list[str] = []
+    for topic, pipeline in pairs:
+        lines.extend(
+            [
+                "_pub = Publisher(",
+                f"    topic={json.dumps(topic)},",
+                '    conn_params=ConnectionParameters(host="mock", port=0),',
+                ")",
+                "_pub.run()",
+                "for _v in (12, 25, 5):",
+                f'    _pub.publish({{"value": _v, "sensor": {json.dumps(pipeline)}, '
+                '"ts": time.time()})',
+                "",
+            ]
+        )
+    if not pairs:
+        lines.append("# no broker source topics: this model is fed through pipe listeners")
+    lines.append("time.sleep(0.1)")
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _outputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that drains every pipeline and displays ``COLLECTED``."""
+    return _code_cell(_OUTPUTS_SOURCE)
+
+
+def _cleanup_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cleanup cell; the trailing re-display captures ``@finally``."""
+    return _code_cell(_CLEANUP_SOURCE)
+
+
 def _model_filename(model) -> str | None:
     """Return the real source filename of ``model``, or ``None`` for strings."""
     filename = getattr(model, "_tx_filename", None)
@@ -344,6 +554,15 @@ def generate_notebook(
         _code_cell(_preamble_source()),
     ]
     cells.extend(_pipeline_cell(pctx) for pctx in ctxs.pipeline_contexts)
+    cells.extend(
+        [
+            _instantiate_cell(ctxs),
+            _start_cell(ctxs),
+            _inputs_cell(ctxs),
+            _outputs_cell(ctxs),
+            _cleanup_cell(ctxs),
+        ]
+    )
 
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(_notebook(cells), handle, indent=1, ensure_ascii=False)
