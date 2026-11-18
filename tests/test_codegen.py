@@ -1,3 +1,4 @@
+import ast
 import copy
 import os
 import tempfile
@@ -4455,3 +4456,203 @@ def test_override_transports_mutates_all_accessors():
     assert pctx.validate_stage.on_error_broker is not None
     assert pctx.enrich_stages
     assert all(broker.transport == "mock" for broker in _reachable_brokers(pctx))
+
+
+_PWN_HOST = 'h" + __import__("os").system("echo PWN") + "'
+_PWN_TOPIC = 't" + __import__("os").system("echo PWN") + "'
+_PWN_USERNAME = 'u" + __import__("os").system("echo PWN") + "'
+_PWN_PASSWORD = 'p" + __import__("os").system("echo PWN") + "'
+
+
+def _dsl_string(value: str) -> str:
+    return value.replace('"', '\\"')
+
+
+class TestBrokerStringEscaping:
+    def _gen_pipeline_code(self, src):
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            pname = model.pipelines[0].name
+            with open(os.path.join(tmpdir, "pipelines", f"{pname}.py")) as f:
+                return f.read()
+
+    @staticmethod
+    def _calls(tree, name):
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == name
+        ]
+
+    @staticmethod
+    def _kwarg_literal(call, kwarg):
+        for kw in call.keywords:
+            if kw.arg == kwarg:
+                return ast.literal_eval(kw.value)
+        raise AssertionError(f"{kwarg} not passed to generated call")
+
+    @staticmethod
+    def _assert_no_breakout(tree):
+        assert not any(
+            isinstance(node, ast.Name) and node.id == "__import__" for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Attribute) and node.attr == "system" for node in ast.walk(tree)
+        )
+
+    def test_host_breakout_is_escaped(self):
+        src = f"""
+        BROKER b HOST: "{_dsl_string(_PWN_HOST)}" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        tree = ast.parse(code)
+        self._assert_no_breakout(tree)
+        for call in self._calls(tree, "SourceConnParams") + self._calls(tree, "SinkConnParams"):
+            assert self._kwarg_literal(call, "host") == _PWN_HOST
+
+    def test_topic_breakout_is_escaped(self):
+        src = f"""
+        BROKER b HOST: "localhost" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM b :: "{_dsl_string(_PWN_TOPIC)}"
+            |> SINK TO b :: "{_dsl_string(_PWN_TOPIC)}out"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        tree = ast.parse(code)
+        self._assert_no_breakout(tree)
+        assert self._kwarg_literal(self._calls(tree, "Subscriber")[0], "topic") == _PWN_TOPIC
+        assert self._kwarg_literal(self._calls(tree, "Publisher")[0], "topic") == _PWN_TOPIC + "out"
+
+    def test_username_password_breakout_is_escaped(self):
+        src = f"""
+        BROKER b
+            HOST: "localhost"
+            PORT: 1883
+            AUTH: {{
+                USERNAME: "{_dsl_string(_PWN_USERNAME)}"
+                PASSWORD: "{_dsl_string(_PWN_PASSWORD)}"
+            }}
+        ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        tree = ast.parse(code)
+        self._assert_no_breakout(tree)
+        for call in self._calls(tree, "SourceConnParams") + self._calls(tree, "SinkConnParams"):
+            assert self._kwarg_literal(call, "username") == _PWN_USERNAME
+            assert self._kwarg_literal(call, "password") == _PWN_PASSWORD
+
+    def test_all_broker_blocks_escape_hostile_values(self):
+        def broker(name, transport=""):
+            transport_line = f" TRANSPORT: {transport}" if transport else ""
+            return [
+                f"BROKER {name}{transport_line}",
+                f'    HOST: "{_dsl_string(_PWN_HOST)}"',
+                "    PORT: 1883",
+                "    AUTH: {",
+                f'        USERNAME: "{_dsl_string(_PWN_USERNAME)}"',
+                f'        PASSWORD: "{_dsl_string(_PWN_PASSWORD)}"',
+                "    }",
+                ";",
+            ]
+
+        src = "\n".join(
+            [
+                *broker("a"),
+                *broker("b", "REDIS"),
+                "SCHEMA Reading STRICT id: str value: float ;",
+                "PIPELINE pwn",
+                f'    SOURCE FROM a :: "{_dsl_string(_PWN_TOPIC)}"',
+                f'    |> JOIN b :: "{_dsl_string(_PWN_TOPIC)}join"',
+                "        ON msg.id == other.id",
+                "        WITHIN 10 s",
+                "        TYPE: inner",
+                "    ;",
+                f'    |> VALIDATE SCHEMA: Reading ON_ERROR: SINK TO b :: "{_dsl_string(_PWN_TOPIC)}invalid"',
+                "    |> ENRICH VIA HTTP",
+                '        URL: "https://example.com/e"',
+                "        BIND: meta",
+                f'        ON_ERROR: SINK TO a :: "{_dsl_string(_PWN_TOPIC)}enrich"',
+                "    ;",
+                "    |> ROUTE",
+                f'        when msg.value > 10 => SINK TO a :: "{_dsl_string(_PWN_TOPIC)}high"',
+                f'        DEFAULT => SINK TO b :: "{_dsl_string(_PWN_TOPIC)}low"',
+                "    ;",
+                f'    ON_ERROR: SINK TO b :: "{_dsl_string(_PWN_TOPIC)}errors"',
+                ";",
+            ]
+        )
+        code = self._gen_pipeline_code(src)
+        tree = ast.parse(code)
+        self._assert_no_breakout(tree)
+
+        seen: dict[str, set[str]] = {
+            "host": set(),
+            "username": set(),
+            "password": set(),
+            "topic": set(),
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg in seen and isinstance(kw.value, ast.Constant):
+                    value = kw.value.value
+                    if isinstance(value, str):
+                        seen[kw.arg].add(value)
+
+        assert seen["host"] == {_PWN_HOST}
+        assert seen["username"] == {_PWN_USERNAME}
+        assert seen["password"] == {_PWN_PASSWORD}
+        assert seen["topic"] == {
+            _PWN_TOPIC,
+            _PWN_TOPIC + "join",
+            _PWN_TOPIC + "invalid",
+            _PWN_TOPIC + "enrich",
+            _PWN_TOPIC + "high",
+            _PWN_TOPIC + "low",
+            _PWN_TOPIC + "errors",
+        }
+
+    def test_escaping_is_lossless_round_trip(self):
+        awkward = 'C:\\temp\\end "quoted" \u00e9\u4e2d'
+        src = f"""
+        BROKER b HOST: "{_dsl_string(awkward)}" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+        ;
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
+        compile(code, "pipeline_roundtrip.py", "exec")
+        tree = ast.parse(code)
+        host = self._kwarg_literal(self._calls(tree, "SourceConnParams")[0], "host")
+        assert host == model.brokers[0].host
+        assert host == awkward
+
+    def test_benign_values_render_unchanged(self):
+        src = """
+        BROKER local HOST: "localhost" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM local :: "a/b"
+            |> SINK TO local :: "a/b"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        assert 'host="localhost",' in code
+        assert 'topic="a/b",' in code
+        compile(code, "pipeline_benign.py", "exec")

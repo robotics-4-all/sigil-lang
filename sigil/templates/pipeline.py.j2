@@ -191,19 +191,19 @@ class {{ p.class_name }}Pipeline:
 
 {% if not p.has_pipe_source %}
         source_conn = SourceConnParams(
-            host="{{ p.source_broker.host }}",
+            host={{ p.source_broker.host | tojson }},
             port={{ p.source_broker.port }},
 {% if p.source_broker.ssl %}
             ssl=True,
 {% endif %}
 {% if p.source_broker.username %}
-            username="{{ p.source_broker.username }}",
-            password="{{ p.source_broker.password }}",
+            username={{ p.source_broker.username | tojson }},
+            password={{ p.source_broker.password | tojson }},
 {% endif %}
         )
 
         self._subscriber = Subscriber(
-            topic="{{ p.source_topic }}",
+            topic={{ p.source_topic | tojson }},
             on_message=self._on_message,
             conn_params=source_conn,
         )
@@ -211,19 +211,19 @@ class {{ p.class_name }}Pipeline:
 
 {% if p.has_join %}
         join_conn = JoinConnParams(
-            host="{{ p.join.broker.host }}",
+            host={{ p.join.broker.host | tojson }},
             port={{ p.join.broker.port }},
 {% if p.join.broker.ssl %}
             ssl=True,
 {% endif %}
 {% if p.join.broker.username %}
-            username="{{ p.join.broker.username }}",
-            password="{{ p.join.broker.password }}",
+            username={{ p.join.broker.username | tojson }},
+            password={{ p.join.broker.password | tojson }},
 {% endif %}
         )
 
         self._join_subscriber = JoinSubscriber(
-            topic="{{ p.join.topic }}",
+            topic={{ p.join.topic | tojson }},
             on_message=self._on_join_message,
             conn_params=join_conn,
         )
@@ -231,46 +231,46 @@ class {{ p.class_name }}Pipeline:
 
 {% if not p.has_route and p.has_sink %}
         sink_conn = SinkConnParams(
-            host="{{ p.sink_broker.host }}",
+            host={{ p.sink_broker.host | tojson }},
             port={{ p.sink_broker.port }},
 {% if p.sink_broker.ssl %}
             ssl=True,
 {% endif %}
 {% if p.sink_broker.username %}
-            username="{{ p.sink_broker.username }}",
-            password="{{ p.sink_broker.password }}",
+            username={{ p.sink_broker.username | tojson }},
+            password={{ p.sink_broker.password | tojson }},
 {% endif %}
         )
 
         self._publisher = Publisher(
-            topic="{{ p.sink_topic }}",
+            topic={{ p.sink_topic | tojson }},
             conn_params=sink_conn,
         )
 {% else %}
 {% for arm in p.route_arms %}
         self._route_pub_{{ loop.index }} = Route{{ loop.index }}Publisher(
-            topic="{{ arm.topic }}",
+            topic={{ arm.topic | tojson }},
             conn_params=Route{{ loop.index }}ConnParams(
-                host="{{ arm.broker.host }}", port={{ arm.broker.port }},
+                host={{ arm.broker.host | tojson }}, port={{ arm.broker.port }},
 {% if arm.broker.ssl %}
                 ssl=True,
 {% endif %}
 {% if arm.broker.username %}
-                username="{{ arm.broker.username }}", password="{{ arm.broker.password }}",
+                username={{ arm.broker.username | tojson }}, password={{ arm.broker.password | tojson }},
 {% endif %}
             ),
         )
 {% endfor %}
 {% if p.route_default %}
         self._route_pub_default = RouteDefaultPublisher(
-            topic="{{ p.route_default.topic }}",
+            topic={{ p.route_default.topic | tojson }},
             conn_params=RouteDefaultConnParams(
-                host="{{ p.route_default.broker.host }}", port={{ p.route_default.broker.port }},
+                host={{ p.route_default.broker.host | tojson }}, port={{ p.route_default.broker.port }},
 {% if p.route_default.broker.ssl %}
                 ssl=True,
 {% endif %}
 {% if p.route_default.broker.username %}
-                username="{{ p.route_default.broker.username }}", password="{{ p.route_default.broker.password }}",
+                username={{ p.route_default.broker.username | tojson }}, password={{ p.route_default.broker.password | tojson }},
 {% endif %}
             ),
         )
@@ -278,53 +278,53 @@ class {{ p.class_name }}Pipeline:
 {% endif %}
 {% if p.has_on_error and not p.on_error_drop %}
         dlq_conn = DlqConnParams(
-            host="{{ p.on_error_broker.host }}",
+            host={{ p.on_error_broker.host | tojson }},
             port={{ p.on_error_broker.port }},
 {% if p.on_error_broker.ssl %}
             ssl=True,
 {% endif %}
 {% if p.on_error_broker.username %}
-            username="{{ p.on_error_broker.username }}",
-            password="{{ p.on_error_broker.password }}",
+            username={{ p.on_error_broker.username | tojson }},
+            password={{ p.on_error_broker.password | tojson }},
 {% endif %}
         )
         self._dlq_publisher = DlqPublisher(
-            topic="{{ p.on_error_topic }}",
+            topic={{ p.on_error_topic | tojson }},
             conn_params=dlq_conn,
         )
 {% endif %}
 {% if p.has_validate and p.validate_stage and p.validate_stage.on_error == "sink" %}
         _validate_dlq_conn = ValidateDlqConnParams(
-            host="{{ p.validate_stage.on_error_broker.host }}",
+            host={{ p.validate_stage.on_error_broker.host | tojson }},
             port={{ p.validate_stage.on_error_broker.port }},
 {% if p.validate_stage.on_error_broker.ssl %}
             ssl=True,
 {% endif %}
 {% if p.validate_stage.on_error_broker.username %}
-            username="{{ p.validate_stage.on_error_broker.username }}",
-            password="{{ p.validate_stage.on_error_broker.password }}",
+            username={{ p.validate_stage.on_error_broker.username | tojson }},
+            password={{ p.validate_stage.on_error_broker.password | tojson }},
 {% endif %}
         )
         self._validate_dlq_publisher = ValidateDlqPublisher(
-            topic="{{ p.validate_stage.on_error_topic }}",
+            topic={{ p.validate_stage.on_error_topic | tojson }},
             conn_params=_validate_dlq_conn,
         )
 {% endif %}
 {% for enrich in p.enrich_stages %}
 {% if enrich.on_error == "sink" %}
         _enrich_dlq_conn_{{ loop.index }} = EnrichDlq{{ loop.index }}ConnParams(
-            host="{{ enrich.on_error_broker.host }}",
+            host={{ enrich.on_error_broker.host | tojson }},
             port={{ enrich.on_error_broker.port }},
 {% if enrich.on_error_broker.ssl %}
             ssl=True,
 {% endif %}
 {% if enrich.on_error_broker.username %}
-            username="{{ enrich.on_error_broker.username }}",
-            password="{{ enrich.on_error_broker.password }}",
+            username={{ enrich.on_error_broker.username | tojson }},
+            password={{ enrich.on_error_broker.password | tojson }},
 {% endif %}
         )
         self._enrich_dlq_publisher_{{ loop.index }} = EnrichDlq{{ loop.index }}Publisher(
-            topic="{{ enrich.on_error_topic }}",
+            topic={{ enrich.on_error_topic | tojson }},
             conn_params=_enrich_dlq_conn_{{ loop.index }},
         )
 {% endif %}
