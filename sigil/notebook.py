@@ -2,9 +2,14 @@
 
 A generated notebook is an nbformat-4 document (``nbformat_minor`` 5) whose
 code cells bootstrap a private ``pipelines`` package inside the kernel and load
-one rendered pipeline module per pipeline. After the pipeline cells the
-driver cells follow in a fixed order: instantiate, start, inputs, outputs and
-cleanup.
+one rendered pipeline module per pipeline.
+
+The cell order is conditional. A model that declares an ML runtime and/or
+``env()`` references adds precondition cells: the ``## ML checklist`` markdown
+cell lands right after the title cell, and the env hints plus the
+``_smoke_check`` cell land right after the preamble. Models without either
+feature keep the plain order. After the pipeline cells the driver cells follow
+in a fixed order: instantiate, start, inputs, outputs and cleanup.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from .codegen import (
     PipelineCtx,
     _override_transports,
     build_contexts,
+    env_keys,
     ml_packages,
     render_pipeline_source,
 )
@@ -255,6 +261,115 @@ def _install_cell(runtimes: set[str]) -> _CodeCell:
     packages = ml_packages(runtimes)
     if packages:
         lines.append("%pip install " + " ".join(packages))
+    return _code_cell("\n".join(lines) + "\n")
+
+
+_PACKAGE_MODULES = {
+    "scikit-learn": "sklearn",
+    "tflite-runtime": "tflite_runtime",
+}
+
+
+def _module_name(package: str) -> str:
+    """Return the importable module name for a pip package."""
+    return _PACKAGE_MODULES.get(package, package.replace("-", "_"))
+
+
+def _model_pipelines(ctxs: ContextBundle) -> dict[str, list[str]]:
+    """Map every model name to the pipelines that run ``PREDICT`` with it."""
+    users: dict[str, list[str]] = {}
+    for pctx in ctxs.pipeline_contexts:
+        for prediction in pctx.predictions:
+            pipelines = users.setdefault(prediction.model.name, [])
+            if pctx.name not in pipelines:
+                pipelines.append(pctx.name)
+    return users
+
+
+def _ml_checklist_cell(ctxs: ContextBundle) -> _MarkdownCell:
+    """Build the checklist of ML runtimes, model files and kernel prerequisites."""
+    lines = ["## ML checklist", ""]
+    for runtime in sorted(ctxs.ml_runtimes):
+        lines.append(f"- {runtime}: {', '.join(ml_packages({runtime}))}")
+    users = _model_pipelines(ctxs)
+    for name, model in ctxs.model_map.items():
+        pipelines = ", ".join(users.get(name, [])) or "no pipeline declares PREDICT"
+        lines.append(f"- {name}: {model.source_code} (predict in {pipelines})")
+    lines.extend(
+        [
+            "",
+            "The model file must be uploaded alongside this notebook: a hosted "
+            "kernel (Colab) has no local filesystem.",
+            "`enrich` stages need outbound network access from the kernel.",
+        ]
+    )
+    return _markdown_cell("\n".join(lines) + "\n")
+
+
+def _env_hint_cell(keys: list[str]) -> _CodeCell:
+    """Build the cell that lists every ``env()`` key the model reads."""
+    lines = [
+        "# Environment hints: a bare %env KEY= inspects the value; assign one",
+        "# (or export it) before running the start cell.",
+    ]
+    lines.extend(f"%env {key}=" for key in keys)
+    return _code_cell("\n".join(lines) + "\n")
+
+
+_SMOKE_PROLOGUE = """# Smoke check: Python version, ML packages and model files.
+# Nothing here imports a framework or loads a model.
+import importlib.util
+from pathlib import Path
+
+assert sys.version_info >= (3, 10), "sigil notebooks require Python 3.10+"
+
+
+def _smoke_check():
+    missing = []
+"""
+
+_SMOKE_EPILOGUE = """    if "COLLECTED" in globals():
+        _total = sum(len(_msgs) for _msgs in COLLECTED.values())
+        print(f"COLLECTED: {len(COLLECTED)} topic(s), {_total} message(s)")
+    else:
+        print("COLLECTED: pending (run the start and inputs cells first)")
+    if missing:
+        print(f"smoke check: {len(missing)} item(s) missing")
+    else:
+        print("smoke check: all ML prerequisites present")
+
+
+_smoke_check()
+"""
+
+
+def _smoke_check_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the self-executing cell that checks prerequisites without raising."""
+    lines = _SMOKE_PROLOGUE.splitlines()
+    for package in ml_packages(ctxs.ml_runtimes):
+        module = _module_name(package)
+        message = f"MISSING: {package} (install with %pip install {package})"
+        lines.extend(
+            [
+                f"    if importlib.util.find_spec({module!r}) is None:",
+                f"        missing.append({package!r})",
+                f"        print({message!r})",
+            ]
+        )
+    for name, model in ctxs.model_map.items():
+        prefix = f"MISSING: model {name}:"
+        message = f"MISSING: model file for {name}: {model.source_code}"
+        lines.extend(
+            [
+                "    try:",
+                f"        if not Path({model.source_code}).exists():",
+                f"            missing.append({model.source_code})",
+                f"            print({message!r})",
+                "    except Exception as _exc:",
+                f"        print({prefix!r}, _exc)",
+            ]
+        )
+    lines.extend(_SMOKE_EPILOGUE.splitlines())
     return _code_cell("\n".join(lines) + "\n")
 
 
@@ -729,6 +844,12 @@ def generate_notebook(
     transport after building the contexts, so the rendered modules import
     ``commlib.transports.mock`` without touching the source file. ``mode="broker"``
     keeps the declared transports verbatim.
+
+    The cell order is: title, then the ``## ML checklist`` when the model
+    declares an ML runtime, install, preamble, env hints when the model reads
+    ``env()`` keys, the ``_smoke_check`` cell when the model declares an ML
+    runtime, one cell per pipeline, then instantiate and the mode-specific
+    driver cells.
     """
     if mode not in _MODES:
         valid = ", ".join(repr(item) for item in sorted(_MODES))
@@ -750,9 +871,16 @@ def generate_notebook(
             mode=mode,
             declared=declared,
         ),
-        _install_cell(ctxs.ml_runtimes),
-        _code_cell(_preamble_source()),
     ]
+    if ctxs.ml_runtimes:
+        cells.append(_ml_checklist_cell(ctxs))
+    cells.append(_install_cell(ctxs.ml_runtimes))
+    cells.append(_code_cell(_preamble_source()))
+    hinted_keys = sorted(env_keys(model))
+    if hinted_keys:
+        cells.append(_env_hint_cell(hinted_keys))
+    if ctxs.ml_runtimes:
+        cells.append(_smoke_check_cell(ctxs))
     cells.extend(_pipeline_cell(pctx) for pctx in ctxs.pipeline_contexts)
     if mode == "broker":
         driver_cells = [

@@ -102,6 +102,42 @@ PIPELINE out_of_cache
 """
 
 
+_ML = """
+BROKER edge
+    TRANSPORT: MQTT
+    HOST: "localhost"
+    PORT: 1883
+;
+
+MODEL anomaly_detector
+    SOURCE: "models/anomaly.onnx"
+    RUNTIME: ONNX
+    FEATURES: [msg.temperature, msg.humidity]
+    RETURNS: [anomaly_score]
+;
+
+PIPELINE scoring
+    SOURCE FROM edge :: "sensors/in"
+    |> PREDICT anomaly_detector
+    |> SINK TO edge :: "sensors/out"
+;
+"""
+
+_ENV = """
+BROKER local
+    TRANSPORT: MQTT
+    HOST: "localhost"
+    PORT: 1883
+;
+
+PIPELINE relay
+    SOURCE FROM local :: "in/topic"
+    |> MAP { port = env("PORT", 8080), host = env("API_HOST", "localhost") }
+    |> SINK TO local :: "out/topic"
+;
+"""
+
+
 def test_notebook_metadata():
     doc, _ = _nb(_SINGLE)
     assert doc["nbformat"] == 4
@@ -144,14 +180,16 @@ def test_cell_ids_deterministic():
 
 
 def test_every_code_cell_compiles():
-    doc, _ = _nb(_MIXED)
-    code_cells = _code_cells(doc)
-    assert code_cells
-    for cell in code_cells:
-        source = _strip_magics(_text(cell))
-        if not source.strip():
-            continue
-        ast.parse(source)
+    for dsl in (_MIXED, _ML, _ENV):
+        for mode in ("mock", "broker"):
+            doc, _ = _nb(dsl, mode=mode)
+            code_cells = _code_cells(doc)
+            assert code_cells
+            for cell in code_cells:
+                source = _strip_magics(_text(cell))
+                if not source.strip():
+                    continue
+                ast.parse(source)
 
 
 def test_pipeline_source_embedded_verbatim():
@@ -290,3 +328,65 @@ def test_broker_mode_mixed_transports_use_each_broker():
 
     for cell in _code_cells(doc):
         ast.parse(_strip_magics(_text(cell)))
+
+
+def _cell_index(doc: dict, needle: str) -> int:
+    """Return the index of the first cell whose source contains ``needle``."""
+    for index, cell in enumerate(doc["cells"]):
+        if needle in _text(cell):
+            return index
+    raise AssertionError(f"no cell contains {needle!r}")
+
+
+def test_ml_checklist_cell():
+    doc, _ = _nb(_ML)
+    checklist_cell = doc["cells"][1]
+    assert checklist_cell["cell_type"] == "markdown"
+    checklist = _text(checklist_cell)
+    assert checklist.startswith("## ML checklist\n")
+    assert "- onnx: onnxruntime" in checklist
+    assert "models/anomaly.onnx" in checklist
+    assert "predict in scoring" in checklist
+    # The runtime probe lives in the smoke cell, next to the checklist.
+    assert "importlib.util.find_spec" in _text(doc["cells"][4])
+
+
+def test_ml_checklist_asserts_model_path():
+    doc, _ = _nb(_ML)
+    smoke = _text(doc["cells"][4])
+    assert "from pathlib import Path" in smoke
+    assert "Path('models/anomaly.onnx').exists()" in smoke
+    assert "missing.append('models/anomaly.onnx')" in smoke
+
+
+def test_env_hint_cell():
+    doc, _ = _nb(_ENV)
+    hints = _cell_index(doc, "%env API_HOST=")
+    cell = doc["cells"][hints]
+    assert cell["cell_type"] == "code"
+    source = _text(cell)
+    # Sorted keys, one inspection line each, and nothing else to execute.
+    assert source.index("%env API_HOST=") < source.index("%env PORT=")
+    assert ast.parse(_strip_magics(source)).body == []
+
+
+def test_smoke_check_cell_present():
+    doc, _ = _nb(_ML)
+    preamble = _cell_index(doc, "_MOCK_BUS_LOCK = threading.RLock()")
+    smoke = _cell_index(doc, "def _smoke_check():")
+    pipeline = _cell_index(doc, '_load_pipeline("scoring"')
+    assert preamble < smoke < pipeline
+    source = _text(doc["cells"][smoke])
+    assert 'assert sys.version_info >= (3, 10), "sigil notebooks require Python 3.10+"' in source
+    assert "importlib.util.find_spec" in source
+    assert '"COLLECTED" in globals()' in source
+    assert source.rstrip().endswith("_smoke_check()")
+
+
+def test_broker_mode_ml_cells_present():
+    doc, _ = _nb(_ML, mode="broker")
+    assert _text(doc["cells"][1]).startswith("## ML checklist")
+    assert "def _smoke_check():" in _text(doc["cells"][4])
+    inputs = _driver_cell(doc, 3)
+    assert "from commlib.transports.mqtt import" in inputs
+    assert "clear_mock_bus" not in inputs
