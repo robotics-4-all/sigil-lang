@@ -4656,3 +4656,92 @@ class TestBrokerStringEscaping:
         assert 'host="localhost",' in code
         assert 'topic="a/b",' in code
         compile(code, "pipeline_benign.py", "exec")
+
+
+_PWN_LABEL = '") + __import__("os").system("echo PWNLABEL") + ("'
+
+
+class TestDebugLabelEscaping:
+    def _gen_pipeline_code(self, src):
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                return f.read()
+
+    @staticmethod
+    def _debug_calls(tree):
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "debug"
+        ]
+
+    @staticmethod
+    def _assert_no_breakout(tree):
+        assert not any(
+            isinstance(node, ast.Name) and node.id == "__import__" for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Attribute) and node.attr == "system" for node in ast.walk(tree)
+        )
+
+    def test_label_breakout_is_escaped(self):
+        src = f"""
+        BROKER b HOST: "localhost" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> DEBUG LABEL: "{_dsl_string(_PWN_LABEL)}"
+            |> SINK TO b :: "out"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        tree = ast.parse(code)
+        self._assert_no_breakout(tree)
+        labels = [
+            ast.literal_eval(call.args[1]) for call in self._debug_calls(tree) if len(call.args) > 1
+        ]
+        assert labels == [_PWN_LABEL]
+        compile(code, "pipeline_label_pwn.py", "exec")
+
+    def test_benign_label_renders_as_format_argument(self):
+        src = """
+        BROKER b HOST: "localhost" PORT: 1883 ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> DEBUG LABEL: "dbg"
+            |> SINK TO b :: "out"
+        ;
+        """
+        code = self._gen_pipeline_code(src)
+        assert 'logger.debug("[%s] msg=%s fields=%s", "dbg", msg, _dbg_fields_1)' in code
+        compile(code, "pipeline_label_benign.py", "exec")
+
+
+class TestEmptyAuthSecret:
+    def test_empty_secret_renders_empty_string(self):
+        src = """
+        BROKER b
+            HOST: "localhost"
+            PORT: 1883
+            AUTH: {
+                USERNAME: "u"
+                PASSWORD: ""
+            }
+        ;
+        PIPELINE p
+            SOURCE FROM b :: "in"
+            |> SINK TO b :: "out"
+        ;
+        """
+        model = parse_string(src)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate(model, tmpdir)
+            with open(os.path.join(tmpdir, "pipelines", "p.py")) as f:
+                code = f.read()
+        assert 'username="u",' in code
+        assert 'password="",' in code
+        assert "password=null" not in code
+        compile(code, "pipeline_empty_secret.py", "exec")

@@ -901,7 +901,7 @@ def _build_broker_ctx(broker) -> BrokerCtx:
         port=broker.port,
         ssl=broker.ssl if broker.ssl else False,
         username=broker.username if broker.username else None,
-        password=broker.password if broker.password else None,
+        password=broker.password if broker.password is not None else None,
     )
 
 

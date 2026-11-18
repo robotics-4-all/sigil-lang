@@ -521,7 +521,7 @@ class {{ p.class_name }}Pipeline:
             "{{ fc }}": {{ fc }},
 {% endfor %}
         }
-        logger.debug("[{{ dbg.label }}] msg=%s fields=%s", msg, _dbg_fields_{{ loop.index }})
+        logger.debug("[%s] msg=%s fields=%s", {{ dbg.label | tojson }}, msg, _dbg_fields_{{ loop.index }})
 {% endfor %}
 {% endif %}
 {% if p.has_pipeline_lets %}
