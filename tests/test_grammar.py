@@ -4233,3 +4233,20 @@ PIPELINE p
     stages = _stages(model.pipelines[0])
     enrich_stages = [s for s in stages if s.__class__.__name__ == "EnrichStage"]
     assert len(enrich_stages) == 2
+
+
+def test_mock_transport_parses():
+    src = """
+    BROKER sim
+        TRANSPORT: MOCK
+        HOST: "mock"
+        PORT: 0
+    ;
+    PIPELINE p
+        SOURCE FROM sim :: "a"
+        |> SINK TO sim :: "b"
+    ;
+    """
+    model = parse_string(src)
+    assert model.brokers[0].transport == "MOCK"
+    assert model.brokers[0].port == 0

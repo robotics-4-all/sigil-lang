@@ -3464,3 +3464,82 @@ PIPELINE p
     )
     errors = [e for e in _errors(src) if e.severity == "error"]
     assert errors == []
+
+
+MOCK_BASE = """
+BROKER sim
+    TRANSPORT: MOCK
+    HOST: "mock"
+    PORT: 0
+;
+PIPELINE p
+    SOURCE FROM sim :: "in"
+    |> FILTER msg.v > 0
+    |> SINK TO sim :: "out"
+;
+"""
+
+
+def test_mock_transport_valid():
+    errs = _errors(MOCK_BASE)
+    assert errs == []
+
+
+def test_mock_port_zero_allowed():
+    errs = _errors(MOCK_BASE)
+    assert not any("port" in str(e).lower() for e in errs)
+
+
+def test_non_mock_port_zero_rejected():
+    src = """
+    BROKER b
+        TRANSPORT: MQTT
+        HOST: "h"
+        PORT: 0
+    ;
+    PIPELINE p
+        SOURCE FROM b :: "in"
+        |> SINK TO b :: "out"
+    ;
+    """
+    errs = _errors(src)
+    assert any("port" in str(e).lower() for e in errs)
+
+
+def test_mock_with_auth_warns():
+    src = """
+    BROKER sim
+        TRANSPORT: MOCK
+        HOST: "mock"
+        PORT: 0
+        AUTH: {
+            USERNAME: "u"
+            PASSWORD: "p"
+        }
+    ;
+    PIPELINE p
+        SOURCE FROM sim :: "in"
+        |> SINK TO sim :: "out"
+    ;
+    """
+    errs = _errors(src)
+    assert len([e for e in errs if e.severity == "warning"]) == 1
+    assert [e for e in errs if e.severity == "error"] == []
+
+
+def test_mock_with_ssl_warns():
+    src = """
+    BROKER sim
+        TRANSPORT: MOCK
+        HOST: "mock"
+        PORT: 0
+        SSL: true
+    ;
+    PIPELINE p
+        SOURCE FROM sim :: "in"
+        |> SINK TO sim :: "out"
+    ;
+    """
+    errs = _errors(src)
+    assert len([e for e in errs if e.severity == "warning"]) == 1
+    assert [e for e in errs if e.severity == "error"] == []
