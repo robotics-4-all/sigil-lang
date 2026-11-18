@@ -12,9 +12,10 @@ import json
 import os
 import tempfile
 import threading
+from dataclasses import asdict
 
 from sigil.cli import main
-from sigil.codegen import build_contexts, render_pipeline_source
+from sigil.codegen import _redact_broker_auth, build_contexts, render_pipeline_source
 from sigil.language import parse, parse_string
 from sigil.notebook import (
     _MOCK_MIN_COMMLIB,
@@ -559,3 +560,149 @@ def test_topic_newline_stays_on_one_title_line():
     assert "safe\\n# PWNED" in title
     assert "safe\n# PWNED" not in title
     assert not any(line.lstrip().startswith("# PWNED") for line in title_cell["source"])
+
+
+# Mock mode reaches no network, so AUTH/SSL are dead weight in the notebook and
+# must not be shipped in clear text. Broker mode keeps them verbatim.
+_AUTH = """
+BROKER local
+    TRANSPORT: MQTT
+    HOST: "broker.local"
+    PORT: 1883
+    SSL: true
+    AUTH: {
+        USERNAME: "alice"
+        PASSWORD: "s3cr3t-pass"
+    }
+;
+
+PIPELINE relay
+    SOURCE FROM local :: "in/topic"
+    |> SINK TO local :: "out/topic"
+;
+"""
+
+
+def test_mock_mode_redacts_broker_auth():
+    doc, _ = _nb(_AUTH, mode="mock")
+    blob = json.dumps(doc)
+    assert "alice" not in blob
+    assert "s3cr3t-pass" not in blob
+    assert "ssl=True" not in blob
+    cell = doc["cells"][_cell_index(doc, '_load_pipeline("relay"')]
+    call = ast.parse(_text(cell)).body[0].value
+    module = ast.literal_eval(call.args[1])
+    assert 'host="broker.local"' in module
+    assert "port=1883" in module
+
+
+def test_broker_mode_keeps_broker_auth():
+    doc, _ = _nb(_AUTH, mode="broker")
+    blob = json.dumps(doc)
+    assert "alice" in blob
+    assert "s3cr3t-pass" in blob
+    assert "ssl=True" in blob
+
+
+def test_name_with_ipynb_extension_is_not_doubled():
+    model = parse_string(_SINGLE)
+    out_dir = _tmpdir()
+    written = generate_notebook(model, out_dir, name="foo.ipynb")
+    assert written == os.path.abspath(os.path.join(out_dir, "foo.ipynb"))
+    assert os.path.isfile(written)
+
+    plain = generate_notebook(model, _tmpdir(), name="foo")
+    assert os.path.basename(plain) == "foo.ipynb"
+
+    upper = _resolve_path(_tmpdir(), "BAR.IPYNB")
+    assert os.path.basename(upper) == "BAR.IPYNB"
+
+    exc = _expect_value_error(lambda: generate_notebook(model, _tmpdir(), name="../x"))
+    assert "../x" in str(exc)
+
+
+# Every accessor ``_redact_broker_auth`` must reach, in one model: source, sink
+# (synthesised route sentinel here), join, route arm, route default, pipeline
+# DLQ, validate DLQ and enrich DLQ.
+_AUTH_ALL = """
+BROKER local
+    TRANSPORT: MQTT
+    HOST: "localhost"
+    PORT: 1883
+    SSL: true
+    AUTH: {
+        USERNAME: "local-user"
+        PASSWORD: "local-pass"
+    }
+;
+
+BROKER cache
+    TRANSPORT: REDIS
+    HOST: "cache.local"
+    PORT: 6379
+    SSL: true
+    AUTH: {
+        USERNAME: "cache-user"
+        PASSWORD: "cache-pass"
+    }
+;
+
+SCHEMA Reading STRICT id: str value: float ;
+
+PIPELINE all_accessors
+    SOURCE FROM local :: "in/events"
+    |> JOIN cache :: "lookup"
+        ON msg.id == other.id
+        WITHIN 10 s
+        TYPE: inner
+    ;
+    |> FILTER other.active == true
+    |> VALIDATE SCHEMA: Reading ON_ERROR: SINK TO cache :: "invalid"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/enrich"
+        BIND: meta
+        ON_ERROR: SINK TO local :: "enrich-errors"
+    ;
+    |> ROUTE
+        when msg.value > 10 => SINK TO local :: "high"
+        DEFAULT => SINK TO cache :: "low"
+    ;
+    ON_ERROR: SINK TO cache :: "errors"
+;
+"""
+
+
+def _broker_slots(pctx: dict) -> list[dict]:
+    """Return a pipeline context's eight reachable broker slots, in order."""
+    return [
+        pctx["source_broker"],
+        pctx["sink_broker"],
+        pctx["join"]["broker"],
+        pctx["route_arms"][0]["broker"],
+        pctx["route_default"]["broker"],
+        pctx["on_error_broker"],
+        pctx["validate_stage"]["on_error_broker"],
+        pctx["enrich_stages"][0]["on_error_broker"],
+    ]
+
+
+def test_redact_broker_auth_clears_every_accessor():
+    ctxs = build_contexts(parse_string(_AUTH_ALL))
+    before = _broker_slots(asdict(ctxs)["pipeline_contexts"][0])
+    assert before[0]["username"] == "local-user"
+    assert before[2]["username"] == "cache-user"
+
+    _redact_broker_auth(ctxs)
+    _redact_broker_auth(ctxs)
+
+    after = _broker_slots(asdict(ctxs)["pipeline_contexts"][0])
+    assert len(after) == 8
+    for old, new in zip(before, after, strict=True):
+        assert new["username"] is None
+        assert new["password"] is None
+        assert new["ssl"] is False
+        assert new["host"] == old["host"]
+        assert new["port"] == old["port"]
+        assert new["transport"] == old["transport"]
+    assert after[0]["host"] == "localhost"
+    assert after[2]["transport"] == "redis"

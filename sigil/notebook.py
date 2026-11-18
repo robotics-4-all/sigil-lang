@@ -24,6 +24,7 @@ from .codegen import (
     ContextBundle,
     PipelineCtx,
     _override_transports,
+    _redact_broker_auth,
     build_contexts,
     env_keys,
     ml_packages,
@@ -868,7 +869,8 @@ def _resolve_path(output_path_or_dir: str, name: str) -> str:
 
     ``name`` is reduced to a bare filename: a value that normalises outside
     the output directory is rejected instead of joined into a traversal, and
-    an internal ``..`` collapses to the file it names.
+    an internal ``..`` collapses to the file it names. A name that already
+    ends in ``.ipynb`` (any case) keeps its extension instead of doubling it.
     """
     if output_path_or_dir.lower().endswith(".ipynb"):
         parent = os.path.dirname(output_path_or_dir)
@@ -883,6 +885,8 @@ def _resolve_path(output_path_or_dir: str, name: str) -> str:
     if filename in {"", ".", ".."}:
         raise ValueError(f"invalid notebook name {name!r}: it is not a usable filename")
     os.makedirs(output_path_or_dir, exist_ok=True)
+    if filename.lower().endswith(".ipynb"):
+        return os.path.join(output_path_or_dir, filename)
     return os.path.join(output_path_or_dir, f"{filename}.ipynb")
 
 
@@ -914,6 +918,7 @@ def generate_notebook(
     declared = _declared_transports(ctxs)
     if mode == "mock":
         _override_transports(ctxs, "mock")
+        _redact_broker_auth(ctxs)
 
     notebook_name = name or _default_name(model)
     path = _resolve_path(output_path_or_dir, notebook_name)
