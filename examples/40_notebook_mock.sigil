@@ -1,0 +1,57 @@
+/*
+ * Example 40 — Notebook-Friendly Mock Model
+ * =========================================
+ * A compact model built to exercise the notebook generator end to end:
+ *
+ *   sigil notebook examples/40_notebook_mock.sigil
+ *
+ * produces an executable .ipynb that runs the whole chain offline, against
+ * the in-process mock transport. MOCK is declared in source here (not
+ * injected by the generator), so the notebook keeps the declared transports:
+ * no rewriting is needed to run without a broker.
+ *
+ * The model also demonstrates PIPELINE chaining: "chained" consumes the
+ * aggregated output of "windowed" directly, in memory.
+ */
+
+// Two mock brokers with distinct names; PORT 0 is only valid for MOCK.
+BROKER local
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+BROKER cache
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+// Pipeline 1: windowed — aggregate sensor values over a tumbling window.
+PIPELINE windowed
+    SOURCE FROM local :: "sensors/temperature"
+
+    |> WINDOW tumbling(1 m)
+
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
+        n = count()
+    }
+
+    |> SINK TO local :: "sensors/aggregated"
+
+    RETRY: 1 WITH BACKOFF 100 ms
+;
+
+// Pipeline 2: chained — consumes "windowed" output via pipe handoff and
+// drops the degenerate single-sample windows before publishing.
+PIPELINE chained
+    SOURCE FROM PIPE windowed
+
+    |> FILTER msg.n > 1
+
+    |> SINK TO cache :: "analytics/temperatures"
+
+    RETRY: 7 WITH BACKOFF 100 ms
+;

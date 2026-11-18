@@ -390,3 +390,22 @@ def test_broker_mode_ml_cells_present():
     inputs = _driver_cell(doc, 3)
     assert "from commlib.transports.mqtt import" in inputs
     assert "clear_mock_bus" not in inputs
+
+
+def test_example_notebook_is_current():
+    """The checked-in example notebook matches a fresh regeneration.
+
+    Parses ``examples/40_notebook_mock.sigil`` through the CLI (so the model
+    carries its real filename) and regenerates into a temporary directory,
+    then compares bytes. Runs from the repo root — where pytest runs — so
+    the title cell's relative ``# Source:`` line matches the checked-in copy.
+    """
+    out_dir = _tmpdir()
+    assert main(["notebook", "examples/40_notebook_mock.sigil", "-o", out_dir]) == 0
+    fresh_path = os.path.join(out_dir, "40_notebook_mock.ipynb")
+    assert os.path.isfile(fresh_path)
+    with (
+        open(fresh_path, "rb") as fresh,
+        open("examples/notebooks/40_notebook_mock.ipynb", "rb") as checked_in,
+    ):
+        assert fresh.read() == checked_in.read()

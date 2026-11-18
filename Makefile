@@ -3,7 +3,7 @@ SERVICE  := app
 PYTEST   := pytest tests/ -v
 
 .PHONY: build rebuild up down restart install test test-unit test-integration \
-        shell logs status check generate validate-examples clean ci help
+        shell logs status check generate validate-examples clean ci help notebook
 
 build:
 	$(COMPOSE) build
@@ -48,6 +48,9 @@ generate: up
 
 validate-examples:
 	@python -c "import sys,os;from sigil.language import parse_string;from sigil.semantics import validate;fail=0;files=sorted(f for f in os.listdir('examples') if f.endswith('.sigil'));exec('for f in files:\n path=os.path.join(\"examples\",f)\n try:\n  m=parse_string(open(path).read());errs=[e for e in validate(m) if e.severity==\"error\"]\n  if errs:\n   print(f\"  FAIL {path}\");[print(f\"       {e}\") for e in errs];fail=1\n  else:print(f\"  OK   {path}\")\n except Exception as exc:print(f\"  FAIL {path}\");print(f\"       {exc}\");fail=1');sys.exit(1 if fail else 0)" && echo "" && echo "All examples valid." || (echo "" && echo "Some examples failed validation." && false)
+
+notebook:
+	sigil notebook examples/40_notebook_mock.sigil -o examples/notebooks
 
 ci:
 	ruff check sigil/ tests/
