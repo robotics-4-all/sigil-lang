@@ -55,7 +55,8 @@ The following table outlines the core modules and their responsibilities within 
 | `codegen.py` | Transforms the validated model into intermediate context dataclasses. | `generate()`, `BrokerCtx`, `PipelineCtx`, `AggregationCtx`, `AccumCtx`, `WindowCtx`, `JoinCtx`, `RouteCtx`. |
 | `explain.py` | Generates a human-readable text description of the pipeline logic. | `explain_model()`. |
 | `visualize.py` | Produces DOT and Mermaid diagram strings for pipeline visualization. | `visualize_dot()`, `visualize_mermaid()`. |
-| `cli.py` | The main entry point for the `sigil` command-line tool. | Subcommands: `check`, `generate`, `explain`, `visualize`. |
+| `cli.py` | The main entry point for the `sigil` command-line tool. | Subcommands: `check`, `generate`, `notebook`, `explain`, `visualize`. |
+| `notebook.py` | Builds an executable Jupyter notebook from the validated model. | `generate_notebook()`, mock/broker driver cells, embedded pipeline source. |
 | `templates/app.py.j2` | Template for the main application runner and signal management. | JSON logging setup, graceful shutdown logic, pipeline instantiation. |
 | `templates/pipeline.py.j2` | Template for the core processing logic of each pipeline. | Message handlers, window buffers, aggregation loops, retry logic, DLQ routing. |
 | `templates/requirements.txt.j2` | Template for the project's dependency list. | `commlib-py` with transport-specific extras. |
@@ -193,6 +194,56 @@ Each pipeline is generated as a separate Python class in the `pipelines/` direct
 
 ### requirements.txt
 The generated `requirements.txt` includes `commlib-py` and any necessary transport libraries. This ensures the generated app has everything it needs to run in a production environment, whether it's using MQTT, Redis, or Kafka.
+
+## Notebook Target
+
+`sigil notebook SOURCE [-o OUT] [--mode {mock,broker}] [--name NAME]` writes an executable Jupyter notebook alongside the app target. `-o/--output` defaults to `generated` and accepts a directory or a `.ipynb` file; `--mode` defaults to `mock`. The generator lives in `sigil/notebook.py`; the library entry point is:
+
+```python
+from sigil.notebook import generate_notebook
+
+generate_notebook(model, output_path_or_dir, *, mode="mock", name=None)
+```
+
+The function writes an nbformat-4 document and returns the absolute path of the notebook it wrote. An `output_path_or_dir` ending in `.ipynb` is used as the file path; anything else is treated as a directory and `<name>.ipynb` is written inside it. `name` defaults to the source file stem. A `mode` other than `mock` or `broker` raises `ValueError`.
+
+### Cell Order
+
+The notebook contains this cell sequence:
+
+```text
+title -> [ML checklist] -> install -> preamble -> [env hints]
+      -> [smoke check] -> one _load_pipeline cell per pipeline
+      -> instantiate -> start -> inputs -> outputs -> cleanup
+```
+
+The bracketed cells are conditional: the ML checklist and smoke-check cells appear only when the model declares a `PREDICT` stage with an ML runtime, and the env-hints cell appears only when the model reads `env("KEY", ...)` expressions. In `mode="broker"` the last four cells are replaced with broker-specific driver cells that subscribe to real brokers instead of the mock bus.
+
+### Embedded Pipeline Source
+
+Each per-pipeline cell calls `_load_pipeline(name, source)`, where `source` is the rendered `pipeline.py.j2` output for that pipeline, embedded in the notebook as a JSON string. The kernel never re-parses the DSL: the notebook's only runtime dependency is `commlib-py`, so the notebook runs on any machine with Jupyter and commlib installed and needs no `sigil` package. The preamble creates a synthetic `pipelines.<name>` module, compiles the embedded source and executes it, and the instantiate cell then imports the pipeline classes the way a generated app would.
+
+### Codegen Extraction
+
+The notebook shares its input data with `sigil generate` through a context layer extracted into `codegen.py`:
+
+- `ContextBundle`: everything `generate()` derives from a model before rendering (const map, function defs, model map, raw const map, pipeline contexts, ML runtimes).
+- `build_contexts(model)`: builds a `ContextBundle`. `generate()` now calls it, and its output is byte-identical to the previous inline path (the golden snapshots are frozen).
+- `render_pipeline_source(pctx)`: renders `pipeline.py.j2` for one pipeline context without writing a file.
+- `ml_runtimes(model)`, `env_keys(model)`, `ml_packages(runtimes)`: lookups that drive the ML checklist, smoke-check and env-hint cells.
+- `_override_transports(ctxs, transport)`: rewrites the transport of every broker reachable from the bundle, in place.
+
+### Modes
+
+- `mode="mock"`: after the contexts are built, every declared broker is overridden to the `mock` transport through `_override_transports`, so the model is never rejected for an unreachable broker. The notebook runs fully offline against the in-process bus.
+- `mode="broker"`: declared transports are preserved verbatim. The driver cells make real connections to every broker, and the outputs cell waits 0.5 s before draining so the transport has time to deliver.
+
+### commlib Floors
+
+The notebook's install cell pins `commlib-py>=0.13.2`, while the generated app's `requirements.txt` keeps `commlib-py>=0.13.0`. The drift is deliberate: 0.13.0 has no `commlib.transports.mock` module at all, 0.13.1 ships a no-op stub, and 0.13.2 is the first release with a working in-process bus. Raising the template floor would churn the frozen golden snapshots, so the notebook pins higher while the app template stays put.
+
+One implementation note: the preamble replaces the mock bus's non-reentrant `threading.Lock` with an `RLock` so that a sink publish from inside `_on_message` cannot deadlock. The patch is internal to the notebook and not user-facing.
+
 
 ## Testing Strategy
 

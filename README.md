@@ -34,6 +34,7 @@
 - Conditional routing (fan-out)
 - DOT and Mermaid pipeline visualization
 - Production-ready generated code: JSON logging, graceful shutdown, message validation
+- Executable notebook generation (`sigil notebook`) with offline mock or live broker mode
 
 ## Quick Start
 
@@ -69,6 +70,21 @@ Run the generated application:
 ```bash
 python generated/main.py
 ```
+
+## Generate an Executable Notebook
+
+Beyond standalone applications, Sigil compiles a pipeline to a self-contained Jupyter notebook. The notebook embeds the compiled pipeline classes together with driver cells that publish sample inputs and print the outputs:
+
+```bash
+sigil notebook examples/40_notebook_mock.sigil -o examples/notebooks
+```
+
+This writes `examples/notebooks/40_notebook_mock.ipynb`. The `--mode` switch controls the driver cells:
+
+- `--mode mock` (default): runs fully offline on an in-process message bus. The declared broker transports are overridden with `MOCK`, so no running broker is needed.
+- `--mode broker`: keeps the declared transports (MQTT, Redis, AMQP, Kafka) and publishes and subscribes for real.
+
+Then open the notebook in Jupyter or Colab, pick a kernel, and choose Run All: the install cell pulls `commlib-py`, the build cell compiles the pipeline classes, and the input/output cells exercise the pipeline end to end.
 
 ## Syntax Overview
 
@@ -158,6 +174,7 @@ PIPELINE classify
 | `sigil generate` | Compile to Python application | `FILE`, `-o` (output dir) |
 | `sigil explain` | Human-readable pipeline description | `FILE` |
 | `sigil visualize` | Generate pipeline diagrams | `FILE`, `--format` (dot/mermaid) |
+| `sigil notebook` | Generate an executable Jupyter notebook | `FILE`, `-o` (output .ipynb or dir, default `generated/`), `--mode` (mock/broker, default mock), `--name` (notebook name) |
 
 ## Pipeline Stages
 
@@ -251,6 +268,7 @@ make clean              # Remove containers, images, caches
 - 37_left_join: Left join with optional enrichment from a second stream
 - 38_scalar_funcs_and_exists: Scalar functions and collection exists() predicate
 - 39_select_stage: Field projection and renaming with the select stage
+- 40_notebook_mock: Executable notebook generation with the mock transport
 
 ## Documentation
 

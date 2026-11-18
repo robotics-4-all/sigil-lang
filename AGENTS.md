@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, ML inference (predict stage), tee/fanout output, and pipeline explanation/visualization. The visual designer lives in the separate `sigil-designer` repository.
+`sigil` is a DSL compiler for aggregation pipelines. Parses `.sigil` files (textX grammar) into an AST, validates semantics, and generates standalone Python applications using Jinja2 templates that consume/produce messages via `commlib-py` (supports MQTT, Redis, AMQP, Kafka transports). Supports pipeline chaining, conditional routing, stream joins, multi-file imports, stage annotations, named multi-window, schema validation, error handling with DLQ, user-defined functions, match expressions, pipeline-level let bindings, ML inference (predict stage), tee/fanout output, pipeline explanation/visualization, and executable notebook generation (`sigil notebook`, mock/broker modes). The visual designer lives in the separate `sigil-designer` repository.
 
 ## STRUCTURE
 
@@ -18,10 +18,11 @@ sigil-lang/
 |   +-- codegen.py         # Model -> generated app (14 context dataclasses, 868 lines)
 |   +-- explain.py         # Human-readable pipeline explanation (244 lines)
 |   +-- visualize.py       # DOT/Mermaid diagram generation (742 lines)
-|   +-- cli.py             # CLI: check / generate / explain / visualize (132 lines)
+|   +-- notebook.py        # .sigil -> executable Jupyter notebook generator (927 lines)
+|   +-- cli.py             # CLI: check / generate / notebook / explain / visualize (292 lines)
 |   +-- templates/         # Jinja2 templates (app.py.j2, pipeline.py.j2, requirements.txt.j2)
-+-- examples/              # 32 progressive .sigil examples (01-30 + simple + multi_pipeline)
-+-- tests/                 # pytest suite (~718 unit + ~26 integration tests)
+-- examples/              # 42 .sigil files: 40 progressive examples (01-40) + simple + multi_pipeline + shared/
+-- tests/                 # pytest suite (~878 unit incl. 1 skipped E2E + ~26 integration tests)
 +-- docs/                  # language-reference, tutorial, architecture, examples walkthrough
 +-- pyproject.toml         # Package config (PEP 621); console_scripts entry point; ruff/mypy/pytest/coverage tool config
 +-- requirements.txt       # Thin shim that resolves to `-e .[dev,test]` (legacy compat)
@@ -47,8 +48,10 @@ sigil-lang/
 | Add new stage type | `grammar.tx` + `semantics.py` (STAGE_ORDER) + `codegen.py` (_build_pipeline_ctx) + `templates/pipeline.py.j2` + `explain.py` + `visualize.py` |
 | Add new aggregation function | `grammar.tx` (AggFunc) + `semantics.py` (FUNCS_* sets) + `templates/pipeline.py.j2` |
 | Add ML model runtime support | `sigil/grammar.tx` (Runtime rule) + `codegen.py` (ModelCtx/PredictCtx) + `templates/pipeline.py.j2` + `templates/requirements.txt.j2` |
+| Generate an executable notebook | `sigil/notebook.py` | Cell builders plus mock/broker driver cells; entry: `generate_notebook()` |
+| Notebook CLI | `sigil/cli.py` | `_cmd_notebook`: `sigil notebook SOURCE [-o OUT] [--mode {mock,broker}] [--name NAME]` |
 | Visual designer (UI) | `sigil-designer` repo | Separate repository: React + React Flow + Zustand |
-| See DSL syntax examples | `examples/*.sigil` | Progressive 01-30 (26-30 are ML predict examples) |
+| See DSL syntax examples | `examples/*.sigil` | Progressive 01-40 (26-30 are ML predict examples) |
 | Language reference | `docs/language-reference.md` | Full syntax documentation |
 
 ## CONVENTIONS
@@ -158,7 +161,7 @@ Generated app structure: `app.py` (imports, signal handling, event loop), `pipel
 
 ## TESTING
 
-~718 unit + ~26 integration tests across 5 files:
+~878 unit (877 passed + 1 skipped E2E) + 26 integration tests across 8 files:
 
 | File | LOC | Tests | Coverage |
 |------|-----|-------|----------|
@@ -167,13 +170,17 @@ Generated app structure: `app.py` (imports, signal handling, event loop), `pipel
 | `test_semantics.py` | 3056 | 194 | All `_check_*` validation rules, errors + warnings |
 | `test_integration.py` | 1996 | 26 | End-to-end with real brokers (MQTT/Redis/AMQP/Kafka) |
 | `test_visualize.py` | 1202 | 103 | DOT and Mermaid diagram output |
+| `test_notebook.py` | 484 | 23 | Notebook generation: packaging, cells, modes, CLI, sentinel filtering, ML cells, example freshness |
+| `test_notebook_mock.py` | 248 | 8 | Mock-mode driver canaries that execute generated cells |
+| `test_notebook_exec.py` | 93 | 1 | Executed nbclient E2E (`@pytest.mark.slow`, opt-out `SIGIL_SKIP_NOTEBOOK_E2E=1`) |
 
 Conventions:
 - No `conftest.py`. Helpers inline: `_model(src)`, `_errors(src)` in test_semantics.py; `_stages(pipeline)` in test_codegen.py and test_visualize.py.
 - All tests use inline multi-line DSL strings (no external fixture files).
-- Tests invoke Python functions directly (`parse_string`, `validate`, `generate`, `compile_expr`). No CLI testing.
+- Tests invoke Python functions directly (`parse_string`, `validate`, `generate`, `compile_expr`). Notebook tests also exercise the `notebook` CLI subcommand.
 - Integration tests: `pytest.mark.skipif` for broker availability (`mqtt_available`, `redis_available`, `amqp_available`, `kafka_available`). Docker required.
 - Codegen tests: `tempfile.TemporaryDirectory()` + Python `compile()` for syntax verification.
+- Notebook E2E: `test_notebook_exec.py` executes a generated notebook with `nbclient` in a real kernel; marked `@pytest.mark.slow` and skipped when `SIGIL_SKIP_NOTEBOOK_E2E=1`.
 
 ## COMMANDS
 
@@ -191,15 +198,19 @@ make test               # Full test suite in Docker
 make test-unit          # Unit tests only
 make test-integration   # Integration tests (real brokers)
 make validate-examples  # Validate all examples/*.sigil
+make notebook           # Regenerate examples/notebooks/40_notebook_mock.ipynb (not part of make ci)
 make clean              # Remove containers, images, caches
 
 # CLI
 sigil check examples/simple.sigil
 sigil generate examples/simple.sigil -o generated/
+sigil notebook examples/40_notebook_mock.sigil -o examples/notebooks
 sigil explain examples/simple.sigil
 sigil visualize examples/multi_pipeline.sigil --format dot
 sigil visualize examples/multi_pipeline.sigil --format mermaid
 ```
+
+Note: the executed notebook E2E runs the notebook's `%pip install "commlib-py>=0.13.2"` inside a kernel and will replace an editable commlib source checkout with the PyPI wheel. When commlib is installed from source, run the suite with `SIGIL_SKIP_NOTEBOOK_E2E=1`.
 
 ## CI
 
@@ -210,7 +221,9 @@ GitHub Actions (`.github/workflows/ci.yml`):
 ## NOTES
 
 - Generated apps depend on `commlib-py>=0.13.0` (unified pub/sub across MQTT, Redis, AMQP, Kafka).
+- Two commlib floors sit side by side: the notebook install cell pins `commlib-py>=0.13.2` (first release with a working `transports/mock.py`; 0.13.0 has none, 0.13.1 is a stub), while `templates/requirements.txt.j2` stays `>=0.13.0` so frozen golden snapshots do not churn.
 - Broker `transport` defaults to `mqtt`. Valid: `mqtt`, `redis`, `amqp`, `kafka`.
+- `TRANSPORT: MOCK` is a real transport value in the grammar. `PORT: 0` is accepted only for MOCK; AUTH/SSL settings on MOCK raise a warning. Codegen lowercases the AST value to `mock` on `BrokerCtx` (used by the notebook mock drivers via `_override_transports`).
 - Cross-transport pipelines supported (e.g., source MQTT, sink Redis).
 - Window flushing uses `threading.Thread` event loop.
 - Generated apps support `LOG_FORMAT=json` and `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` env vars.
@@ -223,7 +236,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 - Duplicate broker names caught by textX (`not unique`) before semantic validation.
 - Named multi-window `|> window NAME tumbling(...)` with `over NAME` in aggregations. Each window gets own buffer, flush thread, `_process_window_<name>` method.
 - Root-level utility scripts (`replace_colons.py`, `replace_colons_script.py`) are one-off migration scripts, not part of the core package.
-- 32 examples in `examples/` progress from basic (01_hello_passthrough) to advanced (30_ml_custom_runtime). Examples 26-30 cover ML predict stage.
+- 42 .sigil files in `examples/` progress from basic (01_hello_passthrough) to advanced (40_notebook_mock). Examples 26-30 cover ML predict stage.
 - `pipeline.py.j2` is the largest template at 1254 lines.
 - 14 codegen context dataclasses (was 11): added `FanoutBranchCtx`, `ModelCtx`, `PredictCtx`.
 - ML predict stage: `|> predict using MODEL_NAME`. Runtimes: `onnx`, `sklearn`, `torch`, `tflite`, custom Python module. ML deps conditionally included in `requirements.txt.j2`.
