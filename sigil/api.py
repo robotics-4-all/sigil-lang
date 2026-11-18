@@ -121,7 +121,9 @@ def validate_source(req: ValidateRequest) -> ValidateResponse:
             code="IMPORTS_UNSUPPORTED",
         )
         return ValidateResponse(
-            valid=False, diagnostics=[diag], summary="Validation failed: imports unsupported via API."
+            valid=False,
+            diagnostics=[diag],
+            summary="Validation failed: imports unsupported via API.",
         )
     try:
         model = parse_string(req.source)
@@ -132,9 +134,7 @@ def validate_source(req: ValidateRequest) -> ValidateResponse:
     errors = validate(model)
     hard = [e for e in errors if e.severity == "error"]
     warnings = [e for e in errors if e.severity != "error"]
-    diagnostics = [
-        Diagnostic(severity=e.severity, message=e.message) for e in errors
-    ]
+    diagnostics = [Diagnostic(severity=e.severity, message=e.message) for e in errors]
     valid = len(hard) == 0
     n_brokers = len(getattr(model, "brokers", []) or [])
     n_pipelines = len(getattr(model, "pipelines", []) or [])
@@ -144,9 +144,7 @@ def validate_source(req: ValidateRequest) -> ValidateResponse:
             f"{len(warnings)} warning(s)."
         )
     else:
-        summary = (
-            f"Validation failed with {len(hard)} error(s), {len(warnings)} warning(s)."
-        )
+        summary = f"Validation failed with {len(hard)} error(s), {len(warnings)} warning(s)."
     return ValidateResponse(valid=valid, diagnostics=diagnostics, summary=summary)
 
 
