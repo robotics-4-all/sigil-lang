@@ -10,7 +10,7 @@ Sigil focuses on defining data flow through a fixed sequence of processing stage
 
 ### Key Features
 - **Declarative Pipeline Syntax**: Define what happens to your data, not how to implement the message handling.
-- **Multi-Transport Support**: Seamlessly connect to MQTT, Redis, AMQP, and Kafka brokers.
+- **Multi-Transport Support**: Seamlessly connect to MQTT, Redis, AMQP, Kafka, and MOCK brokers.
 - **Windowed Aggregation**: Perform calculations like averages, sums, and counts over time-based windows.
 - **Conditional Routing**: Fan out messages to different destinations based on their content.
 - **Pipeline Chaining**: Connect multiple pipelines together for complex processing logic.
@@ -64,7 +64,7 @@ Brokers define the connection parameters for message transports.
 ### Syntax
 ```sigil
 BROKER NAME
-    TRANSPORT: MQTT | REDIS | AMQP | KAFKA
+    TRANSPORT: MQTT | REDIS | AMQP | KAFKA | MOCK
     HOST: "hostname"
     PORT: 1234
     SSL: true | false
@@ -76,13 +76,33 @@ BROKER NAME
 ```
 
 ### Fields
-- **TRANSPORT**: The message transport protocol. Defaults to `MQTT`. Supported values: `MQTT`, `REDIS`, `AMQP`, `KAFKA`.
+- **TRANSPORT**: The message transport protocol. Defaults to `MQTT`. Supported values: `MQTT`, `REDIS`, `AMQP`, `KAFKA`, `MOCK`.
 - **HOST**: The broker hostname or IP address (string).
-- **PORT**: The port number (integer).
+- **PORT**: The port number (integer). Must be 1-65535, except `PORT: 0`, which is accepted only when `TRANSPORT: MOCK`.
 - **SSL**: (Optional) Enable SSL/TLS connection. Defaults to `false`.
 - **AUTH**: (Optional) Authentication credentials.
 
 Multiple brokers can be defined in a single file, allowing pipelines to bridge different transports.
+
+### The MOCK Transport
+
+`MOCK` is an in-process transport backed by an in-memory message bus in `commlib-py`. A MOCK broker never opens a network connection, which makes it useful for tests, notebooks and local dry runs.
+
+```sigil
+BROKER local
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+```
+
+Semantics:
+
+- The bus lives inside the running process. Nothing is sent over a network and no broker software is required.
+- Topics match exactly. Wildcard topics are not supported; a wildcard topic is subscribed and published literally.
+- The bus is cleared when a run starts and again when it ends. Messages do not survive across runs and are never replayed.
+- `PORT: 0` is accepted only for MOCK brokers. Every other transport requires a port in 1-65535.
+- `AUTH` and `SSL` settings on a MOCK broker are ignored and produce a validation warning.
 
 ## Constants
 
@@ -766,7 +786,7 @@ Type keywords:
 `int`, `float`, `str`, `bool`
 
 Transport values:
-`MQTT`, `REDIS`, `AMQP`, `KAFKA`
+`MQTT`, `REDIS`, `AMQP`, `KAFKA`, `MOCK`
 
 Action values:
 `DROP`, `WARN`, `ERROR`

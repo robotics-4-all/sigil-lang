@@ -1,9 +1,17 @@
+import copy
 import os
 import tempfile
+from dataclasses import asdict
 
 import pytest
 
-from sigil.codegen import generate
+from sigil.codegen import (
+    _override_transports,
+    build_contexts,
+    generate,
+    ml_runtimes,
+    render_pipeline_source,
+)
 from sigil.explain import explain_model
 from sigil.expressions import ExprContext, compile_expr
 from sigil.language import parse_string
@@ -4312,3 +4320,138 @@ PIPELINE p
         assert "_do_enrich_first" in code
         assert "_do_enrich_second" in code
         compile(code, "<string>", "exec")
+
+
+_BUNDLE_SRC = """
+BROKER local HOST: "localhost" PORT: 1883 ;
+
+CONST LIMIT = 42.5
+FUNC scale(v) = v * 2
+
+MODEL scorer
+    SOURCE: "models/scorer.onnx"
+    RUNTIME: ONNX
+    FEATURES: [msg.value]
+    RETURNS: [score]
+;
+
+PIPELINE scoring
+    SOURCE FROM local :: "in/scoring"
+    |> FILTER msg.value > LIMIT
+    |> PREDICT scorer
+    |> MAP { scaled = scale(msg.value), score = msg.score }
+    |> SINK TO local :: "out/scoring"
+;
+
+PIPELINE passthrough
+    SOURCE FROM local :: "in/raw"
+    |> SINK TO local :: "out/raw"
+;
+"""
+
+_OVERRIDE_SRC = """
+BROKER local HOST: "localhost" PORT: 1883 ;
+BROKER cache TRANSPORT: REDIS HOST: "localhost" PORT: 6379 ;
+SCHEMA Reading STRICT id: str value: float ;
+
+PIPELINE all_accessors
+    SOURCE FROM local :: "in/events"
+    |> JOIN cache :: "lookup"
+        ON msg.id == other.id
+        WITHIN 10 s
+        TYPE: inner
+    ;
+    |> FILTER other.active == true
+    |> VALIDATE SCHEMA: Reading ON_ERROR: SINK TO cache :: "invalid"
+    |> ENRICH VIA HTTP
+        URL: "https://api.example.com/enrich"
+        BIND: meta
+        ON_ERROR: SINK TO local :: "enrich-errors"
+    ;
+    |> ROUTE
+        when msg.value > 10 => SINK TO local :: "high"
+        DEFAULT => SINK TO cache :: "low"
+    ;
+    ON_ERROR: SINK TO cache :: "errors"
+;
+"""
+
+
+def _reachable_brokers(pctx):
+    brokers = [pctx.source_broker, pctx.sink_broker]
+    if pctx.join is not None:
+        brokers.append(pctx.join.broker)
+    brokers.extend(arm.broker for arm in pctx.route_arms)
+    if pctx.route_default is not None:
+        brokers.append(pctx.route_default.broker)
+    brokers.append(pctx.on_error_broker)
+    if pctx.validate_stage is not None:
+        brokers.append(pctx.validate_stage.on_error_broker)
+    brokers.extend(stage.on_error_broker for stage in pctx.enrich_stages)
+    return [broker for broker in brokers if broker is not None]
+
+
+def test_build_contexts_matches_generate():
+    model = parse_string(_BUNDLE_SRC)
+    ctxs = build_contexts(model)
+
+    assert [p.name for p in ctxs.pipeline_contexts] == ["scoring", "passthrough"]
+    assert ctxs.const_map == {"LIMIT": "42.5"}
+    assert ctxs.raw_const_map == {"LIMIT": "42.5"}
+    assert set(ctxs.func_defs) == {"scale"}
+    assert set(ctxs.model_map) == {"scorer"}
+    assert ctxs.model_map["scorer"].runtime == "onnx"
+    assert ctxs.ml_runtimes == {"onnx"}
+    assert ml_runtimes(model) == ctxs.ml_runtimes
+
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        pipelines_dir = os.path.join(d, "pipelines")
+        generated = sorted(
+            name[:-3]
+            for name in os.listdir(pipelines_dir)
+            if name.endswith(".py") and name != "__init__.py"
+        )
+        assert generated == sorted(p.name for p in ctxs.pipeline_contexts)
+        with open(os.path.join(d, "requirements.txt")) as f:
+            requirements = f.read()
+        assert "onnxruntime" in requirements
+        assert "scikit-learn" not in requirements
+
+
+def test_render_pipeline_source_equals_file():
+    model = parse_string(_OVERRIDE_SRC)
+    ctxs = build_contexts(model)
+    with tempfile.TemporaryDirectory() as d:
+        generate(model, d)
+        for pctx in ctxs.pipeline_contexts:
+            path = os.path.join(d, "pipelines", f"{pctx.name}.py")
+            with open(path) as f:
+                assert render_pipeline_source(pctx) == f.read()
+
+
+def test_override_transports_mutates_all_accessors():
+    model = parse_string(_OVERRIDE_SRC)
+    ctxs = build_contexts(model)
+    before = {
+        broker.transport for pctx in ctxs.pipeline_contexts for broker in _reachable_brokers(pctx)
+    }
+    assert "redis" in before
+    assert "mock" not in before
+    expected = copy.deepcopy(ctxs)
+    for pctx in expected.pipeline_contexts:
+        for broker in _reachable_brokers(pctx):
+            broker.transport = "mock"
+
+    _override_transports(ctxs, "mock")
+
+    assert asdict(ctxs) == asdict(expected)
+    pctx = ctxs.pipeline_contexts[0]
+    assert pctx.join is not None
+    assert pctx.route_arms
+    assert pctx.route_default is not None
+    assert pctx.on_error_broker is not None
+    assert pctx.validate_stage is not None
+    assert pctx.validate_stage.on_error_broker is not None
+    assert pctx.enrich_stages
+    assert all(broker.transport == "mock" for broker in _reachable_brokers(pctx))

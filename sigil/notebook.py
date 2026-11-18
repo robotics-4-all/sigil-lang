@@ -1,0 +1,960 @@
+"""Notebook generation for Sigil models.
+
+A generated notebook is an nbformat-4 document (``nbformat_minor`` 5) whose
+code cells bootstrap a private ``pipelines`` package inside the kernel and load
+one rendered pipeline module per pipeline.
+
+The cell order is conditional. A model that declares an ML runtime and/or
+``env()`` references adds precondition cells: the ``## ML checklist`` markdown
+cell lands right after the title cell, and the env hints plus the
+``_smoke_check`` cell land right after the preamble. Models without either
+feature keep the plain order. After the pipeline cells the driver cells follow
+in a fixed order: instantiate, start, inputs, outputs and cleanup.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any, Literal, TypedDict
+
+from .codegen import (
+    BrokerCtx,
+    ContextBundle,
+    PipelineCtx,
+    _override_transports,
+    build_contexts,
+    env_keys,
+    ml_packages,
+    render_pipeline_source,
+)
+
+# The notebook cell pins a higher commlib floor than ``requirements.txt.j2``
+# (``>=0.13.0``) on purpose: 0.13.0 has no ``commlib.transports.mock`` module,
+# 0.13.1 ships a no-op stub, and 0.13.2 is the first working in-process bus.
+# Raising the template floor would change golden snapshots, so the two drift.
+_MOCK_MIN_COMMLIB = ">=0.13.2"
+
+_MODES = frozenset({"mock", "broker"})
+
+# Only identifier-shaped ``env()`` keys may become ``%env`` magics: a DSL string
+# literal can carry a newline, and a split magic line would run its second line as
+# a shell escape.
+_ENV_KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+class _CodeCell(TypedDict):
+    cell_type: Literal["code"]
+    execution_count: None
+    id: str
+    metadata: dict[str, Any]
+    outputs: list[Any]
+    source: list[str]
+
+
+class _MarkdownCell(TypedDict):
+    cell_type: Literal["markdown"]
+    id: str
+    metadata: dict[str, Any]
+    source: list[str]
+
+
+_Cell = _CodeCell | _MarkdownCell
+
+
+def _source_lines(source: str) -> list[str]:
+    """Split ``source`` into nbformat's newline-terminated line list."""
+    return [line + "\n" for line in source.splitlines()]
+
+
+def _code_cell(source: str) -> _CodeCell:
+    """Build an unexecuted code cell; ``_notebook`` assigns its id."""
+    return {
+        "cell_type": "code",
+        "execution_count": None,
+        "id": "",
+        "metadata": {},
+        "outputs": [],
+        "source": _source_lines(source),
+    }
+
+
+def _markdown_cell(source: str) -> _MarkdownCell:
+    """Build a markdown cell; ``_notebook`` assigns its id."""
+    return {
+        "cell_type": "markdown",
+        "id": "",
+        "metadata": {},
+        "source": _source_lines(source),
+    }
+
+
+def _notebook(cells: list[_Cell]) -> dict[str, Any]:
+    """Wrap ``cells`` in an nbformat-4 document with deterministic cell ids."""
+    for index, cell in enumerate(cells, start=1):
+        cell["id"] = f"cell-{index}"
+    return {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+
+def _strip_magics(source: str) -> str:
+    """Drop ``%``/``!`` magic lines so a cell can be parsed with ``ast``."""
+    kept = [line for line in source.splitlines() if not line.lstrip().startswith(("%", "!"))]
+    if not kept:
+        return ""
+    return "\n".join(kept) + "\n"
+
+
+_PREAMBLE_SOURCE = """import json, sys, threading, types, time
+import commlib.transports.mock as _mock_transport
+from commlib.transports.mock import clear_mock_bus, Publisher, Subscriber, ConnectionParameters
+
+# R17: the stock bus lock is a non-reentrant threading.Lock held while subscriber
+# callbacks run, and every pipeline publishes its sink from inside _on_message.
+# Patch to an RLock before any endpoint exists; remove when upstream ships one.
+if not hasattr(_mock_transport, "_MOCK_BUS_LOCK"):
+    raise RuntimeError(
+        "commlib.transports.mock._MOCK_BUS_LOCK is missing; the reentrant-lock "
+        "workaround requires commlib-py>=0.13.2. Install it and restart the kernel."
+    )
+_mock_transport._MOCK_BUS_LOCK = threading.RLock()
+
+_NOTEBOOK_MODULES = {}
+
+
+def _reset_pipelines_package():
+    for _name in [n for n in list(sys.modules) if n == "pipelines" or n.startswith("pipelines.")]:
+        del sys.modules[_name]
+    _pkg = types.ModuleType("pipelines")
+    _pkg.__path__ = []
+    sys.modules["pipelines"] = _pkg
+    _NOTEBOOK_MODULES.clear()
+
+
+def _load_pipeline(name, source):
+    if "pipelines" not in sys.modules:
+        _reset_pipelines_package()
+    mod = types.ModuleType("pipelines." + name)
+    mod.__package__ = "pipelines"
+    mod.__file__ = "<notebook:pipelines/%s.py>" % name
+    sys.modules["pipelines." + name] = mod
+    setattr(sys.modules["pipelines"], name, mod)
+    exec(compile(source, mod.__file__, "exec"), mod.__dict__)
+    _NOTEBOOK_MODULES[name] = mod
+    return mod
+
+
+def _clear_modules():
+    _NOTEBOOK_MODULES.clear()
+    for _name in [n for n in list(sys.modules) if n == "pipelines" or n.startswith("pipelines.")]:
+        del sys.modules[_name]
+"""
+
+
+def _preamble_source() -> str:
+    """Return the preamble cell source shared by the generator and tests."""
+    return _PREAMBLE_SOURCE
+
+
+def _is_sentinel_broker(broker: BrokerCtx) -> bool:
+    """Return True for the placeholder brokers ``codegen`` synthesises.
+
+    ``codegen._build_pipeline_ctx`` fabricates ``BrokerCtx`` objects named
+    ``__pipe__`` (pipe sources) and ``__route__`` (pipelines whose output is a
+    route, i.e. no ``SINK``) with ``transport="mqtt"``, ``host=""`` and
+    ``port=0`` so templates always see a broker object. They are structural
+    placeholders, not declared brokers, so the notebook layer must skip them
+    wherever it counts, labels or connects brokers.
+    """
+    return broker.name.startswith("__") and broker.name.endswith("__")
+
+
+def _brokers(pctx: PipelineCtx) -> list[BrokerCtx]:
+    """Return every real broker context reachable from one pipeline context.
+
+    Sentinel placeholders (``__pipe__``/``__route__``) are excluded: they are
+    codegen artefacts, not declared brokers, so they must not leak into
+    transport labels, broker counts or connection cells.
+    """
+    brokers = [
+        broker
+        for broker in (pctx.source_broker, pctx.sink_broker)
+        if not _is_sentinel_broker(broker)
+    ]
+    if pctx.join is not None:
+        brokers.append(pctx.join.broker)
+    brokers.extend(arm.broker for arm in pctx.route_arms)
+    if pctx.route_default is not None:
+        brokers.append(pctx.route_default.broker)
+    if pctx.on_error_broker is not None:
+        brokers.append(pctx.on_error_broker)
+    if pctx.validate_stage is not None and pctx.validate_stage.on_error_broker is not None:
+        brokers.append(pctx.validate_stage.on_error_broker)
+    brokers.extend(
+        stage.on_error_broker for stage in pctx.enrich_stages if stage.on_error_broker is not None
+    )
+    return brokers
+
+
+def _declared_transports(ctxs: ContextBundle) -> list[str]:
+    """Return the sorted, uppercased transports declared by the model."""
+    declared = {
+        broker.transport.upper() for pctx in ctxs.pipeline_contexts for broker in _brokers(pctx)
+    }
+    return sorted(declared)
+
+
+def _mode_label(mode: str) -> str:
+    if mode == "mock":
+        return "mock (offline, no broker)"
+    return "broker (declared transports)"
+
+
+def _transports_label(mode: str, declared: list[str]) -> str:
+    joined = ", ".join(declared) if declared else "NONE"
+    if mode == "mock":
+        if declared and all(transport == "MOCK" for transport in declared):
+            return f"{joined} -> mock (declared in source)"
+        return f"{joined} -> overridden to mock (offline)"
+    return f"{joined} -> {', '.join(transport.lower() for transport in declared)}"
+
+
+def _md_text(value: str) -> str:
+    """Flatten free text onto one markdown line for the title cell."""
+    return (
+        value.replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _pipeline_summary(pctx: PipelineCtx) -> str:
+    """Describe one pipeline as ``name  (origin -> destination)``."""
+    if pctx.has_pipe_source:
+        origin = f"pipe {_md_text(pctx.pipe_source_name)}"
+    else:
+        origin = f"{_md_text(pctx.source_broker.name)} :: {_md_text(pctx.source_topic)}"
+    if pctx.has_sink:
+        destination = f"{_md_text(pctx.sink_broker.name)} :: {_md_text(pctx.sink_topic)}"
+    elif pctx.has_route:
+        destination = f"route ({len(pctx.route_arms)} arm(s))"
+    else:
+        destination = "no output"
+    return f"{_md_text(pctx.name)}  ({origin} -> {destination})"
+
+
+def _title_cell(
+    ctxs: ContextBundle,
+    *,
+    name: str,
+    source_path: str,
+    mode: str,
+    declared: list[str],
+) -> _MarkdownCell:
+    """Build the title cell: identity, transports and offline notes."""
+    brokers = {broker.name: broker for pctx in ctxs.pipeline_contexts for broker in _brokers(pctx)}
+    lines = [
+        f"# Sigil notebook: {_md_text(name)}",
+        f"# Mode: {_mode_label(mode)}  |  Source: {_md_text(source_path)}",
+        f"# Transports: {_transports_label(mode, declared)}",
+    ]
+    if mode == "mock" and brokers:
+        lines.append(
+            f"# {len(brokers)} broker(s) declared; kernel reaches no network. "
+            f"Use --mode broker to keep {'/'.join(declared)}."
+        )
+    for index, pctx in enumerate(ctxs.pipeline_contexts):
+        prefix = "# Pipelines:" if index == 0 else "#           "
+        lines.append(f"{prefix} {_pipeline_summary(pctx)}")
+    if mode == "mock":
+        lines.extend(
+            [
+                "#",
+                "# Mock transport notes",
+                "# - topics match exactly, so wildcard topics are published literally",
+                "# - the bus is in-process; it is cleared at the start and end of a run",
+                "# - window results appear only after the outputs cell drains the pipelines",
+                "# - use --mode broker to keep the declared transports instead of mock",
+            ]
+        )
+    return _markdown_cell("\n".join(lines) + "\n")
+
+
+def _install_cell(runtimes: set[str]) -> _CodeCell:
+    """Build the install cell: the commlib pin plus any ML runtime packages."""
+    lines = [f'%pip install "commlib-py{_MOCK_MIN_COMMLIB}"']
+    packages = ml_packages(runtimes)
+    if packages:
+        lines.append("%pip install " + " ".join(packages))
+    return _code_cell("\n".join(lines) + "\n")
+
+
+_PACKAGE_MODULES = {
+    "scikit-learn": "sklearn",
+    "tflite-runtime": "tflite_runtime",
+}
+
+
+def _module_name(package: str) -> str:
+    """Return the importable module name for a pip package."""
+    return _PACKAGE_MODULES.get(package, package.replace("-", "_"))
+
+
+def _model_pipelines(ctxs: ContextBundle) -> dict[str, list[str]]:
+    """Map every model name to the pipelines that run ``PREDICT`` with it."""
+    users: dict[str, list[str]] = {}
+    for pctx in ctxs.pipeline_contexts:
+        for prediction in pctx.predictions:
+            pipelines = users.setdefault(prediction.model.name, [])
+            if pctx.name not in pipelines:
+                pipelines.append(pctx.name)
+    return users
+
+
+def _ml_checklist_cell(ctxs: ContextBundle) -> _MarkdownCell:
+    """Build the checklist of ML runtimes, model files and kernel prerequisites."""
+    lines = ["## ML checklist", ""]
+    for runtime in sorted(ctxs.ml_runtimes):
+        lines.append(f"- {runtime}: {', '.join(ml_packages({runtime}))}")
+    users = _model_pipelines(ctxs)
+    for name, model in ctxs.model_map.items():
+        pipelines = ", ".join(users.get(name, [])) or "no pipeline declares PREDICT"
+        lines.append(f"- {name}: {model.source_code} (predict in {pipelines})")
+    lines.extend(
+        [
+            "",
+            "The model file must be uploaded alongside this notebook: a hosted "
+            "kernel (Colab) has no local filesystem.",
+            "`enrich` stages need outbound network access from the kernel.",
+        ]
+    )
+    return _markdown_cell("\n".join(lines) + "\n")
+
+
+def _env_hint_cell(keys: list[str]) -> _CodeCell:
+    """Build the cell that lists every ``env()`` key the model reads."""
+    lines = [
+        "# Environment hints: a bare %env KEY= inspects the value; assign one",
+        "# (or export it) before running the start cell.",
+    ]
+    for key in keys:
+        if _ENV_KEY_PATTERN.fullmatch(key):
+            lines.append(f"%env {key}=")
+        else:
+            lines.append(f"# skipped env key (not a valid identifier): {json.dumps(key)}")
+    return _code_cell("\n".join(lines) + "\n")
+
+
+_SMOKE_PROLOGUE = """# Smoke check: Python version, ML packages and model files.
+# Nothing here imports a framework or loads a model.
+import importlib.util
+from pathlib import Path
+
+assert sys.version_info >= (3, 10), "sigil notebooks require Python 3.10+"
+
+
+def _smoke_check():
+    missing = []
+"""
+
+_SMOKE_EPILOGUE = """    if "COLLECTED" in globals():
+        _total = sum(len(_msgs) for _msgs in COLLECTED.values())
+        print(f"COLLECTED: {len(COLLECTED)} topic(s), {_total} message(s)")
+    else:
+        print("COLLECTED: pending (run the start and inputs cells first)")
+    if missing:
+        print(f"smoke check: {len(missing)} item(s) missing")
+    else:
+        print("smoke check: all ML prerequisites present")
+
+
+_smoke_check()
+"""
+
+
+def _smoke_check_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the self-executing cell that checks prerequisites without raising."""
+    lines = _SMOKE_PROLOGUE.splitlines()
+    for package in ml_packages(ctxs.ml_runtimes):
+        module = _module_name(package)
+        message = f"MISSING: {package} (install with %pip install {package})"
+        lines.extend(
+            [
+                f"    if importlib.util.find_spec({module!r}) is None:",
+                f"        missing.append({package!r})",
+                f"        print({message!r})",
+            ]
+        )
+    for name, model in ctxs.model_map.items():
+        prefix = f"MISSING: model {name}:"
+        message = f"MISSING: model file for {name}: {model.source_code}"
+        lines.extend(
+            [
+                "    try:",
+                f"        if not Path({model.source_code}).exists():",
+                f"            missing.append({model.source_code})",
+                f"            print({message!r})",
+                "    except Exception as _exc:",
+                f"        print({prefix!r}, _exc)",
+            ]
+        )
+    lines.extend(_SMOKE_EPILOGUE.splitlines())
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _pipeline_cell(pctx: PipelineCtx) -> _CodeCell:
+    """Build one cell that loads a rendered pipeline module into the kernel."""
+    source = render_pipeline_source(pctx)
+    return _code_cell(f"_load_pipeline({json.dumps(pctx.name)}, {json.dumps(source)})\n")
+
+
+def _dedupe(topics: list[str]) -> list[str]:
+    """Return ``topics`` with blanks and repeats dropped, first-seen order kept."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    for topic in topics:
+        if topic and topic not in seen:
+            seen.add(topic)
+            kept.append(topic)
+    return kept
+
+
+def _output_topics(ctxs: ContextBundle) -> list[str]:
+    """Collect every topic a generated pipeline can publish to.
+
+    The conditions mirror ``pipeline.py.j2``: a route replaces the sink, and a
+    DLQ endpoint exists only when its ``on_error`` clause names a broker.
+    """
+    topics: list[str] = []
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_route:
+            topics.extend(arm.topic for arm in pctx.route_arms)
+            if pctx.route_default is not None:
+                topics.append(pctx.route_default.topic)
+        elif pctx.has_sink:
+            topics.append(pctx.sink_topic)
+        if pctx.has_on_error and not pctx.on_error_drop:
+            topics.append(pctx.on_error_topic)
+        if pctx.validate_stage is not None and pctx.validate_stage.on_error == "sink":
+            topics.append(pctx.validate_stage.on_error_topic)
+        topics.extend(
+            stage.on_error_topic for stage in pctx.enrich_stages if stage.on_error == "sink"
+        )
+    return _dedupe(topics)
+
+
+def _source_topics(ctxs: ContextBundle) -> list[tuple[str, str]]:
+    """Collect ``(topic, pipeline)`` pairs that sample messages go to.
+
+    Pipe sources are skipped because their input arrives through
+    ``_downstream_listeners``. A topic shared by several pipelines is published
+    once, attributed to the first pipeline that subscribes to it.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_pipe_source or pctx.source_topic in seen:
+            continue
+        seen.add(pctx.source_topic)
+        pairs.append((pctx.source_topic, pctx.name))
+    return pairs
+
+
+def _topic_brokers(ctxs: ContextBundle) -> list[tuple[str, BrokerCtx]]:
+    """Return ``(topic, broker)`` for every output topic a pipeline publishes.
+
+    Mirrors ``_output_topics``: a route replaces the sink and a DLQ endpoint
+    exists only when its ``on_error`` clause names a broker. When two pipelines
+    publish the same topic, the first broker seen wins, matching ``_dedupe``.
+    """
+    pairs: list[tuple[str, BrokerCtx]] = []
+    seen: set[str] = set()
+    for pctx in ctxs.pipeline_contexts:
+        candidates: list[tuple[str, BrokerCtx]] = []
+        if pctx.has_route:
+            candidates.extend((arm.topic, arm.broker) for arm in pctx.route_arms)
+            if pctx.route_default is not None:
+                candidates.append((pctx.route_default.topic, pctx.route_default.broker))
+        elif pctx.has_sink and not _is_sentinel_broker(pctx.sink_broker):
+            candidates.append((pctx.sink_topic, pctx.sink_broker))
+        if pctx.has_on_error and not pctx.on_error_drop and pctx.on_error_broker is not None:
+            candidates.append((pctx.on_error_topic, pctx.on_error_broker))
+        if pctx.validate_stage is not None and pctx.validate_stage.on_error == "sink":
+            validate_broker = pctx.validate_stage.on_error_broker
+            if validate_broker is not None:
+                candidates.append((pctx.validate_stage.on_error_topic, validate_broker))
+        for stage in pctx.enrich_stages:
+            if stage.on_error == "sink" and stage.on_error_broker is not None:
+                candidates.append((stage.on_error_topic, stage.on_error_broker))
+        for topic, broker in candidates:
+            if topic and topic not in seen:
+                seen.add(topic)
+                pairs.append((topic, broker))
+    return pairs
+
+
+def _source_brokers(ctxs: ContextBundle) -> list[tuple[str, str, BrokerCtx]]:
+    """Return ``(topic, pipeline, source broker)`` pairs for sample messages.
+
+    ``_source_topics`` drops a repeated topic outright; a broker cell keys on
+    ``(broker, topic)`` instead because two brokers may carry the same topic
+    name. Pipe sources are skipped: their input arrives in-process.
+    """
+    pairs: list[tuple[str, str, BrokerCtx]] = []
+    seen: set[tuple[str, str]] = set()
+    for pctx in ctxs.pipeline_contexts:
+        if pctx.has_pipe_source or _is_sentinel_broker(pctx.source_broker):
+            continue
+        key = (pctx.source_broker.name, pctx.source_topic)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((pctx.source_topic, pctx.name, pctx.source_broker))
+    return pairs
+
+
+def _transport_import(transport: str, names: tuple[str, ...]) -> str:
+    """Render one import line with ``<Transport>``-prefixed aliases."""
+    prefix = transport.title()
+    imported = ", ".join(f"{name} as {prefix}{name}" for name in names)
+    return f"from commlib.transports.{transport.lower()} import " + imported
+
+
+def _connection_params(broker: BrokerCtx) -> str:
+    """Render ``ConnectionParameters(...)`` exactly as ``pipeline.py.j2`` does."""
+    args = [f"host={json.dumps(broker.host)}", f"port={broker.port}"]
+    if broker.ssl:
+        args.append("ssl=True")
+    if broker.username:
+        args.append(f"username={json.dumps(broker.username)}")
+        args.append(f"password={json.dumps(broker.password or '')}")
+    return f"{broker.transport.title()}ConnectionParameters({', '.join(args)})"
+
+
+_GUARD_SOURCE = """def _guard_recursion(pipe, limit=32):
+    sub = getattr(pipe, "_subscriber", None)
+    if sub is None or sub.onmessage is None:
+        return
+    orig, state = sub.onmessage, {"depth": 0}
+
+    def _wrapped(data):
+        state["depth"] += 1
+        try:
+            if state["depth"] > limit:
+                raise RuntimeError("mock self-loop: sink topic feeds its own source")
+            return orig(data)
+        finally:
+            state["depth"] -= 1
+
+    sub.onmessage = _wrapped
+"""
+
+_OUTPUTS_SOURCE = """for _p in pipeline_instances.values():
+    _p.drain()
+time.sleep(0.1)
+try:
+    from IPython.display import display
+except ImportError:  # plain-python runs (tests, scripts) have no IPython
+    display = print
+
+for _t, _msgs in COLLECTED.items():
+    print(f"{_t}: {len(_msgs)} message(s)")
+    display(_msgs[-5:])
+"""
+
+_CLEANUP_SOURCE = """for _p in pipeline_instances.values():
+    try:
+        _p.drain()
+    except Exception as _exc:
+        print("drain failed:", _exc)
+    try:
+        _p.stop()
+    except Exception as _exc:
+        print("stop failed:", _exc)
+for _s in _collectors:
+    _s.stop()
+clear_mock_bus()
+_clear_modules()
+print("mock bus cleared, pipeline modules dropped")
+for _t, _msgs in COLLECTED.items():
+    print(f"final {_t}: {len(_msgs)} message(s)")  # @finally publishes during stop()
+"""
+
+
+_BROKER_OUTPUTS_SOURCE = """# Brokers are asynchronous: give the transport time to deliver before draining.
+time.sleep(0.5)
+for _p in pipeline_instances.values():
+    _p.drain()
+time.sleep(0.1)
+try:
+    from IPython.display import display
+except ImportError:  # plain-python runs (tests, scripts) have no IPython
+    display = print
+
+for _t, _msgs in COLLECTED.items():
+    print(f"{_t}: {len(_msgs)} message(s)")
+    display(_msgs[-5:])
+"""
+
+_BROKER_CLEANUP_SOURCE = """for _p in pipeline_instances.values():
+    try:
+        _p.drain()
+    except Exception as _exc:
+        print("drain failed:", _exc)
+    try:
+        _p.stop()
+    except Exception as _exc:
+        print("stop failed:", _exc)
+for _s in _collectors:
+    _s.stop()
+_clear_modules()
+print("pipeline modules dropped")
+for _t, _msgs in COLLECTED.items():
+    print(f"final {_t}: {len(_msgs)} message(s)")  # @finally publishes during stop()
+"""
+
+
+def _instantiate_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that constructs every pipeline and wires pipe sources."""
+    lines = [
+        f"from pipelines.{pctx.name} import {pctx.class_name}Pipeline"
+        for pctx in ctxs.pipeline_contexts
+    ]
+    lines.extend(["", "pipeline_instances = {"])
+    lines.extend(
+        f"    {json.dumps(pctx.name)}: {pctx.class_name}Pipeline(),"
+        for pctx in ctxs.pipeline_contexts
+    )
+    lines.extend(["}", "COLLECTED = {}"])
+    for pctx in ctxs.pipeline_contexts:
+        if not pctx.has_pipe_source:
+            continue
+        source = json.dumps(pctx.pipe_source_name)
+        target = json.dumps(pctx.name)
+        lines.extend(
+            [
+                "",
+                f"pipeline_instances[{source}]._downstream_listeners.append(",
+                f"    pipeline_instances[{target}]._on_message",
+                ")",
+            ]
+        )
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _start_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the start cell: clear the bus, collect outputs, guard, then start."""
+    topic_list = "[" + ", ".join(json.dumps(topic) for topic in _output_topics(ctxs)) + "]"
+    lines = [
+        "# Load-bearing order: clear_mock_bus() -> collectors -> recursion guards ->",
+        "# _callback_registered reset -> start() -> inputs. Publishing before the",
+        "# subscribers run drops the message, and the preamble's RLock patch is what",
+        "# makes a sink publish from inside _on_message safe.",
+        "clear_mock_bus()",
+        "COLLECTED = {}",
+        "_collectors = []",
+        "",
+        "",
+        "def _collect(topic):",
+        "    COLLECTED.setdefault(topic, [])",
+        "",
+        "    def _cb(data):",
+        "        COLLECTED[topic].append(data)",
+        "",
+        "    sub = Subscriber(",
+        "        topic=topic,",
+        "        on_message=_cb,",
+        '        conn_params=ConnectionParameters(host="mock", port=0),',
+        "    )",
+        "    sub.run()",
+        "    _collectors.append(sub)",
+        "",
+        "",
+        f"for _t in {topic_list}:",
+        "    _collect(_t)",
+        "",
+        "",
+        *_GUARD_SOURCE.splitlines(),
+        "",
+        "_endpoints = list(pipeline_instances.values()) + _collectors",
+        "for _ep in _endpoints:",
+        '    _sub = getattr(_ep, "_subscriber", None)',
+        "    if _sub is not None:",
+        "        _sub._callback_registered = False",
+        "for _p in pipeline_instances.values():",
+        "    _guard_recursion(_p)",
+        "    _p.start()",
+    ]
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _inputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that publishes three sample messages per source topic."""
+    pairs = _source_topics(ctxs)
+    lines: list[str] = []
+    for topic, pipeline in pairs:
+        lines.extend(
+            [
+                "_pub = Publisher(",
+                f"    topic={json.dumps(topic)},",
+                '    conn_params=ConnectionParameters(host="mock", port=0),',
+                ")",
+                "_pub.run()",
+                "for _v in (12, 25, 5):",
+                f'    _pub.publish({{"value": _v, "sensor": {json.dumps(pipeline)}, '
+                '"ts": time.time()})',
+                "",
+            ]
+        )
+    if not pairs:
+        lines.append("# no broker source topics: this model is fed through pipe listeners")
+    lines.append("time.sleep(0.1)")
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _outputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cell that drains every pipeline and displays ``COLLECTED``."""
+    return _code_cell(_OUTPUTS_SOURCE)
+
+
+def _cleanup_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the cleanup cell; the trailing re-display captures ``@finally``."""
+    return _code_cell(_CLEANUP_SOURCE)
+
+
+def _broker_start_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker start cell: collect on declared brokers, guard, start."""
+    lines = [
+        "# Broker mode: each collector subscribes on the broker that publishes",
+        "# its output topic. The recursion guard and the _callback_registered",
+        "# reset are identical to mock mode.",
+    ]
+    for transport in _declared_transports(ctxs):
+        lines.append(_transport_import(transport, ("ConnectionParameters", "Subscriber")))
+    lines.extend(
+        [
+            "",
+            "COLLECTED = {}",
+            "_collectors = []",
+            "",
+            "",
+            "def _collect(topic, subscriber_cls, conn_params):",
+            "    COLLECTED.setdefault(topic, [])",
+            "",
+            "    def _cb(data):",
+            "        COLLECTED[topic].append(data)",
+            "",
+            "    sub = subscriber_cls(",
+            "        topic=topic,",
+            "        on_message=_cb,",
+            "        conn_params=conn_params,",
+            "    )",
+            "    sub.run()",
+            "    _collectors.append(sub)",
+            "",
+            "",
+        ]
+    )
+    for topic, broker in _topic_brokers(ctxs):
+        subscriber = f"{broker.transport.title()}Subscriber"
+        lines.append(f"_collect({json.dumps(topic)}, {subscriber}, {_connection_params(broker)})")
+    lines.extend(
+        [
+            "",
+            "",
+            *_GUARD_SOURCE.splitlines(),
+            "",
+            "_endpoints = list(pipeline_instances.values()) + _collectors",
+            "for _ep in _endpoints:",
+            '    _sub = getattr(_ep, "_subscriber", None)',
+            "    if _sub is not None:",
+            "        _sub._callback_registered = False",
+            "for _p in pipeline_instances.values():",
+            "    _guard_recursion(_p)",
+            "    _p.start()",
+        ]
+    )
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _broker_inputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker inputs cell: publish three samples on each source broker."""
+    lines: list[str] = []
+    for transport in _declared_transports(ctxs):
+        lines.append(_transport_import(transport, ("ConnectionParameters", "Publisher")))
+    if lines:
+        lines.append("")
+    pairs = _source_brokers(ctxs)
+    for topic, pipeline, broker in pairs:
+        publisher = f"{broker.transport.title()}Publisher"
+        lines.extend(
+            [
+                f"_pub = {publisher}(",
+                f"    topic={json.dumps(topic)},",
+                f"    conn_params={_connection_params(broker)},",
+                ")",
+                "_pub.run()",
+                "for _v in (12, 25, 5):",
+                f'    _pub.publish({{"value": _v, "sensor": {json.dumps(pipeline)}, '
+                '"ts": time.time()})',
+                "",
+            ]
+        )
+    if not pairs:
+        lines.append("# no broker source topics: this model is fed through pipe listeners")
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.append("time.sleep(0.5)")
+    return _code_cell("\n".join(lines) + "\n")
+
+
+def _broker_outputs_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker outputs cell; the leading wait lets the broker deliver."""
+    return _code_cell(_BROKER_OUTPUTS_SOURCE)
+
+
+def _broker_cleanup_cell(ctxs: ContextBundle) -> _CodeCell:
+    """Build the broker cleanup cell; the trailing re-display captures ``@finally``."""
+    return _code_cell(_BROKER_CLEANUP_SOURCE)
+
+
+def _model_filename(model) -> str | None:
+    """Return the real source filename of ``model``, or ``None`` for strings."""
+    filename = getattr(model, "_tx_filename", None)
+    if isinstance(filename, str) and filename and not filename.startswith("<"):
+        return filename
+    return None
+
+
+def _default_name(model) -> str:
+    """Derive the notebook name from the source stem, falling back to ``notebook``."""
+    filename = _model_filename(model)
+    if filename is None:
+        return "notebook"
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    return stem or "notebook"
+
+
+def _source_display(model) -> str:
+    """Return the source path shown in the title cell, relative when possible."""
+    filename = _model_filename(model)
+    if filename is None:
+        return "<string>"
+    try:
+        relative = os.path.relpath(filename)
+    except ValueError:
+        return filename
+    if relative.startswith(".."):
+        return filename
+    return relative
+
+
+def _resolve_path(output_path_or_dir: str, name: str) -> str:
+    """Resolve ``output_path_or_dir`` into a notebook file path (R3).
+
+    ``name`` is reduced to a bare filename: a value that normalises outside
+    the output directory is rejected instead of joined into a traversal, and
+    an internal ``..`` collapses to the file it names.
+    """
+    if output_path_or_dir.lower().endswith(".ipynb"):
+        parent = os.path.dirname(output_path_or_dir)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return output_path_or_dir
+    normalized = os.path.normpath(name)
+    escapes = normalized == ".." or normalized.startswith(".." + os.sep)
+    if os.path.isabs(normalized) or escapes:
+        raise ValueError(f"invalid notebook name {name!r}: it escapes the output directory")
+    filename = os.path.basename(normalized)
+    if filename in {"", ".", ".."}:
+        raise ValueError(f"invalid notebook name {name!r}: it is not a usable filename")
+    os.makedirs(output_path_or_dir, exist_ok=True)
+    return os.path.join(output_path_or_dir, f"{filename}.ipynb")
+
+
+def generate_notebook(
+    model,
+    output_path_or_dir: str,
+    *,
+    mode: str = "mock",
+    name: str | None = None,
+) -> str:
+    """Write an nbformat-4 notebook for ``model`` and return its absolute path.
+
+    ``mode="mock"`` rewrites every broker transport to the in-process mock
+    transport after building the contexts, so the rendered modules import
+    ``commlib.transports.mock`` without touching the source file. ``mode="broker"``
+    keeps the declared transports verbatim.
+
+    The cell order is: title, then the ``## ML checklist`` when the model
+    declares an ML runtime, install, preamble, env hints when the model reads
+    ``env()`` keys, the ``_smoke_check`` cell when the model declares an ML
+    runtime, one cell per pipeline, then instantiate and the mode-specific
+    driver cells.
+    """
+    if mode not in _MODES:
+        valid = ", ".join(repr(item) for item in sorted(_MODES))
+        raise ValueError(f"unsupported notebook mode {mode!r}; expected one of {valid}")
+
+    ctxs = build_contexts(model)
+    declared = _declared_transports(ctxs)
+    if mode == "mock":
+        _override_transports(ctxs, "mock")
+
+    notebook_name = name or _default_name(model)
+    path = _resolve_path(output_path_or_dir, notebook_name)
+
+    cells: list[_Cell] = [
+        _title_cell(
+            ctxs,
+            name=notebook_name,
+            source_path=_source_display(model),
+            mode=mode,
+            declared=declared,
+        ),
+    ]
+    if ctxs.ml_runtimes:
+        cells.append(_ml_checklist_cell(ctxs))
+    cells.append(_install_cell(ctxs.ml_runtimes))
+    cells.append(_code_cell(_preamble_source()))
+    hinted_keys = sorted(env_keys(model))
+    if hinted_keys:
+        cells.append(_env_hint_cell(hinted_keys))
+    if ctxs.ml_runtimes:
+        cells.append(_smoke_check_cell(ctxs))
+    cells.extend(_pipeline_cell(pctx) for pctx in ctxs.pipeline_contexts)
+    if mode == "broker":
+        driver_cells = [
+            _broker_start_cell(ctxs),
+            _broker_inputs_cell(ctxs),
+            _broker_outputs_cell(ctxs),
+            _broker_cleanup_cell(ctxs),
+        ]
+    else:
+        driver_cells = [
+            _start_cell(ctxs),
+            _inputs_cell(ctxs),
+            _outputs_cell(ctxs),
+            _cleanup_cell(ctxs),
+        ]
+    cells.append(_instantiate_cell(ctxs))
+    cells.extend(driver_cells)
+
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(_notebook(cells), handle, indent=1, ensure_ascii=False)
+        handle.write("\n")
+    return os.path.abspath(path)

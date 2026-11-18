@@ -29,7 +29,7 @@
  *     LENIENT, WITHIN, PER, ON_EXCESS, OVERFLOW, BUFFER, WARN, ERROR,
  *     DROP, DEFAULT, SKIP, ROUTE, DEBUG, LABEL, FIELDS, SCHEMA,
  *     ONNX, SKLEARN, TORCH, TFLITE, CUSTOM,
- *     MQTT, REDIS, AMQP, KAFKA
+ *     MQTT, REDIS, AMQP, KAFKA, MOCK
  *
  *   EXPRESSION (lowercase):
  *     and, or, is, not, null, if, then, else, case, when, match,
@@ -88,7 +88,7 @@ Broker:
 ;
 
 Transport:
-    'MQTT' | 'REDIS' | 'AMQP' | 'KAFKA'
+    'MQTT' | 'REDIS' | 'AMQP' | 'KAFKA' | 'MOCK'
 ;
 
 // ─── Pipeline ───────────────────────────────────────────────────────

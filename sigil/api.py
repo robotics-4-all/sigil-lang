@@ -23,12 +23,14 @@ import base64
 import os
 import re
 import tempfile
+from typing import Literal
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from .codegen import generate
 from .language import parse_string
+from .notebook import generate_notebook
 from .semantics import SemanticValidationError, validate, validate_or_raise
 
 SERVICE_VERSION = "1.0.0"
@@ -43,6 +45,7 @@ _CONTENT_TYPES = {
     ".json": "application/json",
     ".yaml": "application/yaml",
     ".yml": "application/yaml",
+    ".ipynb": "application/x-ipynb+json",
 }
 
 app = FastAPI(title="Sigil Compiler Service", version=SERVICE_VERSION)
@@ -72,6 +75,7 @@ class ValidateResponse(BaseModel):
 class GenerateRequest(BaseModel):
     source: str = Field(..., min_length=1)
     name: str | None = None
+    target: Literal["app", "notebook"] = "app"
 
     class Config:
         extra = "ignore"
@@ -152,6 +156,8 @@ def _artifact_kind(name: str) -> str:
     base = os.path.basename(name)
     if base == "requirements.txt":
         return "manifest"
+    if base.endswith(".ipynb"):
+        return "notebook"
     return "source"
 
 
@@ -185,6 +191,42 @@ def generate_source(req: GenerateRequest):
         return JSONResponse(
             status_code=422,
             content={"error": str(exc), "code": "SEMANTIC_ERROR"},
+        )
+
+    if req.target == "notebook":
+        with tempfile.TemporaryDirectory() as tmp:
+            path = generate_notebook(model, tmp, mode="mock", name="notebook")
+            with open(path, "rb") as f:
+                data = f.read()
+        if len(data) > MAX_GENERATED_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": f"Generated output exceeds {MAX_GENERATED_BYTES} bytes.",
+                    "code": "OUTPUT_TOO_LARGE",
+                },
+            )
+        n_pipelines = len(getattr(model, "pipelines", []) or [])
+        n_brokers = len(getattr(model, "brokers", []) or [])
+        artifact_name = os.path.basename(path)
+        return GenerateResponse(
+            artifacts=[
+                Artifact(
+                    name=artifact_name,
+                    kind=_artifact_kind(artifact_name),
+                    size_bytes=len(data),
+                    content_type=_content_type(artifact_name),
+                    content_base64=base64.b64encode(data).decode("ascii"),
+                )
+            ],
+            metadata={
+                "pipelines": n_pipelines,
+                "brokers": n_brokers,
+                "generator": "sigil-lang",
+                "version": SERVICE_VERSION,
+                "target": "notebook",
+            },
+            summary=f"Generated {artifact_name} for {n_pipelines} pipeline(s).",
         )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -230,6 +272,7 @@ def generate_source(req: GenerateRequest):
             "brokers": n_brokers,
             "generator": "sigil-lang",
             "version": SERVICE_VERSION,
+            "target": "app",
         },
         summary=f"Generated {len(artifacts)} file(s) for {n_pipelines} pipeline(s).",
     )

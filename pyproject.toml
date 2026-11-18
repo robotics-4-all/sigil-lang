@@ -71,6 +71,12 @@ test = [
     "pytest-benchmark>=4.0",
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
+    # Executed end-to-end notebook test (tests/test_notebook_exec.py) only.
+    "nbformat>=5.9",
+    "nbclient>=0.10",
+    "ipykernel>=6.29",
+    # Mock-driver tests (tests/test_notebook_mock.py) import commlib.transports.mock.
+    "commlib-py>=0.13.2",
 ]
 # Broker clients for tests/test_integration.py (real MQTT/Redis/AMQP/Kafka).
 integration = [

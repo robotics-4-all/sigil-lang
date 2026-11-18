@@ -879,6 +879,165 @@ Named windows let you compare different time scales. The `retry` clause ensures 
 
 ---
 
+## Tier 5: Notebook Target (40). Mock transport, notebook generation.
+
+### 40_notebook_mock.sigil
+**New Concepts:**
+- `TRANSPORT: MOCK` and `PORT: 0`
+- Notebook generation with `sigil notebook`
+- Running a chained pipeline inside a notebook
+
+Example 40 is built to run offline. It declares two MOCK brokers with `PORT: 0` (the only
+transport where port 0 is valid) and two pipelines: `windowed` aggregates sensor readings
+over a tumbling window, and `chained` consumes the `windowed` output through a pipe handoff,
+drops degenerate single-sample windows, and publishes to the second broker.
+
+```sigil
+/*
+ * Example 40 — Notebook-Friendly Mock Model
+ * =========================================
+ * A compact model built to exercise the notebook generator end to end:
+ *
+ *   sigil notebook examples/40_notebook_mock.sigil
+ *
+ * produces an executable .ipynb that runs the whole chain offline, against
+ * the in-process mock transport. MOCK is declared in source here (not
+ * injected by the generator), so the notebook keeps the declared transports:
+ * no rewriting is needed to run without a broker.
+ *
+ * The model also demonstrates PIPELINE chaining: "chained" consumes the
+ * aggregated output of "windowed" directly, in memory.
+ */
+
+// Two mock brokers with distinct names; PORT 0 is only valid for MOCK.
+BROKER local
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+BROKER cache
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+// Pipeline 1: windowed — aggregate sensor values over a tumbling window.
+PIPELINE windowed
+    SOURCE FROM local :: "sensors/temperature"
+
+    |> WINDOW tumbling(1 m)
+
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        max_temp = max(msg.value),
+        n = count()
+    }
+
+    |> SINK TO local :: "sensors/aggregated"
+
+    RETRY: 1 WITH BACKOFF 100 ms
+;
+
+// Pipeline 2: chained — consumes "windowed" output via pipe handoff and
+// drops the degenerate single-sample windows before publishing.
+PIPELINE chained
+    SOURCE FROM PIPE windowed
+
+    |> FILTER msg.n > 1
+
+    |> SINK TO cache :: "analytics/temperatures"
+
+    RETRY: 7 WITH BACKOFF 100 ms
+;
+```
+
+To generate the executable notebook:
+
+```bash
+sigil notebook examples/40_notebook_mock.sigil -o examples/notebooks
+```
+
+The command parses and validates the source, prints `Generated notebook: <absolute path>`,
+and writes `examples/notebooks/40_notebook_mock.ipynb`. Run it with any Jupyter kernel and
+it executes the whole chain offline, cell by cell:
+
+1. Title cell (markdown). Records the mode, source, transports and mock-transport caveats.
+   For this example it reads verbatim:
+
+```
+# Sigil notebook: 40_notebook_mock
+# Mode: mock (offline, no broker)  |  Source: examples/40_notebook_mock.sigil
+# Transports: MOCK -> mock (declared in source)
+# 2 broker(s) declared; kernel reaches no network. Use --mode broker to keep MOCK.
+# Pipelines: windowed  (local :: sensors/temperature -> local :: sensors/aggregated)
+#            chained  (pipe windowed -> cache :: analytics/temperatures)
+#
+# Mock transport notes
+# - topics match exactly, so wildcard topics are published literally
+# - the bus is in-process; it is cleared at the start and end of a run
+# - window results appear only after the outputs cell drains the pipelines
+# - use --mode broker to keep the declared transports instead of mock
+```
+
+2. Install cell. Pins the notebook's only runtime dependency:
+   `%pip install "commlib-py>=0.13.2"`.
+3. Preamble cell. Imports `commlib.transports.mock`, defines `_load_pipeline`, and drops
+   stale `pipelines.*` modules between re-runs.
+4. One cell per pipeline (`windowed`, then `chained`). Each loads the rendered pipeline
+   source, embedded in the notebook as a JSON string.
+5. Instantiate cell. Imports both pipeline classes, builds `pipeline_instances`, and wires
+   the pipe handoff from `windowed` to `chained`.
+6. Start cell. Clears the mock bus, attaches output collectors for `sensors/aggregated` and
+   `analytics/temperatures`, then starts both pipelines.
+7. Inputs cell. Publishes three samples (`value` 12, 25, 5) to `sensors/temperature`.
+8. Outputs cell. Drains both pipelines and prints what each topic collected. The drain
+   flushes the tumbling window, so `sensors/aggregated` shows the aggregated row for the
+   three samples, and `analytics/temperatures` shows it again after `chained` publishes it
+   (`msg.n` is 3, which passes `FILTER msg.n > 1`).
+9. Cleanup cell. Stops the pipelines, clears the mock bus, drops the pipeline modules, and
+   re-prints the final counts to capture `@finally` output.
+
+**Mode Semantics:**
+
+`--mode` picks the driver cells:
+
+- `mock` (default): every declared broker is overridden to the mock transport, so the notebook
+  opens no network connection and needs no reachable broker. The title cell reports the
+  override: `# Transports: MOCK -> mock (declared in source)` when the source already
+  declares MOCK, or `# Transports: MQTT -> overridden to mock (offline)` when it declares
+  MQTT.
+- `broker`: declared transports are kept and the driver cells make real connections, so every
+  broker must be reachable from the kernel. The outputs cell waits 0.5 s before draining to
+  give the transport time to deliver.
+
+A hosted kernel such as Colab cannot reach `localhost` brokers. Run with `--mode mock` there,
+or make your brokers reachable from the kernel's network.
+
+**Regeneration and CI:**
+
+`make notebook` regenerates the checked-in `examples/notebooks/40_notebook_mock.ipynb` from
+the example source. It is deliberately not part of `make ci`: the CI target runs lint, type
+checks, unit tests and example validation only, so a generator change cannot rewrite the
+checked-in notebook as a side effect of a normal build. Run `make notebook` when you mean to
+refresh it.
+
+**End-to-End Test:**
+
+The executed end-to-end test (`tests/test_notebook_exec.py`) runs a generated notebook in a
+real kernel, including its `%pip install` cell. That cell installs the PyPI wheel, so a local
+run would replace an editable `commlib-py` checkout with the wheel from PyPI. Skip it
+locally:
+
+```bash
+SIGIL_SKIP_NOTEBOOK_E2E=1 python -m pytest tests/test_notebook_exec.py -q -rs
+```
+
+Its dependencies (`nbformat`, `nbclient`, `ipykernel`) come from the `test` extra:
+`pip install -e '.[test]'`.
+
+---
+
 ## What's Next?
 
 Now that you've seen the examples, you can:

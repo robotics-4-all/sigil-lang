@@ -72,7 +72,7 @@ FUNCS_NO_FIELD = {"count"}
 FUNCS_REQUIRING_PARAM = {"percentile"}
 VALID_QOS = {0, 1, 2}
 VALID_FORMATS = {"json", "csv", "raw"}
-VALID_TRANSPORTS = {"MQTT", "REDIS", "AMQP", "KAFKA"}
+VALID_TRANSPORTS = {"MQTT", "REDIS", "AMQP", "KAFKA", "MOCK"}
 
 
 def _unwrap_stages(pipeline):
@@ -253,9 +253,25 @@ def _check_unique_pipeline_names(model):
 def _check_brokers(model):
     errors: list[SemanticError] = []
     for broker in model.brokers:
-        if broker.port < 1 or broker.port > 65535:
+        is_mock = broker.transport == "MOCK"
+        if is_mock:
+            port_ok = broker.port == 0 or 1 <= broker.port <= 65535
+            expected = "0 or 1-65535"
+        else:
+            port_ok = 1 <= broker.port <= 65535
+            expected = "1-65535"
+        if not port_ok:
             errors.append(
-                SemanticError(f"Broker '{broker.name}': port must be 1-65535, got {broker.port}.")
+                SemanticError(
+                    f"Broker '{broker.name}': port must be {expected}, got {broker.port}."
+                )
+            )
+        if is_mock and (broker.username or broker.ssl):
+            errors.append(
+                SemanticError(
+                    f"Broker '{broker.name}': TRANSPORT MOCK ignores AUTH and SSL settings.",
+                    severity="warning",
+                )
             )
         if broker.transport and broker.transport not in VALID_TRANSPORTS:
             errors.append(
