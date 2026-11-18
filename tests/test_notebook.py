@@ -15,7 +15,7 @@ import threading
 
 from sigil.cli import main
 from sigil.codegen import build_contexts, render_pipeline_source
-from sigil.language import parse_string
+from sigil.language import parse, parse_string
 from sigil.notebook import (
     _MOCK_MIN_COMMLIB,
     _preamble_source,
@@ -409,3 +409,76 @@ def test_example_notebook_is_current():
         open("examples/notebooks/40_notebook_mock.ipynb", "rb") as checked_in,
     ):
         assert fresh.read() == checked_in.read()
+
+
+# Pipe-chaining equivalent of ``examples/40_notebook_mock.sigil``: two real
+# MOCK brokers plus a pipeline whose source is another pipeline. Codegen
+# synthesises a ``__pipe__`` sentinel broker for the chained source, which
+# must never surface in the notebook.
+_SENTINEL = """
+BROKER local
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+BROKER cache
+    TRANSPORT: MOCK
+    HOST: "localhost"
+    PORT: 0
+;
+
+PIPELINE windowed
+    SOURCE FROM local :: "sensors/temperature"
+    |> WINDOW tumbling(1 m)
+    |> AGGREGATE {
+        avg_temp = avg(msg.value),
+        n = count()
+    }
+    |> SINK TO local :: "sensors/aggregated"
+;
+
+PIPELINE chained
+    SOURCE FROM PIPE windowed
+    |> FILTER msg.n > 1
+    |> SINK TO cache :: "analytics/temperatures"
+;
+"""
+
+
+def test_sentinel_brokers_excluded_from_title():
+    """Codegen's ``__pipe__``/``__route__`` sentinels stay out of the notebook.
+
+    The mock title counts only declared brokers (no phantom MQTT), and the
+    broker mode builds no collector or publisher on a sentinel broker: a
+    pipe source is fed in-process and a route output has no sink broker.
+    """
+    doc, _ = _nb(_SENTINEL)
+    title = _text(doc["cells"][0])
+    assert "MQTT" not in title
+    assert "__pipe__" not in title
+    assert "2 broker(s)" in title
+    assert "# Transports: MOCK -> mock (declared in source)" in title
+
+    broker_doc, _ = _nb(_SENTINEL, mode="broker")
+    broker_title = _text(broker_doc["cells"][0])
+    assert "MQTT" not in broker_title
+    assert "# Transports: MOCK -> mock" in broker_title
+    blob = "\n".join(_text(cell) for cell in broker_doc["cells"])
+    assert "__pipe__" not in blob
+    assert "__route__" not in blob
+    start = _driver_cell(broker_doc, 4)
+    assert "commlib.transports.mqtt" not in start
+    assert 'host=""' not in blob
+
+    # Route-only pipeline (no SINK): codegen synthesises a ``__route__``
+    # sentinel sink broker, so broker mode must build no empty-host collector.
+    route_path = generate_notebook(
+        parse("examples/16_conditional_routing.sigil"), _tmpdir(), mode="broker"
+    )
+    with open(route_path, encoding="utf-8") as handle:
+        route_doc = json.load(handle)
+    route_blob = "\n".join(_text(cell) for cell in route_doc["cells"])
+    assert "__route__" not in route_blob
+    assert 'host=""' not in route_blob
+    assert 'MqttConnectionParameters(host="localhost", port=1883)' in route_blob

@@ -162,9 +162,31 @@ def _preamble_source() -> str:
     return _PREAMBLE_SOURCE
 
 
+def _is_sentinel_broker(broker: BrokerCtx) -> bool:
+    """Return True for the placeholder brokers ``codegen`` synthesises.
+
+    ``codegen._build_pipeline_ctx`` fabricates ``BrokerCtx`` objects named
+    ``__pipe__`` (pipe sources) and ``__route__`` (pipelines whose output is a
+    route, i.e. no ``SINK``) with ``transport="mqtt"``, ``host=""`` and
+    ``port=0`` so templates always see a broker object. They are structural
+    placeholders, not declared brokers, so the notebook layer must skip them
+    wherever it counts, labels or connects brokers.
+    """
+    return broker.name.startswith("__") and broker.name.endswith("__")
+
+
 def _brokers(pctx: PipelineCtx) -> list[BrokerCtx]:
-    """Return every broker context reachable from one pipeline context."""
-    brokers: list[BrokerCtx] = [pctx.source_broker, pctx.sink_broker]
+    """Return every real broker context reachable from one pipeline context.
+
+    Sentinel placeholders (``__pipe__``/``__route__``) are excluded: they are
+    codegen artefacts, not declared brokers, so they must not leak into
+    transport labels, broker counts or connection cells.
+    """
+    brokers = [
+        broker
+        for broker in (pctx.source_broker, pctx.sink_broker)
+        if not _is_sentinel_broker(broker)
+    ]
     if pctx.join is not None:
         brokers.append(pctx.join.broker)
     brokers.extend(arm.broker for arm in pctx.route_arms)
@@ -233,7 +255,7 @@ def _title_cell(
         f"# Mode: {_mode_label(mode)}  |  Source: {source_path}",
         f"# Transports: {_transports_label(mode, declared)}",
     ]
-    if mode == "mock" and any(transport != "MOCK" for transport in declared):
+    if mode == "mock" and brokers:
         lines.append(
             f"# {len(brokers)} broker(s) declared; kernel reaches no network. "
             f"Use --mode broker to keep {'/'.join(declared)}."
@@ -446,7 +468,7 @@ def _topic_brokers(ctxs: ContextBundle) -> list[tuple[str, BrokerCtx]]:
             candidates.extend((arm.topic, arm.broker) for arm in pctx.route_arms)
             if pctx.route_default is not None:
                 candidates.append((pctx.route_default.topic, pctx.route_default.broker))
-        elif pctx.has_sink:
+        elif pctx.has_sink and not _is_sentinel_broker(pctx.sink_broker):
             candidates.append((pctx.sink_topic, pctx.sink_broker))
         if pctx.has_on_error and not pctx.on_error_drop and pctx.on_error_broker is not None:
             candidates.append((pctx.on_error_topic, pctx.on_error_broker))
@@ -474,7 +496,7 @@ def _source_brokers(ctxs: ContextBundle) -> list[tuple[str, str, BrokerCtx]]:
     pairs: list[tuple[str, str, BrokerCtx]] = []
     seen: set[tuple[str, str]] = set()
     for pctx in ctxs.pipeline_contexts:
-        if pctx.has_pipe_source:
+        if pctx.has_pipe_source or _is_sentinel_broker(pctx.source_broker):
             continue
         key = (pctx.source_broker.name, pctx.source_topic)
         if key in seen:
