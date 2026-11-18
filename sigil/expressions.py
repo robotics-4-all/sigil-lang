@@ -18,6 +18,32 @@ SCALAR_FUNC_MAP = {
     "floor": lambda args: f"math.floor({args[0]})",
     "ceil": lambda args: f"math.ceil({args[0]})",
     "fmt": lambda args: f"{args[0]}.format({', '.join(args[1:])})",
+    "trim": lambda args: f"str({args[0]}).strip()",
+    "contains": lambda args: f"({args[1]} in str({args[0]}))",
+    "starts_with": lambda args: f"str({args[0]}).startswith({args[1]})",
+    "ends_with": lambda args: f"str({args[0]}).endswith({args[1]})",
+    "split": lambda args: f"str({args[0]}).split({args[1]})",
+    "replace": lambda args: f"str({args[0]}).replace({args[1]}, {args[2]})",
+    "substring": lambda args: (
+        f"str({args[0]})[{args[1]}:{args[2]}]" if len(args) == 3 else f"str({args[0]})[{args[1]}:]"
+    ),
+    "sqrt": lambda args: f"math.sqrt({args[0]})",
+    "pow": lambda args: f"math.pow({args[0]}, {args[1]})",
+    "log": lambda args: f"math.log({args[0]})",
+    "log10": lambda args: f"math.log10({args[0]})",
+    "exp": lambda args: f"math.exp({args[0]})",
+    "to_int": lambda args: f"int({args[0]})",
+    "to_float": lambda args: f"float({args[0]})",
+    "to_str": lambda args: f"str({args[0]})",
+    "to_bool": lambda args: f"bool({args[0]})",
+    "now": lambda args: "time.time()",
+    "timestamp_ms": lambda args: "int(time.time() * 1000)",
+    "date_format": lambda args: f"datetime.fromtimestamp({args[0]}).strftime({args[1]})",
+    "date_diff": lambda args: f"({args[0]} - {args[1]})",
+    "matches": lambda args: f"(bool(re.search({args[1]}, str({args[0]}))))",
+    "extract": lambda args: (
+        f"((lambda _m: _m.group({args[2]}) if _m else None)(re.search({args[1]}, str({args[0]}))))"
+    ),
 }
 
 
@@ -48,7 +74,7 @@ def compile_expr(
     cls = node.__class__.__name__
 
     # Helper to recurse with same context
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if cls == "Expression":
@@ -78,14 +104,14 @@ def compile_expr(
     if cls == "Addition":
         operands, ops = _flatten_binary(node, "Addition")
         result = _r(operands[0])
-        for op, operand in zip(ops, operands[1:]):
+        for op, operand in zip(ops, operands[1:], strict=False):
             result = f"{result} {op} {_r(operand)}"
         return result
 
     if cls == "Multiplication":
         operands, ops = _flatten_binary(node, "Multiplication")
         result = _r(operands[0])
-        for op, operand in zip(ops, operands[1:]):
+        for op, operand in zip(ops, operands[1:], strict=False):
             result = f"{result} {op} {_r(operand)}"
         return result
 
@@ -147,14 +173,10 @@ def compile_expr(
         return f"({cur} != {prev})"
 
     if cls == "ForallExpr":
-        return _compile_quantifier_expr(
-            node, "all", ctx, local_names, const_map, func_defs
-        )
+        return _compile_quantifier_expr(node, "all", ctx, local_names, const_map, func_defs)
 
     if cls == "ExistsExpr":
-        return _compile_quantifier_expr(
-            node, "any", ctx, local_names, const_map, func_defs
-        )
+        return _compile_quantifier_expr(node, "any", ctx, local_names, const_map, func_defs)
 
     if cls == "FuncCall":
         args = [_r(a) for a in node.args]
@@ -176,27 +198,30 @@ def compile_expr(
         return repr(node.val)
 
     if cls == "FieldRef":
-        return _compile_field_ref(node.segments, ctx, local_names, const_map)
+        return _compile_field_ref(
+            node.segments,
+            ctx,
+            local_names,
+            const_map,
+            node.subscript if node.subscript else None,
+        )
 
     raise ValueError(f"Unknown expression node: {cls}")
 
 
-def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
+def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Compile case { when c1 => r1  when c2 => r2  else => r_else }
     into nested Python ternary: (r1 if c1 else (r2 if c2 else r_else))
     """
 
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if not node.arms:
         raise ValueError("CaseExpr must have at least one 'when' arm")
 
     # Build from inside out (last arm first)
-    if node.elseExpr:
-        result = _r(node.elseExpr)
-    else:
-        result = "None"
+    result = _r(node.elseExpr) if node.elseExpr else "None"
 
     for arm in reversed(node.arms):
         cond = _r(arm.condition)
@@ -206,12 +231,12 @@ def _compile_case_expr(node, ctx, local_names, const_map, func_defs=None):
     return result
 
 
-def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
+def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Compile match subject { case p1 => r1  case p2 => r2  else => d }
     into nested Python ternary: (r1 if subject == p1 else (r2 if subject == p2 else d))
     """
 
-    def _r(n):
+    def _r(n) -> str:
         return compile_expr(n, ctx, local_names, const_map, func_defs)
 
     if not node.arms:
@@ -219,10 +244,7 @@ def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
 
     subject = _r(node.subject)
 
-    if node.elseExpr:
-        result = _r(node.elseExpr)
-    else:
-        result = "None"
+    result = _r(node.elseExpr) if node.elseExpr else "None"
 
     for arm in reversed(node.arms):
         pattern = _r(arm.pattern)
@@ -232,7 +254,7 @@ def _compile_match_expr(node, ctx, local_names, const_map, func_defs=None):
     return result
 
 
-def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None):
+def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None) -> str:
     """Inline user-defined function: celsius(msg.t) → ((msg.t - 32) * 5 / 9)"""
     if not func_defs or node.name not in func_defs:
         raise ValueError(f"Unknown function: {node.name}")
@@ -247,16 +269,14 @@ def _compile_user_func_call(node, ctx, local_names, const_map, func_defs=None):
         )
 
     param_map = {}
-    for param, arg in zip(params, args):
+    for param, arg in zip(params, args, strict=False):
         param_map[param] = compile_expr(arg, ctx, local_names, const_map, func_defs)
 
     merged_const = dict(const_map) if const_map else {}
     merged_const.update(param_map)
 
     inner_locals = set(local_names) if local_names else set()
-    return (
-        f"({compile_expr(func_def.body, ctx, inner_locals, merged_const, func_defs)})"
-    )
+    return f"({compile_expr(func_def.body, ctx, inner_locals, merged_const, func_defs)})"
 
 
 def _compile_field_ref(
@@ -264,6 +284,7 @@ def _compile_field_ref(
     ctx: ExprContext,
     local_names: set[str] | None = None,
     const_map: dict[str, str] | None = None,
+    subscript=None,
 ) -> str:
     # Check if this is a const reference (bare ID matching a const name)
     if const_map and len(segments) == 1 and segments[0] in const_map:
@@ -271,38 +292,80 @@ def _compile_field_ref(
 
     if segments[0] == "other" and len(segments) > 1:
         keys = ", ".join(repr(s) for s in segments[1:])
-        return f"_get_nested(other, {keys})"
+        base = f"_get_nested(other, {keys})"
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx in (ExprContext.FILTER, ExprContext.AGGREGATE, ExprContext.QUANTIFIER):
         if local_names and len(segments) == 1 and segments[0] in local_names:
-            return segments[0]
+            base = segments[0]
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
-        return ".".join(segments)
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = ".".join(segments)
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx == ExprContext.HAVING:
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if len(segments) == 1:
-            return f"aggregated['{segments[0]}']"
-        return ".".join(segments)
+            base = f"aggregated['{segments[0]}']"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = ".".join(segments)
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
     if ctx == ExprContext.MAP:
         if segments[0] == "msg" and len(segments) > 1:
             keys = ", ".join(repr(s) for s in segments[1:])
-            return f"_get_nested(msg, {keys})"
+            base = f"_get_nested(msg, {keys})"
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
         if local_names and len(segments) == 1 and segments[0] in local_names:
-            return segments[0]
-        return f"aggregated['{'.'.join(segments)}']"
+            base = segments[0]
+            if subscript:
+                idx = -subscript.index if subscript.neg else subscript.index
+                return f"{base}[{idx}]"
+            return base
+        base = f"aggregated['{'.'.join(segments)}']"
+        if subscript:
+            idx = -subscript.index if subscript.neg else subscript.index
+            return f"{base}[{idx}]"
+        return base
 
-    return ".".join(segments)
+    base = ".".join(segments)
+    if subscript:
+        idx = -subscript.index if subscript.neg else subscript.index
+        return f"{base}[{idx}]"
+    return base
 
 
-def _compile_quantifier_expr(
-    node, func_name, ctx, local_names, const_map, func_defs=None
-):
+def _compile_quantifier_expr(node, func_name, ctx, local_names, const_map, func_defs=None) -> str:
     var = node.var
     inner_locals = set(local_names) if local_names else set()
     inner_locals.add(var)
@@ -313,7 +376,11 @@ def _compile_quantifier_expr(
 
     if node.collection:
         collection_code = _compile_field_ref(
-            node.collection.segments, ctx, local_names, const_map
+            node.collection.segments,
+            ctx,
+            local_names,
+            const_map,
+            node.collection.subscript if node.collection.subscript else None,
         )
         return f"{func_name}({predicate_code} for {var} in ({collection_code} or []))"
     else:
@@ -321,7 +388,7 @@ def _compile_quantifier_expr(
 
 
 def extract_field_keys(field_ref) -> list[str]:
-    segs = field_ref.segments
+    segs: list[str] = field_ref.segments
     if segs[0] == "msg" and len(segs) > 1:
         return segs[1:]
     return segs

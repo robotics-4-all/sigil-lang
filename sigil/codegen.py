@@ -1,5 +1,7 @@
 import os
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+
 from jinja2 import Environment, FileSystemLoader
 
 from .expressions import ExprContext, compile_expr, extract_field_keys
@@ -27,6 +29,7 @@ class AggregationCtx:
     field_keys_str: str = ""
     type_annotation: str | None = None
     window_ref: str | None = None
+    param_code: str | None = None
 
 
 @dataclass
@@ -105,6 +108,33 @@ class ModelCtx:
 @dataclass
 class PredictCtx:
     model: ModelCtx
+
+
+@dataclass
+class DebugStageCtx:
+    label: str
+    field_codes: list[str]
+
+
+@dataclass
+class ValidateStageCtx:
+    schema_name: str
+    on_error: str
+    on_error_broker: "BrokerCtx | None"
+    on_error_topic: str
+    schema_fields: list[tuple]
+
+
+@dataclass
+class EnrichStageCtx:
+    url_code: str
+    method: str
+    timeout_ms: int
+    bind: str
+    on_error: str
+    on_error_broker: "BrokerCtx | None"
+    on_error_topic: str
+    on_error_default_fields: list[ObjectFieldCtx]
 
 
 @dataclass
@@ -190,6 +220,12 @@ class PipelineCtx:
     predictions: list[PredictCtx] = dc_field(default_factory=list)
     has_select: bool = False
     select_fields: list[SelectFieldCtx] = dc_field(default_factory=list)
+    has_debug: bool = False
+    debug_stages: list[DebugStageCtx] = dc_field(default_factory=list)
+    has_validate: bool = False
+    validate_stage: "ValidateStageCtx | None" = None
+    has_enrich: bool = False
+    enrich_stages: list[EnrichStageCtx] = dc_field(default_factory=list)
 
 
 def generate(model, output_dir: str):
@@ -199,9 +235,11 @@ def generate(model, output_dir: str):
     const_map = _build_const_map(model)
     func_defs = _build_func_defs(model)
     model_map = _build_model_map(model, const_map, func_defs)
+    raw_const_map = _build_raw_const_map(model)
     env = _create_jinja_env()
     pipeline_contexts = [
-        _build_pipeline_ctx(p, const_map, func_defs, model_map) for p in model.pipelines
+        _build_pipeline_ctx(p, const_map, func_defs, model_map, raw_const_map)
+        for p in model.pipelines
     ]
 
     _render_file(
@@ -256,7 +294,9 @@ def _build_pipeline_ctx(
     const_map: dict[str, str] | None = None,
     func_defs: dict | None = None,
     model_map: dict[str, ModelCtx] | None = None,
+    raw_const_map: dict[str, str] | None = None,
 ) -> PipelineCtx:
+    _tmap = raw_const_map or {}
     src = pipeline.source
     snk = pipeline.sink
 
@@ -287,7 +327,7 @@ def _build_pipeline_ctx(
                 username=None,
                 password=None,
             ),
-            sink_topic=snk.topic if snk else "",
+            sink_topic=_interpolate_topic(snk.topic, _tmap) if snk else "",
             sink_qos=snk.qos if snk and snk.qos else 0,
             sink_format=snk.format if snk and snk.format else "json",
             has_pipe_source=True,
@@ -298,7 +338,7 @@ def _build_pipeline_ctx(
             name=pipeline.name,
             class_name=_to_class_name(pipeline.name),
             source_broker=_build_broker_ctx(src.broker),
-            source_topic=src.topic,
+            source_topic=_interpolate_topic(src.topic, _tmap),
             source_qos=src.qos if src.qos else 0,
             source_format=src.format if src.format else "json",
             sink_broker=_build_broker_ctx(snk.broker)
@@ -312,7 +352,7 @@ def _build_pipeline_ctx(
                 username=None,
                 password=None,
             ),
-            sink_topic=snk.topic if snk else "",
+            sink_topic=_interpolate_topic(snk.topic, _tmap) if snk else "",
             sink_qos=snk.qos if snk and snk.qos else 0,
             sink_format=snk.format if snk and snk.format else "json",
         )
@@ -344,11 +384,11 @@ def _build_pipeline_ctx(
         for arm in route.arms:
             if arm.sink:
                 arm_broker = _build_broker_ctx(arm.sink.broker)
-                arm_topic = arm.sink.topic
+                arm_topic = _interpolate_topic(arm.sink.topic, _tmap)
                 arm_qos = arm.sink.qos if arm.sink.qos else 0
             else:
                 arm_broker = _build_broker_ctx(route.via_broker)
-                arm_topic = arm.topic
+                arm_topic = _interpolate_topic(arm.topic, _tmap)
                 arm_qos = 0
             ctx.route_arms.append(
                 RouteArmCtx(
@@ -368,14 +408,14 @@ def _build_pipeline_ctx(
             ctx.route_default = RouteArmCtx(
                 condition_code="",
                 broker=_build_broker_ctx(route.default_sink.broker),
-                topic=route.default_sink.topic,
+                topic=_interpolate_topic(route.default_sink.topic, _tmap),
                 qos=route.default_sink.qos if route.default_sink.qos else 0,
             )
         elif route.default_topic:
             ctx.route_default = RouteArmCtx(
                 condition_code="",
                 broker=_build_broker_ctx(route.via_broker),
-                topic=route.default_topic,
+                topic=_interpolate_topic(route.default_topic, _tmap),
                 qos=0,
             )
 
@@ -385,9 +425,7 @@ def _build_pipeline_ctx(
     if snk and snk.batch:
         ctx.has_batch = True
         ctx.batch_size = snk.batch.size if snk.batch.size else None
-        ctx.batch_timeout_seconds = (
-            _dur_to_secs(snk.batch.timeout) if snk.batch.timeout else None
-        )
+        ctx.batch_timeout_seconds = _dur_to_secs(snk.batch.timeout) if snk.batch.timeout else None
 
     if pipeline.initially:
         ctx.has_initially = True
@@ -503,16 +541,27 @@ def _build_pipeline_ctx(
         elif cls == "AggregateStage":
             ctx.has_aggregate = True
             for agg in stage.assignments:
-                keys = extract_field_keys(agg.field) if agg.field else None
-                keys_str = ", ".join(repr(k) for k in keys) if keys else ""
+                agg_keys: list[str] = []
+                if agg.field:
+                    agg_keys = extract_field_keys(agg.field)
+                keys_str = ", ".join(repr(k) for k in agg_keys)
+                param_code = None
+                if agg.param is not None:
+                    param_code = compile_expr(
+                        agg.param,
+                        ExprContext.FILTER,
+                        const_map=const_map,
+                        func_defs=func_defs,
+                    )
                 ctx.aggregations.append(
                     AggregationCtx(
                         name=agg.name,
                         func=agg.func,
-                        field_keys=keys,
+                        field_keys=agg_keys,
                         field_keys_str=keys_str,
                         type_annotation=agg.type if agg.type else None,
                         window_ref=agg.window_ref if agg.window_ref else None,
+                        param_code=param_code,
                     )
                 )
 
@@ -520,7 +569,7 @@ def _build_pipeline_ctx(
             ctx.has_rate = True
             ctx.rate_limit = stage.limit
             ctx.rate_period_seconds = _dur_to_secs(stage.period)
-            ctx.rate_on_excess = stage.on_excess if stage.on_excess else "drop"
+            ctx.rate_on_excess = stage.on_excess.lower() if stage.on_excess else "drop"
 
         elif cls == "FlattenStage":
             ctx.has_flatten = True
@@ -537,7 +586,7 @@ def _build_pipeline_ctx(
             ctx.has_throttle = True
             ctx.throttle_limit = stage.limit
             ctx.throttle_period_seconds = _dur_to_secs(stage.period)
-            ctx.throttle_overflow = stage.overflow if stage.overflow else "drop"
+            ctx.throttle_overflow = stage.overflow.lower() if stage.overflow else "drop"
             ctx.throttle_buffer_size = stage.buffer_size if stage.buffer_size else 1000
 
         elif cls == "SampleStage":
@@ -576,8 +625,7 @@ def _build_pipeline_ctx(
             )
             ctx.has_env_ref = ctx.has_env_ref or _has_env_ref(stage.condition)
             ctx.has_quantifier_over_messages = (
-                ctx.has_quantifier_over_messages
-                or _has_quantifier_over_messages(stage.condition)
+                ctx.has_quantifier_over_messages or _has_quantifier_over_messages(stage.condition)
             )
 
         elif cls == "MapStage":
@@ -620,17 +668,106 @@ def _build_pipeline_ctx(
                         SelectFieldCtx(output_name=f.alias, source_name=f.source)
                     )
                 else:
-                    ctx.select_fields.append(
-                        SelectFieldCtx(output_name=f.name, source_name=f.name)
+                    ctx.select_fields.append(SelectFieldCtx(output_name=f.name, source_name=f.name))
+
+        elif cls == "DebugStage":
+            ctx.has_debug = True
+            label = stage.label if stage.label else "debug"
+            field_codes = []
+            for ref in stage.fields:
+                field_codes.append(
+                    compile_expr(
+                        ref,
+                        ExprContext.FILTER,
+                        local_names=pipeline_let_names,
+                        const_map=const_map,
+                        func_defs=func_defs,
                     )
+                )
+            ctx.debug_stages.append(DebugStageCtx(label=label, field_codes=field_codes))
+
+        elif cls == "ValidateStage":
+            ctx.has_validate = True
+            schema_fields = _build_schema_fields(stage.schema)
+            on_error = "skip"
+            on_error_broker = None
+            on_error_topic = ""
+            if stage.validate_err is not None:
+                ve = stage.validate_err
+                if ve.broker is not None:
+                    on_error = "sink"
+                    on_error_broker = _build_broker_ctx(ve.broker)
+                    on_error_topic = ve.topic
+                elif ve.action:
+                    on_error = ve.action.lower()
+            ctx.validate_stage = ValidateStageCtx(
+                schema_name=stage.schema.name,
+                on_error=on_error,
+                on_error_broker=on_error_broker,
+                on_error_topic=on_error_topic,
+                schema_fields=schema_fields,
+            )
+
+        elif cls == "EnrichStage":
+            ctx.has_enrich = True
+            url_code = compile_expr(
+                stage.url,
+                ExprContext.FILTER,
+                local_names=pipeline_let_names,
+                const_map=const_map,
+                func_defs=func_defs,
+            )
+            method = stage.method.lower() if stage.method else "get"
+            timeout_ms = 5000
+            if stage.timeout:
+                timeout_ms = int(_dur_to_secs(stage.timeout) * 1000)
+            on_error = "skip"
+            on_error_broker = None
+            on_error_topic = ""
+            on_error_default_fields: list[ObjectFieldCtx] = []
+            if stage.enrich_err is not None:
+                ee = stage.enrich_err
+                if ee.broker is not None:
+                    on_error = "sink"
+                    on_error_broker = _build_broker_ctx(ee.broker)
+                    on_error_topic = ee.topic
+                elif ee.body is not None:
+                    on_error = "default"
+                    for f in ee.body.fields:
+                        on_error_default_fields.append(
+                            ObjectFieldCtx(
+                                name=f.name,
+                                value_code=compile_expr(
+                                    f.value,
+                                    ExprContext.FILTER,
+                                    const_map=const_map,
+                                    func_defs=func_defs,
+                                ),
+                            )
+                        )
+                elif ee.action:
+                    on_error = ee.action.lower()
+            ctx.enrich_stages.append(
+                EnrichStageCtx(
+                    url_code=url_code,
+                    method=method,
+                    timeout_ms=timeout_ms,
+                    bind=stage.bind,
+                    on_error=on_error,
+                    on_error_broker=on_error_broker,
+                    on_error_topic=on_error_topic,
+                    on_error_default_fields=on_error_default_fields,
+                )
+            )
 
     return ctx
 
 
 def _build_broker_ctx(broker) -> BrokerCtx:
+    transport = broker.transport.lower() if broker.transport else "mqtt"
     return BrokerCtx(
         name=broker.name,
-        transport=broker.transport if broker.transport else "mqtt",
+        transport=transport,
         host=broker.host,
         port=broker.port,
         ssl=broker.ssl if broker.ssl else False,
@@ -644,7 +781,32 @@ def _to_class_name(snake: str) -> str:
 
 
 def _dur_to_secs(dur) -> float:
-    return dur.value * UNIT_MULTIPLIERS.get(dur.unit, 1)
+    mult = UNIT_MULTIPLIERS.get(dur.unit, 1)
+    result: float = dur.value * mult
+    return result
+
+
+def _build_raw_const_map(model) -> dict[str, str]:
+    result = {}
+    for c in model.constants:
+        val = c.value
+        cls = val.__class__.__name__
+        if cls in ("IntLiteral", "FloatLiteral"):
+            result[c.name] = str(val.val)
+        elif cls == "StringLiteral":
+            result[c.name] = val.val
+        elif cls == "BoolLiteral":
+            result[c.name] = "true" if val.val else "false"
+    return result
+
+
+def _interpolate_topic(topic: str, raw_const_map: dict[str, str]) -> str:
+    import re as _re
+
+    def _sub(m: "_re.Match[str]") -> str:
+        return raw_const_map.get(m.group(1)) or m.group(0)
+
+    return _re.sub(r"\{(\w+)\}", _sub, topic)
 
 
 def _build_const_map(model) -> dict[str, str]:
@@ -652,11 +814,7 @@ def _build_const_map(model) -> dict[str, str]:
     for c in model.constants:
         val = c.value
         cls = val.__class__.__name__
-        if cls == "IntLiteral":
-            result[c.name] = repr(val.val)
-        elif cls == "FloatLiteral":
-            result[c.name] = repr(val.val)
-        elif cls == "StringLiteral":
+        if cls == "IntLiteral" or cls == "FloatLiteral" or cls == "StringLiteral":
             result[c.name] = repr(val.val)
         elif cls == "BoolLiteral":
             result[c.name] = "True" if val.val else "False"
@@ -667,6 +825,22 @@ def _build_func_defs(model) -> dict:
     result = {}
     for f in model.functions or []:
         result[f.name] = f
+    return result
+
+
+def _build_schema_fields(schema) -> list[tuple]:
+    result = []
+    for field in schema.fields:
+        type_cls = field.type.__class__.__name__
+        if type_cls == "SchemaScalarType":
+            type_name = field.type.name
+        elif type_cls == "SchemaObjectType":
+            type_name = "object"
+        elif type_cls == "SchemaListType":
+            type_name = "list"
+        else:
+            type_name = "str"
+        result.append((field.name, type_name, bool(field.optional)))
     return result
 
 
@@ -687,7 +861,7 @@ def _build_model_map(
         result[m.name] = ModelCtx(
             name=m.name,
             source_code=source_code,
-            runtime=m.runtime,
+            runtime=m.runtime.lower(),
             input_key_strs=input_key_strs,
             returns=returns,
         )

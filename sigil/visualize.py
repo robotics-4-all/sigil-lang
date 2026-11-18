@@ -1,3 +1,5 @@
+import itertools
+
 from .semantics import _unwrap_stages
 
 
@@ -39,7 +41,8 @@ def visualize_dot(model) -> str:
     if model.models:
         for m in model.models:
             mid = f"model_{m.name}"
-            label = f"{m.name}\\n({m.runtime})"
+            runtime = m.runtime.lower() if m.runtime else "onnx"
+            label = f"{m.name}\\n({runtime})"
             lines.append(
                 f'    {mid} [shape=hexagon style=filled fillcolor="#e6f3ff" label="{label}"];'
             )
@@ -50,7 +53,7 @@ def visualize_dot(model) -> str:
     for b in model.brokers:
         bid = f"broker_{b.name}"
         broker_ids[b.name] = bid
-        transport = b.transport if b.transport else "mqtt"
+        transport = b.transport.lower() if b.transport else "mqtt"
         label = f"{b.name}\\n{transport}://{b.host}:{b.port}"
         lines.append(f'    {bid} [shape=cylinder label="{label}"];')
     if model.brokers:
@@ -152,11 +155,7 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
 
     if pipeline.route:
         route_id = f"{prefix}_route"
-        via_label = (
-            f"\\nvia {pipeline.route.via_broker.name}"
-            if pipeline.route.via_broker
-            else ""
-        )
+        via_label = f"\\nvia {pipeline.route.via_broker.name}" if pipeline.route.via_broker else ""
         lines.append(f'        {route_id} [shape=diamond label="route{via_label}"];')
         node_chain.append(route_id)
 
@@ -196,7 +195,7 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
         )
 
     # Edges: chain nodes
-    for a, b in zip(node_chain, node_chain[1:]):
+    for a, b in itertools.pairwise(node_chain):
         lines.append(f"        {a} -> {b};")
 
     # Connect @finally to last node in chain
@@ -222,9 +221,7 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
     # Join broker edge
     if pipeline.join and pipeline.join.broker.name in broker_ids:
         join_id = f"{prefix}_join"
-        lines.append(
-            f"    {broker_ids[pipeline.join.broker.name]} -> {join_id} [style=dashed];"
-        )
+        lines.append(f"    {broker_ids[pipeline.join.broker.name]} -> {join_id} [style=dashed];")
 
     # Sink broker edge
     if pipeline.sink and pipeline.sink.broker.name in broker_ids:
@@ -251,17 +248,13 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
         elif pipeline.route.default_topic and pipeline.route.via_broker:
             def_id = f"{prefix}_route_default"
             if pipeline.route.via_broker.name in broker_ids:
-                lines.append(
-                    f"    {def_id} -> {broker_ids[pipeline.route.via_broker.name]};"
-                )
+                lines.append(f"    {def_id} -> {broker_ids[pipeline.route.via_broker.name]};")
 
     # DLQ broker edge
     if pipeline.on_error and pipeline.on_error.broker:
         dlq_id = f"{prefix}_dlq"
         if pipeline.on_error.broker.name in broker_ids:
-            lines.append(
-                f"    {dlq_id} -> {broker_ids[pipeline.on_error.broker.name]};"
-            )
+            lines.append(f"    {dlq_id} -> {broker_ids[pipeline.on_error.broker.name]};")
 
     # Pipe source: dashed edge from upstream pipeline
     if src.pipe:
@@ -270,19 +263,13 @@ def _dot_pipeline(pipeline, lines, broker_ids, model):
             upstream = upstream_pipelines[0]
             if upstream.sink:
                 upstream_sink = f"p_{upstream.name}_sink"
-                lines.append(
-                    f'    {upstream_sink} -> {src_id} [style=dashed label="pipe"];'
-                )
+                lines.append(f'    {upstream_sink} -> {src_id} [style=dashed label="pipe"];')
             elif upstream.route:
                 upstream_route = f"p_{upstream.name}_route"
-                lines.append(
-                    f'    {upstream_route} -> {src_id} [style=dashed label="pipe"];'
-                )
+                lines.append(f'    {upstream_route} -> {src_id} [style=dashed label="pipe"];')
             else:
                 upstream_src = f"p_{upstream.name}_source"
-                lines.append(
-                    f'    {upstream_src} -> {src_id} [style=dashed label="pipe"];'
-                )
+                lines.append(f'    {upstream_src} -> {src_id} [style=dashed label="pipe"];')
 
     lines.append("")
 
@@ -296,7 +283,7 @@ def _dot_stage_label(stage, cls):
 
     if cls == "RateStage":
         period = _format_duration(stage.period)
-        excess = stage.on_excess if stage.on_excess else "drop"
+        excess = stage.on_excess.lower() if stage.on_excess else "drop"
         return f"rate\\n{stage.limit} per {period}\\non_excess: {excess}"
 
     if cls == "FlattenStage":
@@ -310,7 +297,7 @@ def _dot_stage_label(stage, cls):
 
     if cls == "ThrottleStage":
         period = _format_duration(stage.period)
-        overflow = stage.overflow if stage.overflow else "drop"
+        overflow = stage.overflow.lower() if stage.overflow else "drop"
         return f"throttle\\n{stage.limit} per {period}\\noverflow: {overflow}"
 
     if cls == "SampleStage":
@@ -357,13 +344,25 @@ def _dot_stage_label(stage, cls):
         return f"map\\n{', '.join(targets)}"
 
     if cls == "SelectStage":
-        fields = ", ".join(
-            f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields
-        )
+        fields = ", ".join(f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields)
         return f"select\\n[{fields}]"
 
     if cls == "PredictStage":
         return f"predict\\n{stage.model.name}"
+
+    if cls == "ValidateStage":
+        return f"validate\\nschema: {stage.schema.name}"
+
+    if cls == "EnrichStage":
+        method = stage.method.lower() if stage.method else "get"
+        return f"enrich\\n{method} → '{stage.bind}'"
+
+    if cls == "DebugStage":
+        label = stage.label if stage.label else "debug"
+        if stage.fields:
+            field_strs = ", ".join(".".join(f.segments) for f in stage.fields)
+            return f"debug\\n[{label}]\\n{field_strs}"
+        return f"debug\\n[{label}]"
 
     return cls
 
@@ -375,7 +374,8 @@ def _build_annotations_map(pipeline):
         if item.__class__.__name__ == "AnnotatedStage" and item.annotations:
             parts = []
             for ann in item.annotations:
-                parts.append(f"@{ann.severity}: {ann.message}")
+                severity = ann.severity.lower() if ann.severity else "warn"
+                parts.append(f"@{severity}: {ann.message}")
             ann_map[id(item.stage)] = "\\n".join(parts)
     return ann_map
 
@@ -422,7 +422,8 @@ def visualize_mermaid(model) -> str:
     if model.models:
         for m in model.models:
             mid = f"model_{m.name}"
-            label = f"{m.name}\n({m.runtime})"
+            runtime = m.runtime.lower() if m.runtime else "onnx"
+            label = f"{m.name}\n({runtime})"
             lines.append(f'    {mid}{{{{"{_mermaid_escape(label)}"}}}}')
         lines.append("")
 
@@ -430,7 +431,7 @@ def visualize_mermaid(model) -> str:
     for b in model.brokers:
         bid = f"broker_{b.name}"
         broker_ids[b.name] = bid
-        transport = b.transport if b.transport else "mqtt"
+        transport = b.transport.lower() if b.transport else "mqtt"
         label = f"{b.name}\n{transport}://{b.host}:{b.port}"
         lines.append(f'    {bid}[("{_mermaid_escape(label)}")]')
     if model.brokers:
@@ -521,11 +522,7 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
 
     if pipeline.route:
         route_id = f"{prefix}_route"
-        via_label = (
-            f"\nvia {pipeline.route.via_broker.name}"
-            if pipeline.route.via_broker
-            else ""
-        )
+        via_label = f"\nvia {pipeline.route.via_broker.name}" if pipeline.route.via_broker else ""
         lines.append(f'        {route_id}{{"{_mermaid_escape("route" + via_label)}"}}')
         node_chain.append(route_id)
 
@@ -563,7 +560,7 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
         lines.append(f'        {dlq_id}{{{{"{_mermaid_escape(dlq_label)}"}}}}')
 
     # Edges: chain nodes
-    for a, b in zip(node_chain, node_chain[1:]):
+    for a, b in itertools.pairwise(node_chain):
         lines.append(f"        {a} --> {b}")
 
     # Connect @finally to last node in chain
@@ -614,17 +611,13 @@ def _mermaid_pipeline(pipeline, lines, broker_ids, model):
         elif pipeline.route.default_topic and pipeline.route.via_broker:
             def_id = f"{prefix}_route_default"
             if pipeline.route.via_broker.name in broker_ids:
-                lines.append(
-                    f"    {def_id} --> {broker_ids[pipeline.route.via_broker.name]}"
-                )
+                lines.append(f"    {def_id} --> {broker_ids[pipeline.route.via_broker.name]}")
 
     # DLQ broker edge
     if pipeline.on_error and pipeline.on_error.broker:
         dlq_id = f"{prefix}_dlq"
         if pipeline.on_error.broker.name in broker_ids:
-            lines.append(
-                f"    {dlq_id} --> {broker_ids[pipeline.on_error.broker.name]}"
-            )
+            lines.append(f"    {dlq_id} --> {broker_ids[pipeline.on_error.broker.name]}")
 
     # Pipe source: dotted edge from upstream pipeline
     if src.pipe:
@@ -653,7 +646,7 @@ def _mermaid_stage_label(stage, cls):
 
     if cls == "RateStage":
         period = _format_duration(stage.period)
-        excess = stage.on_excess if stage.on_excess else "drop"
+        excess = stage.on_excess.lower() if stage.on_excess else "drop"
         return f"rate\n{stage.limit} per {period}\non_excess: {excess}"
 
     if cls == "FlattenStage":
@@ -667,7 +660,7 @@ def _mermaid_stage_label(stage, cls):
 
     if cls == "ThrottleStage":
         period = _format_duration(stage.period)
-        overflow = stage.overflow if stage.overflow else "drop"
+        overflow = stage.overflow.lower() if stage.overflow else "drop"
         return f"throttle\n{stage.limit} per {period}\noverflow: {overflow}"
 
     if cls == "SampleStage":
@@ -714,13 +707,25 @@ def _mermaid_stage_label(stage, cls):
         return f"map\n{', '.join(targets)}"
 
     if cls == "SelectStage":
-        fields = ", ".join(
-            f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields
-        )
+        fields = ", ".join(f"{f.alias}:{f.source}" if f.alias else f.name for f in stage.fields)
         return f"select\n[{fields}]"
 
     if cls == "PredictStage":
         return f"predict\n{stage.model.name}"
+
+    if cls == "ValidateStage":
+        return f"validate\nschema: {stage.schema.name}"
+
+    if cls == "EnrichStage":
+        method = stage.method.lower() if stage.method else "get"
+        return f"enrich\n{method} → '{stage.bind}'"
+
+    if cls == "DebugStage":
+        label = stage.label if stage.label else "debug"
+        if stage.fields:
+            field_strs = ", ".join(".".join(f.segments) for f in stage.fields)
+            return f"debug\n[{label}]\n{field_strs}"
+        return f"debug\n[{label}]"
 
     return cls
 

@@ -1,3 +1,5 @@
-textX>=3.1.0
-Jinja2>=3.1.0
-pytest>=7.0.0
+# Canonical dependencies live in pyproject.toml. This file is a thin shim
+# that installs the package in editable mode together with its dev + test
+# extras, so existing tooling that runs `pip install -r requirements.txt`
+# continues to work.
+-e .[dev,test]

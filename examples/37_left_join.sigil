@@ -1,12 +1,12 @@
 /*
  * Example 37 — Left Join
  * ========================
- * Extends the join concept from Example 22 with the `left` join type.
+ * Extends the JOIN concept from Example 22 with the `left` JOIN type.
  *
  * JOIN TYPES:
  *   type: inner  (default)
  *       — messages are only forwarded if a matching record is found on
- *         the right stream within the time window; unmatched are dropped
+ *         the right stream within the time WINDOW; unmatched are dropped
  *
  *   type: left
  *       — every primary message is forwarded regardless of whether a
@@ -16,14 +16,14 @@
  *         fields that come from the right stream
  *
  * WHY LEFT JOIN:
- *   Use left join when the primary stream must never be silently dropped.
+ *   Use left JOIN when the primary stream must never be silently dropped.
  *   Common cases:
  *     - Enriching events with optional metadata (metadata may be absent)
  *     - Audit log pipelines that cannot afford to lose messages
  *     - Graceful degradation: publish with partial data rather than nothing
  *
  * SCENARIO:
- *   A helpdesk ticketing pipeline. Every support ticket (primary stream)
+ *   A helpdesk ticketing PIPELINE. Every support ticket (primary stream)
  *   is enriched with the assigned agent's profile (secondary stream).
  *   If no agent profile arrives within 10 seconds, the ticket is still
  *   forwarded — `other` fields are null-coalesced to safe defaults.
@@ -40,42 +40,42 @@
  *                       "enriched": false}
  */
 
-broker helpdesk
-    transport: mqtt
-    host: "helpdesk.example.com"
-    port: 1883
-end
+BROKER helpdesk
+    TRANSPORT: MQTT
+    HOST: "helpdesk.example.com"
+    PORT: 1883
+;
 
-pipeline enrich_tickets
-    source from helpdesk :: "tickets/new" qos: 1 format: json
+PIPELINE enrich_tickets
+    SOURCE FROM helpdesk :: "tickets/new" QOS: 1 FORMAT: json
 
-    // Left join: every ticket passes through even without an agent profile
-    |> join helpdesk :: "agents/profiles"
-        on msg.agent_id == other.id
-        within 10 s
-        type: left
-    end
+    // Left JOIN: every ticket passes through even without an agent profile
+    |> JOIN helpdesk :: "agents/profiles"
+        ON msg.agent_id == other.id
+        WITHIN 10 s
+        TYPE: left
+    ;
 
-    // No filter here — left join ensures we never drop tickets
+    // No FILTER here — left JOIN ensures we never drop tickets
 
-    |> map {
+    |> MAP {
         // `other` may be null when no agent profile arrived in time.
         // Use ?? to provide safe fallback values.
-        let agent_name = other.name ?? "unassigned";
-        let agent_team = other.team ?? "unknown";
-        let enriched   = if other.name is not null then true else false;
+        LET agent_name = other.name ?? "unassigned",
+        LET agent_team = other.team ?? "unknown",
+        LET enriched   = if other.name is not null then true else false,
 
-        ticket   = msg.ticket_id;
-        priority = msg.priority ?? "normal";
-        category = msg.category ?? "general";
-        agent    = agent_name;
-        team     = agent_team;
+        ticket   = msg.ticket_id,
+        priority = msg.priority ?? "normal",
+        category = msg.category ?? "general",
+        agent    = agent_name,
+        team     = agent_team,
         enriched = enriched
     }
 
-    |> route
-        when msg.priority == "critical" => sink to helpdesk :: "tickets/critical"
-        when msg.priority == "high"     => sink to helpdesk :: "tickets/high"
-        default                         => sink to helpdesk :: "tickets/normal"
-    end
-end
+    |> ROUTE
+        when msg.priority == "critical" => SINK TO helpdesk :: "tickets/critical"
+        when msg.priority == "high"     => SINK TO helpdesk :: "tickets/high"
+        DEFAULT                         => SINK TO helpdesk :: "tickets/normal"
+    ;
+;

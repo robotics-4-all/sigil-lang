@@ -1,63 +1,63 @@
 // Example 19: Stateful Accumulation Across Windows
 //
-// The `accumulate` stage computes values that persist across window flushes.
-// It operates on aggregate results and injects computed values back into the
-// aggregated dict, making them available to `having` and `map` stages.
+// The `ACCUMULATE` stage computes values that persist across WINDOW flushes.
+// It operates on AGGREGATE results and injects computed values back into the
+// aggregated dict, making them available to `HAVING` and `MAP` stages.
 //
 // Accumulation functions:
 //   ema(field, alpha)  — Exponential Moving Average (0 < alpha <= 1)
 //   cumsum(field)      — Cumulative sum across all windows
-//   delta(field)       — Change from previous window's value
+//   delta(field)       — Change from previous WINDOW's value
 //
-// Stage order: ... → aggregate → accumulate → having → map → ...
+// Stage order: ... → AGGREGATE → ACCUMULATE → HAVING → MAP → ...
 
-broker sensors
-    host: "localhost"
-    port: 1883
-end
+BROKER sensors
+    HOST: "localhost"
+    PORT: 1883
+;
 
 // Track smoothed temperature with EMA
-pipeline smoothed_temperature
-    source from sensors :: "sensors/temperature"
-    |> window tumbling(30s)
-    |> aggregate {
-        avg_temp = avg(msg.temperature)
+PIPELINE smoothed_temperature
+    SOURCE FROM sensors :: "sensors/temperature"
+    |> WINDOW tumbling(30s)
+    |> AGGREGATE {
+        avg_temp = avg(msg.temperature),
         max_temp = max(msg.temperature)
     }
-    |> accumulate {
+    |> ACCUMULATE {
         smooth_temp = ema(avg_temp, 0.3)
     }
-    |> having smooth_temp > 20
-    |> map {
-        temperature = smooth_temp;
+    |> HAVING smooth_temp > 20
+    |> MAP {
+        temperature = smooth_temp,
         peak = max_temp
     }
-    |> sink to sensors :: "sensors/smoothed"
-end
+    |> SINK TO sensors :: "sensors/smoothed"
+;
 
 // Track cumulative energy with running total and change detection
-pipeline energy_monitor
-    source from sensors :: "sensors/power"
-    |> filter msg.watts > 0
-    |> rate 200 per 1s on_excess: warn
-    |> window tumbling(1m)
-    |> aggregate {
-        total_watts = sum(msg.watts)
-        avg_watts = avg(msg.watts)
+PIPELINE energy_monitor
+    SOURCE FROM sensors :: "sensors/power"
+    |> FILTER msg.watts > 0
+    |> RATE 200 PER 1s ON_EXCESS: WARN
+    |> WINDOW tumbling(1m)
+    |> AGGREGATE {
+        total_watts = sum(msg.watts),
+        avg_watts = avg(msg.watts),
         samples = count()
     }
-    |> accumulate {
-        cumulative_energy = cumsum(total_watts)
-        power_change = delta(avg_watts)
+    |> ACCUMULATE {
+        cumulative_energy = cumsum(total_watts),
+        power_change = delta(avg_watts),
         trend = ema(avg_watts, 0.2)
     }
-    |> having samples > 5
-    |> map {
-        energy_kwh = cumulative_energy / 60000;
-        current_trend = trend;
-        change = power_change;
+    |> HAVING samples > 5
+    |> MAP {
+        energy_kwh = cumulative_energy / 60000,
+        current_trend = trend,
+        change = power_change,
         sample_count = samples
     }
-    |> sink to sensors :: "sensors/energy_report"
-end
+    |> SINK TO sensors :: "sensors/energy_report"
+;
 
