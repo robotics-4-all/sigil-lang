@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Literal, TypedDict
 
 from .codegen import (
@@ -36,6 +37,11 @@ from .codegen import (
 _MOCK_MIN_COMMLIB = ">=0.13.2"
 
 _MODES = frozenset({"mock", "broker"})
+
+# Only identifier-shaped ``env()`` keys may become ``%env`` magics: a DSL string
+# literal can carry a newline, and a split magic line would run its second line as
+# a shell escape.
+_ENV_KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class _CodeCell(TypedDict):
@@ -225,19 +231,30 @@ def _transports_label(mode: str, declared: list[str]) -> str:
     return f"{joined} -> {', '.join(transport.lower() for transport in declared)}"
 
 
+def _md_text(value: str) -> str:
+    """Flatten free text onto one markdown line for the title cell."""
+    return (
+        value.replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _pipeline_summary(pctx: PipelineCtx) -> str:
     """Describe one pipeline as ``name  (origin -> destination)``."""
     if pctx.has_pipe_source:
-        origin = f"pipe {pctx.pipe_source_name}"
+        origin = f"pipe {_md_text(pctx.pipe_source_name)}"
     else:
-        origin = f"{pctx.source_broker.name} :: {pctx.source_topic}"
+        origin = f"{_md_text(pctx.source_broker.name)} :: {_md_text(pctx.source_topic)}"
     if pctx.has_sink:
-        destination = f"{pctx.sink_broker.name} :: {pctx.sink_topic}"
+        destination = f"{_md_text(pctx.sink_broker.name)} :: {_md_text(pctx.sink_topic)}"
     elif pctx.has_route:
         destination = f"route ({len(pctx.route_arms)} arm(s))"
     else:
         destination = "no output"
-    return f"{pctx.name}  ({origin} -> {destination})"
+    return f"{_md_text(pctx.name)}  ({origin} -> {destination})"
 
 
 def _title_cell(
@@ -251,8 +268,8 @@ def _title_cell(
     """Build the title cell: identity, transports and offline notes."""
     brokers = {broker.name: broker for pctx in ctxs.pipeline_contexts for broker in _brokers(pctx)}
     lines = [
-        f"# Sigil notebook: {name}",
-        f"# Mode: {_mode_label(mode)}  |  Source: {source_path}",
+        f"# Sigil notebook: {_md_text(name)}",
+        f"# Mode: {_mode_label(mode)}  |  Source: {_md_text(source_path)}",
         f"# Transports: {_transports_label(mode, declared)}",
     ]
     if mode == "mock" and brokers:
@@ -334,7 +351,11 @@ def _env_hint_cell(keys: list[str]) -> _CodeCell:
         "# Environment hints: a bare %env KEY= inspects the value; assign one",
         "# (or export it) before running the start cell.",
     ]
-    lines.extend(f"%env {key}=" for key in keys)
+    for key in keys:
+        if _ENV_KEY_PATTERN.fullmatch(key):
+            lines.append(f"%env {key}=")
+        else:
+            lines.append(f"# skipped env key (not a valid identifier): {json.dumps(key)}")
     return _code_cell("\n".join(lines) + "\n")
 
 
@@ -843,14 +864,26 @@ def _source_display(model) -> str:
 
 
 def _resolve_path(output_path_or_dir: str, name: str) -> str:
-    """Resolve ``output_path_or_dir`` into a notebook file path (R3)."""
+    """Resolve ``output_path_or_dir`` into a notebook file path (R3).
+
+    ``name`` is reduced to a bare filename: a value that normalises outside
+    the output directory is rejected instead of joined into a traversal, and
+    an internal ``..`` collapses to the file it names.
+    """
     if output_path_or_dir.lower().endswith(".ipynb"):
         parent = os.path.dirname(output_path_or_dir)
         if parent:
             os.makedirs(parent, exist_ok=True)
         return output_path_or_dir
+    normalized = os.path.normpath(name)
+    escapes = normalized == ".." or normalized.startswith(".." + os.sep)
+    if os.path.isabs(normalized) or escapes:
+        raise ValueError(f"invalid notebook name {name!r}: it escapes the output directory")
+    filename = os.path.basename(normalized)
+    if filename in {"", ".", ".."}:
+        raise ValueError(f"invalid notebook name {name!r}: it is not a usable filename")
     os.makedirs(output_path_or_dir, exist_ok=True)
-    return os.path.join(output_path_or_dir, f"{name}.ipynb")
+    return os.path.join(output_path_or_dir, f"{filename}.ipynb")
 
 
 def generate_notebook(

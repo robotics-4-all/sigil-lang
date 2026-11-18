@@ -19,6 +19,7 @@ from sigil.language import parse, parse_string
 from sigil.notebook import (
     _MOCK_MIN_COMMLIB,
     _preamble_source,
+    _resolve_path,
     _strip_magics,
     generate_notebook,
 )
@@ -482,3 +483,79 @@ def test_sentinel_brokers_excluded_from_title():
     assert "__route__" not in route_blob
     assert 'host=""' not in route_blob
     assert 'MqttConnectionParameters(host="localhost", port=1883)' in route_blob
+
+
+# A textX STRING literal accepts a real newline, so a hostile model can
+# smuggle a magic or shell line through an ``env()`` key or a topic. The
+# notebook must never emit either as executable text.
+_ENV_INJECTION = (
+    "BROKER local\n"
+    "    TRANSPORT: MQTT\n"
+    '    HOST: "localhost"\n'
+    "    PORT: 1883\n"
+    ";\n"
+    "\n"
+    "PIPELINE relay\n"
+    '    SOURCE FROM local :: "in/topic"\n'
+    '    |> FILTER env("K\n!echo PWNED", "1") == "1"\n'
+    '    |> SINK TO local :: "out/topic"\n'
+    ";\n"
+)
+
+_TOPIC_INJECTION = (
+    "BROKER local\n"
+    "    TRANSPORT: MQTT\n"
+    '    HOST: "localhost"\n'
+    "    PORT: 1883\n"
+    ";\n"
+    "\n"
+    "PIPELINE relay\n"
+    '    SOURCE FROM local :: "safe\n# PWNED"\n'
+    '    |> SINK TO local :: "out/topic"\n'
+    ";\n"
+)
+
+
+def test_env_key_injection_never_emits_magic():
+    doc, _ = _nb(_ENV_INJECTION)
+    for cell in doc["cells"]:
+        for line in cell["source"]:
+            assert not line.lstrip().startswith(("!", "%env K"))
+    hint = doc["cells"][_cell_index(doc, "# skipped env key")]
+    assert hint["cell_type"] == "code"
+    assert '"K\\n!echo PWNED"' in _text(hint)
+
+
+def test_env_identifier_key_still_emits_magic():
+    src = _ENV.replace('env("PORT", 8080)', 'env("THRESH", "10")')
+    doc, _ = _nb(src)
+    source = _text(doc["cells"][_cell_index(doc, "%env THRESH=")])
+    assert "%env THRESH=" in source
+    assert "%env API_HOST=" in source
+
+
+def test_name_traversal_rejected_and_clamped():
+    model = parse_string(_SINGLE)
+    out_dir = _tmpdir()
+    exc = _expect_value_error(lambda: generate_notebook(model, out_dir, name="../escape"))
+    assert "../escape" in str(exc)
+    written = generate_notebook(model, out_dir, name="ok name/../x")
+    assert os.path.dirname(written) == os.path.abspath(out_dir)
+    assert os.path.isfile(written)
+    assert os.path.commonpath([written, out_dir]) == os.path.abspath(out_dir)
+
+
+def test_resolve_path_rejects_unsafe_names():
+    out_dir = _tmpdir()
+    for bad in ("", ".", "..", "../escape", os.path.join("a", "..", "..", "escape")):
+        exc = _expect_value_error(lambda bad=bad: _resolve_path(out_dir, bad))
+        assert repr(bad) in str(exc)
+
+
+def test_topic_newline_stays_on_one_title_line():
+    doc, _ = _nb(_TOPIC_INJECTION)
+    title_cell = doc["cells"][0]
+    title = _text(title_cell)
+    assert "safe\\n# PWNED" in title
+    assert "safe\n# PWNED" not in title
+    assert not any(line.lstrip().startswith("# PWNED") for line in title_cell["source"])
