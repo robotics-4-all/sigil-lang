@@ -1,6 +1,6 @@
 """Sigil command-line interface.
 
-Subcommands: check, generate, explain, visualize.
+Subcommands: check, generate, explain, visualize, notebook.
 
 Exit codes:
   0  success
@@ -27,6 +27,7 @@ from .diagnostics import (
 )
 from .explain import explain_model
 from .language import parse
+from .notebook import generate_notebook
 from .semantics import SemanticValidationError, validate, validate_or_raise
 from .visualize import visualize_dot, visualize_mermaid
 
@@ -55,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_explain(args.source, color=color)
     if args.command == "visualize":
         return _cmd_visualize(args.source, args.format, args.output, color=color)
+    if args.command == "notebook":
+        return _cmd_notebook(args.source, args.output, mode=args.mode, name=args.name, color=color)
 
     parser.print_help()
     return EXIT_USAGE
@@ -98,6 +101,26 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--output",
         default="generated",
         help="Output directory (default: generated/)",
+    )
+
+    p_nb = sub.add_parser("notebook", help="Generate a notebook from a .sigil file")
+    p_nb.add_argument("source", help="Path to .sigil source file")
+    p_nb.add_argument(
+        "-o",
+        "--output",
+        default="generated",
+        help="Output directory or .ipynb file (default: generated/)",
+    )
+    p_nb.add_argument(
+        "--mode",
+        choices=("mock", "broker"),
+        default="mock",
+        help="Cell driver mode (default: mock)",
+    )
+    p_nb.add_argument(
+        "--name",
+        default=None,
+        help="Notebook name (default: derived from the source stem)",
     )
 
     p_explain = sub.add_parser("explain", help="Explain pipeline structure")
@@ -189,6 +212,33 @@ def _cmd_generate(source_path: str, output_dir: str, *, color: bool) -> int:
         return EXIT_IO
 
     print(f"Generated application in: {out}/")
+    return EXIT_OK
+
+
+def _cmd_notebook(
+    source_path: str, output: str, *, mode: str, name: str | None, color: bool
+) -> int:
+    model, fail = _parse_with_diagnostics(source_path, color=color)
+    if fail is not None or model is None:
+        return fail if fail is not None else EXIT_PARSE
+
+    try:
+        validate_or_raise(model)
+    except SemanticValidationError as exc:
+        diags = [from_semantic_error(e) for e in exc.errors]
+        print(render_all(diags, color=color), file=sys.stderr)
+        return EXIT_SEMANTIC
+
+    try:
+        path = generate_notebook(model, output, mode=mode, name=name)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_IO
+
+    print(f"Generated notebook: {path}")
     return EXIT_OK
 
 
