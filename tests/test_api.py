@@ -31,7 +31,7 @@ def test_validate_ok():
 
 
 def test_validate_semantic_error():
-    bad = _simple().replace("|> window tumbling(5 m)", "")
+    bad = _simple().replace("|> WINDOW tumbling(5 m)", "")
     r = client.post("/validate", json={"source": bad})
     assert r.status_code == 200
     body = r.json()
@@ -69,7 +69,7 @@ def test_generate_ok():
 
 
 def test_generate_semantic_error_is_422():
-    bad = _simple().replace("|> window tumbling(5 m)", "")
+    bad = _simple().replace("|> WINDOW tumbling(5 m)", "")
     r = client.post("/generate", json={"source": bad})
     assert r.status_code == 422
     assert r.json()["code"] == "SEMANTIC_ERROR"
